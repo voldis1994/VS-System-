@@ -7,6 +7,15 @@ echo   VS System - Windows start
 echo ========================================
 echo.
 
+where git >nul 2>&1
+if not errorlevel 1 (
+  echo [0/6] git pull origin main...
+  git pull origin main
+  if errorlevel 1 (
+    echo WARNING: git pull neizdevas - turpinu ar esošo kodu
+  )
+)
+
 where node >nul 2>&1
 if errorlevel 1 (
   echo ERROR: Node.js nav atrasts. Uzliec no https://nodejs.org
