@@ -87,7 +87,7 @@ export function Topbar() {
 
   return (
     <>
-      <header className="border-b border-white/[0.06] bg-navy-950/80 backdrop-blur">
+      <header className="relative z-50 border-b border-white/[0.06] bg-navy-950">
         <div className="flex items-center gap-4 px-4 py-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-3">
