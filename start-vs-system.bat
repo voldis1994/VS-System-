@@ -132,21 +132,21 @@ timeout /t 3 /nobreak >nul
 start "VS System WEB" cmd /k "cd /d "%~dp0" && pnpm dev:web"
 
 timeout /t 8 /nobreak >nul
-start "" http://localhost:3000/strategies
+start "" http://localhost:3000/dashboard
 
 echo.
 echo ========================================
-echo   Gatavs  (build bots-v2)
-echo   Strategies: http://localhost:3000/strategies
+echo   Gatavs  (command deck)
 echo   Dashboard:  http://localhost:3000/dashboard
+echo   Strategies: http://localhost:3000/strategies
 echo   API: http://localhost:4000/api/health
 echo.
 echo   Login: owner@nexus.pro
 echo   Pass:  NexusOwner123!
 echo   PIN:   123456
 echo.
-echo   Ja Dashboard kreisaja puse NAV "Strategies AUTO" —
-echo   vecais process vel skrien. Aizver VISUS CMD un palaid velreiz.
+echo   Ja neredzi Command Deck ar VS System logo —
+echo   aizver VISUS CMD un palaid start-vs-system.bat velreiz + Ctrl+F5.
 echo ========================================
 pause
 exit /b 0

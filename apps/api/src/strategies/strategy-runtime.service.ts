@@ -7,7 +7,7 @@ import {
   VolumeMode,
 } from "@nexus/domain";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
-import { d, newId } from "@nexus/shared";
+import { d, newId, instrumentPipSize } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
 import { OrdersService } from "../orders/orders.service";
@@ -407,7 +407,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        const pip = pipSize(brokerSymbol);
+        const pip = instrumentPipSize(brokerSymbol);
         const stopDist =
           config.stopDistancePips != null
             ? pip * config.stopDistancePips
@@ -665,15 +665,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       }
     }
   }
-}
-
-function pipSize(symbol: string): number {
-  if (/^[A-Z]{6}$/.test(symbol)) {
-    return symbol.includes("JPY") ? 0.01 : 0.0001;
-  }
-  if (symbol === "GOLD" || symbol === "SILVER") return 0.1;
-  if (symbol.includes("BITCOIN") || symbol.includes("ETH")) return 1;
-  return 0.1;
 }
 
 function computeIndicators(candles: CandleLike[]): Indicators | null {

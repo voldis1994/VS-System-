@@ -86,7 +86,7 @@ export function Sidebar() {
         })}
       </nav>
       <div className="border-t border-white/[0.06] p-3 text-[10px] text-white/30">
-        VS System · build bots-v2
+        VS System · command deck
       </div>
     </aside>
   );

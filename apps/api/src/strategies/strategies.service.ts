@@ -6,6 +6,7 @@ import {
   ErrorCodes,
   StrategyStatus,
 } from "@nexus/domain";
+import { instrumentPipSize } from "@nexus/shared";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -460,7 +461,7 @@ export class StrategiesService {
     const trailPips = Number(config.trailingDistancePips ?? 15);
 
     for (const pos of open) {
-      const pip = exitPipSize(pos.symbol);
+      const pip = instrumentPipSize(pos.symbol);
       await this.prisma.position.update({
         where: { id: pos.id },
         data: {
@@ -490,18 +491,6 @@ export class StrategiesService {
     }
     return strategy;
   }
-}
-
-function exitPipSize(symbol: string): number {
-  const s = symbol.toUpperCase();
-  if (/^[A-Z]{6}$/.test(s)) {
-    return s.includes("JPY") ? 0.01 : 0.0001;
-  }
-  if (s === "GOLD" || s === "SILVER" || s.includes("GOLD") || s.includes("XAU")) {
-    return 0.1;
-  }
-  if (s.includes("BITCOIN") || s.includes("ETH") || s.includes("BTC")) return 1;
-  return 0.1;
 }
 
 function ema(values: number[], period: number): number {
