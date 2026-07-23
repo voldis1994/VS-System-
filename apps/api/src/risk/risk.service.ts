@@ -37,6 +37,92 @@ export class RiskService {
     });
   }
 
+  async getSettings(organizationId: string) {
+    const enabled = await this.isRiskEngineEnabled(organizationId);
+    return { enabled };
+  }
+
+  async setSettings(
+    organizationId: string,
+    actorId: string,
+    body: { enabled: boolean },
+    correlationId: string,
+  ) {
+    const enabled = Boolean(body.enabled);
+    let profile = await this.prisma.riskProfile.findFirst({
+      where: { organizationId, scope: "ORGANIZATION" },
+      orderBy: { priority: "asc" },
+    });
+
+    if (!profile) {
+      profile = await this.prisma.riskProfile.create({
+        data: {
+          organizationId,
+          name: "Organization Risk",
+          scope: "ORGANIZATION",
+          limitsJson: DEFAULT_LIMITS as unknown as Prisma.InputJsonValue,
+          protectionRulesJson: {
+            riskEngineEnabled: enabled,
+          } as Prisma.InputJsonValue,
+          priority: 10,
+        },
+      });
+    } else {
+      const rules =
+        profile.protectionRulesJson && typeof profile.protectionRulesJson === "object"
+          ? (profile.protectionRulesJson as Record<string, unknown>)
+          : {};
+      profile = await this.prisma.riskProfile.update({
+        where: { id: profile.id },
+        data: {
+          protectionRulesJson: {
+            ...rules,
+            riskEngineEnabled: enabled,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
+
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: enabled ? "RISK_ENGINE_ENABLED" : "RISK_ENGINE_DISABLED",
+      resourceType: "RiskProfile",
+      resourceId: profile.id,
+      after: { riskEngineEnabled: enabled },
+      correlationId,
+    });
+
+    await this.notifications.create({
+      organizationId,
+      userId: actorId,
+      title: enabled ? "Risk ON" : "Risk OFF",
+      body: enabled
+        ? "Risk limits active — orders checked before send"
+        : "Risk limits bypassed — strategies/orders unrestricted by risk engine",
+      severity: enabled ? "INFO" : "WARNING",
+    });
+
+    return { enabled };
+  }
+
+  async isRiskEngineEnabled(organizationId: string): Promise<boolean> {
+    const profiles = await this.prisma.riskProfile.findMany({
+      where: { organizationId },
+      orderBy: { priority: "asc" },
+    });
+    for (const p of profiles) {
+      const rules =
+        p.protectionRulesJson && typeof p.protectionRulesJson === "object"
+          ? (p.protectionRulesJson as Record<string, unknown>)
+          : {};
+      if (typeof rules.riskEngineEnabled === "boolean") {
+        return rules.riskEngineEnabled;
+      }
+    }
+    return true; // default ON
+  }
+
   async createProfile(
     organizationId: string,
     actorId: string,
@@ -65,6 +151,53 @@ export class RiskService {
       action: "RISK_PROFILE_CREATED",
       resourceType: "RiskProfile",
       resourceId: profile.id,
+      after: profile,
+      correlationId,
+    });
+    return profile;
+  }
+
+  async updateProfile(
+    organizationId: string,
+    actorId: string,
+    id: string,
+    body: {
+      name?: string;
+      limitsJson?: RiskLimits;
+      protectionRulesJson?: Record<string, unknown>;
+      priority?: number;
+    },
+    correlationId: string,
+  ) {
+    const existing = await this.prisma.riskProfile.findFirst({
+      where: { id, organizationId },
+    });
+    if (!existing) {
+      throw new AppError(ErrorCodes.VALIDATION_FAILED, "Risk profile not found", HttpStatus.NOT_FOUND);
+    }
+    const prevRules =
+      existing.protectionRulesJson && typeof existing.protectionRulesJson === "object"
+        ? (existing.protectionRulesJson as Record<string, unknown>)
+        : {};
+    const profile = await this.prisma.riskProfile.update({
+      where: { id },
+      data: {
+        name: body.name ?? existing.name,
+        limitsJson: (body.limitsJson ??
+          existing.limitsJson) as Prisma.InputJsonValue,
+        protectionRulesJson: (body.protectionRulesJson
+          ? { ...prevRules, ...body.protectionRulesJson }
+          : prevRules) as Prisma.InputJsonValue,
+        priority: body.priority ?? existing.priority,
+      },
+    });
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "RISK_PROFILE_UPDATED",
+      resourceType: "RiskProfile",
+      resourceId: id,
+      before: existing,
       after: profile,
       correlationId,
     });
@@ -124,6 +257,20 @@ export class RiskService {
     proposedRiskAmount: string;
     confirmSoftWarnings?: boolean;
   }) {
+    const enabled = await this.isRiskEngineEnabled(input.organizationId);
+    if (!enabled) {
+      return {
+        allowed: true,
+        hardBreach: false,
+        warnings: ["RISK_ENGINE_DISABLED"],
+        reasons: [] as string[],
+        dailyLossPercent: "0",
+        drawdownPercent: "0",
+        limits: await this.resolveLimits(input.organizationId, input.accountId),
+        riskEngineEnabled: false,
+      };
+    }
+
     const limits = await this.resolveLimits(input.organizationId, input.accountId);
     const result = evaluateRisk({
       equity: input.equity,

@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import { Request } from "express";
 import { RiskService } from "./risk.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
@@ -12,6 +21,26 @@ import {
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class RiskController {
   constructor(private readonly risk: RiskService) {}
+
+  @Get("settings")
+  @RequirePermissions("risk:read")
+  settings(@Req() req: Request & { user: AuthUser }) {
+    return this.risk.getSettings(req.user.organizationId);
+  }
+
+  @Post("settings")
+  @RequirePermissions("risk:manage")
+  setSettings(
+    @Body() body: { enabled?: boolean },
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.risk.setSettings(
+      req.user.organizationId,
+      req.user.userId,
+      { enabled: Boolean(body?.enabled) },
+      req.correlationId ?? "unknown",
+    );
+  }
 
   @Get("profiles")
   @RequirePermissions("risk:read")
@@ -35,6 +64,28 @@ export class RiskController {
     return this.risk.createProfile(
       req.user.organizationId,
       req.user.userId,
+      body as never,
+      req.correlationId ?? "unknown",
+    );
+  }
+
+  @Patch("profiles/:id")
+  @RequirePermissions("risk:manage")
+  update(
+    @Param("id") id: string,
+    @Body()
+    body: {
+      name?: string;
+      limitsJson?: Record<string, number>;
+      protectionRulesJson?: Record<string, unknown>;
+      priority?: number;
+    },
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.risk.updateProfile(
+      req.user.organizationId,
+      req.user.userId,
+      id,
       body as never,
       req.correlationId ?? "unknown",
     );
