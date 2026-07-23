@@ -1,4 +1,6 @@
-import "dotenv/config";
+import { config as loadDotenv } from "dotenv";
+import { existsSync } from "fs";
+import { resolve } from "path";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
@@ -10,7 +12,22 @@ import { loadEnv } from "@nexus/config";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { CorrelationInterceptor } from "./common/interceptors/correlation.interceptor";
 
+function loadEnvFiles() {
+  const candidates = [
+    resolve(process.cwd(), ".env"),
+    resolve(process.cwd(), "apps/api/.env"),
+    resolve(__dirname, "../.env"),
+    resolve(__dirname, "../../../.env"),
+  ];
+  for (const file of candidates) {
+    if (existsSync(file)) {
+      loadDotenv({ path: file, override: false });
+    }
+  }
+}
+
 async function bootstrap() {
+  loadEnvFiles();
   const env = loadEnv(process.env);
   const app = await NestFactory.create(AppModule, {
     logger: ["error", "warn", "log"],
