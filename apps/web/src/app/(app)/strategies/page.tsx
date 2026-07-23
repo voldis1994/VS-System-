@@ -164,11 +164,7 @@ export default function StrategiesPage() {
   const { data: accounts, isLoading: accountsLoading } = useAccounts();
   const qc = useQueryClient();
 
-  const connectedAccounts = useMemo(
-    () => (accounts ?? []).filter((a) => a.connectionStatus === "CONNECTED"),
-    [accounts],
-  );
-
+  const allAccounts = accounts ?? [];
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [marketFilter, setMarketFilter] = useState("");
   const [syncing, setSyncing] = useState(false);
@@ -210,7 +206,7 @@ export default function StrategiesPage() {
     const defaultEpic = markets[0]?.epic ?? "";
     setDrafts((prev) => {
       const next = { ...prev };
-      for (const acc of connectedAccounts) {
+      for (const acc of allAccounts) {
         if (next[acc.id]) continue;
         const bound = strategyForAccount(strategies, acc.id);
         next[acc.id] = bound
@@ -219,7 +215,7 @@ export default function StrategiesPage() {
       }
       return next;
     });
-  }, [connectedAccounts, strategies, markets]);
+  }, [allAccounts, strategies, markets]);
 
   function patchDraft(accountId: string, patch: Partial<AccountDraft>) {
     setDrafts((prev) => ({
@@ -346,18 +342,23 @@ export default function StrategiesPage() {
         <Panel title="Konti">
           <div className="py-8 text-center text-sm text-white/35">Loading…</div>
         </Panel>
-      ) : connectedAccounts.length === 0 ? (
+      ) : allAccounts.length === 0 ? (
         <Panel title="Konti">
           <div className="py-8 text-center text-sm text-white/35">
-            Nav CONNECTED konta — vispirms savieno Accounts lapā.
+            Nav kontu — ej uz{" "}
+            <a href="/accounts" className="text-accent underline">
+              Accounts
+            </a>{" "}
+            un pievieno Capital.com.
           </div>
         </Panel>
       ) : (
-        connectedAccounts.map((account) => {
+        allAccounts.map((account) => {
           const draft = drafts[account.id] ?? defaultDraft(markets[0]?.epic ?? "");
           const bound = strategyForAccount(strategies, account.id);
           const running = bound?.status === "RUNNING";
           const busy = busyAccountId === account.id;
+          const isConnected = account.connectionStatus === "CONNECTED";
           const marketOptions =
             filteredMarkets.length > 0
               ? filteredMarkets
@@ -370,6 +371,15 @@ export default function StrategiesPage() {
               key={account.id}
               title={`${account.name} · ${account.provider} · ${account.accountType}`}
             >
+              {!isConnected ? (
+                <div className="mb-3 rounded-md border border-loss/40 bg-loss/10 px-3 py-2 text-xs text-white/80">
+                  Konts nav CONNECTED ({account.connectionStatus}). Savieno{" "}
+                  <a href="/accounts" className="text-accent underline">
+                    Accounts
+                  </a>{" "}
+                  lapā, tad START.
+                </div>
+              ) : null}
               <div className="mb-3 flex flex-wrap items-center gap-2">
                 <Badge tone={running ? "profit" : "neutral"}>
                   {running ? "RUNNING" : bound ? bound.status : "IDLE"}
@@ -560,6 +570,7 @@ export default function StrategiesPage() {
                     <Button
                       variant="success"
                       loading={busy}
+                      disabled={!isConnected}
                       onClick={() => void runAccount(account, "start")}
                     >
                       RESTART (reset + BE/Trail)
@@ -569,6 +580,7 @@ export default function StrategiesPage() {
                   <Button
                     variant="success"
                     loading={busy}
+                    disabled={!isConnected}
                     onClick={() => void runAccount(account, "start")}
                   >
                     START šo kontu
@@ -577,6 +589,7 @@ export default function StrategiesPage() {
                 <Button
                   variant="outline"
                   loading={busy}
+                  disabled={!isConnected}
                   onClick={() => void runAccount(account, "save")}
                 >
                   Saglabāt iestatījumus

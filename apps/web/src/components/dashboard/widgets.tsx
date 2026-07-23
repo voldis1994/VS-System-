@@ -8,6 +8,7 @@ import {
   useNotifications,
   useOrders,
   usePositions,
+  useStrategies,
   useTicks,
 } from "@/lib/hooks";
 import { formatMoney, formatPnl, pnlClass } from "@/lib/utils";
@@ -182,6 +183,102 @@ export function NotificationsWidget() {
         ))}
         {(data ?? []).length === 0 ? (
           <div className="py-6 text-center text-sm text-white/35">Inbox clear</div>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
+function strategyForAccount(strategies: ReturnType<typeof useStrategies>["data"], accountId: string) {
+  return (strategies ?? []).find((s) =>
+    ((s.assignedAccountIds as string[] | undefined) ?? []).includes(accountId),
+  );
+}
+
+/** Per-account bot status — so Dashboard always shows strategy state. */
+export function StrategyBotsWidget() {
+  const { data: accounts } = useAccounts();
+  const { data: strategies } = useStrategies();
+  const list = accounts ?? [];
+
+  return (
+    <Panel title="Strategy bots (per account)" delay={0.03}>
+      <p className="mb-3 text-xs text-white/45">
+        Stratēģija + exit (TP/BE/Trail) ir lapā{" "}
+        <a href="/strategies" className="text-accent underline-offset-2 hover:underline">
+          Strategies
+        </a>
+        . Šeit redzi, kas RUNNING.
+      </p>
+      <div className="space-y-2">
+        {list.map((a) => {
+          const s = strategyForAccount(strategies, a.id);
+          const cfg = (s?.configurationJson ?? {}) as {
+            exitVersion?: string;
+            takeProfitEnabled?: boolean;
+            breakEvenEnabled?: boolean;
+            trailingEnabled?: boolean;
+          };
+          const deploy = (s?.deploymentStateJson ?? {}) as {
+            skip?: string;
+            signal?: string;
+            symbol?: string;
+            openTrades?: number;
+            error?: string;
+          };
+          const running = s?.status === "RUNNING";
+          return (
+            <div
+              key={a.id}
+              className="flex flex-col gap-1 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <div className="text-sm font-medium text-white">{a.name}</div>
+                <div className="text-[11px] text-white/40">
+                  {a.connectionStatus}
+                  {s ? ` · ${s.mode}` : " · nav stratēģijas"}
+                  {cfg.exitVersion ? ` · exit ${cfg.exitVersion}` : ""}
+                </div>
+                {running && (deploy.skip || deploy.signal || deploy.error) ? (
+                  <div className="mt-0.5 font-mono text-[10px] text-white/35">
+                    {[
+                      deploy.symbol,
+                      deploy.signal ? `sig ${deploy.signal}` : null,
+                      deploy.skip ? `skip:${deploy.skip}` : null,
+                      deploy.openTrades ? `open ${deploy.openTrades}` : null,
+                      deploy.error,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {cfg.takeProfitEnabled !== false && s ? (
+                  <Badge tone="profit">TP</Badge>
+                ) : null}
+                {cfg.breakEvenEnabled ? <Badge tone="accent">BE</Badge> : null}
+                {cfg.trailingEnabled ? <Badge tone="accent">Trail</Badge> : null}
+                <Badge tone={running ? "profit" : s ? "neutral" : "warn"}>
+                  {running ? "RUNNING" : s ? s.status : "IDLE"}
+                </Badge>
+                <a
+                  href="/strategies"
+                  className="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"
+                >
+                  Atvērt Strategies →
+                </a>
+              </div>
+            </div>
+          );
+        })}
+        {list.length === 0 ? (
+          <div className="py-6 text-center text-sm text-white/35">
+            Nav kontu — vispirms{" "}
+            <a href="/accounts" className="text-accent underline">
+              Accounts
+            </a>
+          </div>
         ) : null}
       </div>
     </Panel>

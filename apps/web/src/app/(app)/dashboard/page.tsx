@@ -6,6 +6,7 @@ import {
   OverviewStats,
   PositionsSummary,
   RecentOrders,
+  StrategyBotsWidget,
   TicksStrip,
 } from "@/components/dashboard/widgets";
 import { OrderTicket } from "@/components/trading/order-ticket";
@@ -15,6 +16,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-4">
       <OverviewStats />
+      <StrategyBotsWidget />
       <TicksStrip />
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
