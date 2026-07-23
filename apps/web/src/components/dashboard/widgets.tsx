@@ -241,6 +241,11 @@ export function StrategyBotsWidget() {
                   {a.connectionStatus}
                   {s ? ` · ${s.mode}` : " · nav stratēģijas"}
                   {cfg.exitVersion ? ` · exit ${cfg.exitVersion}` : ""}
+                  {cfg.useRiskPercent
+                    ? ` · risk ${cfg.riskPercent ?? "?"}%`
+                    : cfg.volume
+                      ? ` · ${cfg.volume} lot`
+                      : ""}
                 </div>
                 {running && (deploy.skip || deploy.signal || deploy.error) ? (
                   <div className="mt-0.5 font-mono text-[10px] text-white/35">
