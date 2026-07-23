@@ -21,7 +21,7 @@ import { usePathname } from "next/navigation";
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/accounts", label: "Accounts", icon: Wallet },
-  { href: "/strategies", label: "Strategies", icon: Bot },
+  { href: "/strategies", label: "Strategies", icon: Bot, badge: "AUTO" },
   { href: "/copier", label: "Trade Copier", icon: Copy },
   { href: "/terminal", label: "Market Analysis", icon: LineChart },
   { href: "/automation", label: "Automation", icon: Activity },
@@ -57,7 +57,9 @@ export function Sidebar() {
         </div>
       </div>
       <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {NAV.map((item) => {
+          const { href, label, icon: Icon } = item;
+          const badge = "badge" in item ? item.badge : undefined;
           const active = pathname === href || pathname.startsWith(`${href}/`);
           return (
             <Link
@@ -67,17 +69,24 @@ export function Sidebar() {
                 "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
                 active
                   ? "bg-accent-muted text-white"
-                  : "text-white/55 hover:bg-white/[0.04] hover:text-white",
+                  : href === "/strategies"
+                    ? "border border-accent/30 bg-accent/5 text-white hover:bg-accent/10"
+                    : "text-white/55 hover:bg-white/[0.04] hover:text-white",
               )}
             >
-              <Icon className={cn("h-4 w-4", active ? "text-accent-soft" : "text-white/40")} />
-              {label}
+              <Icon className={cn("h-4 w-4", active || href === "/strategies" ? "text-accent-soft" : "text-white/40")} />
+              <span className="flex-1">{label}</span>
+              {badge ? (
+                <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent">
+                  {badge}
+                </span>
+              ) : null}
             </Link>
           );
         })}
       </nav>
       <div className="border-t border-white/[0.06] p-3 text-[10px] text-white/30">
-        VS System · Capital.com LIVE ready
+        VS System · build bots-v2
       </div>
     </aside>
   );

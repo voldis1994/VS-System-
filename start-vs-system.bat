@@ -122,25 +122,31 @@ if errorlevel 1 (
 )
 
 echo.
-echo [6/6] Starting API + Web...
+echo [6/6] Stopping old API/Web (ports 3000/4000) then starting...
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3000 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":4000 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
+timeout /t 2 /nobreak >nul
+
 start "VS System API" cmd /k "cd /d "%~dp0" && copy /Y .env apps\api\.env >nul && pnpm dev:api"
 timeout /t 3 /nobreak >nul
 start "VS System WEB" cmd /k "cd /d "%~dp0" && pnpm dev:web"
 
-timeout /t 6 /nobreak >nul
-start "" http://localhost:3000
+timeout /t 8 /nobreak >nul
+start "" http://localhost:3000/strategies
 
 echo.
 echo ========================================
-echo   Gatavs
-echo   UI:  http://localhost:3000
+echo   Gatavs  (build bots-v2)
+echo   Strategies: http://localhost:3000/strategies
+echo   Dashboard:  http://localhost:3000/dashboard
 echo   API: http://localhost:4000/api/health
 echo.
 echo   Login: owner@nexus.pro
 echo   Pass:  NexusOwner123!
 echo   PIN:   123456
 echo.
-echo   Atstaj abus jaunos CMD logus atvertus.
+echo   Ja Dashboard kreisaja puse NAV "Strategies AUTO" —
+echo   vecais process vel skrien. Aizver VISUS CMD un palaid velreiz.
 echo ========================================
 pause
 exit /b 0
