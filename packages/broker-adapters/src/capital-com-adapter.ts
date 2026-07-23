@@ -620,15 +620,58 @@ export class CapitalComAdapter implements BrokerAdapter {
 
   async modifyPosition(request: BrokerModifyPositionRequest): Promise<BrokerPosition> {
     await this.ensureSession();
-    await this.request("PUT", `/api/v1/positions/${request.brokerPositionId}`, {
-      stopLevel: request.stopLoss != null ? Number(request.stopLoss) : undefined,
-      profitLevel:
-        request.takeProfit != null ? Number(request.takeProfit) : undefined,
-    });
+    const body: Record<string, unknown> = {};
+    if (request.stopLoss !== undefined && request.stopLoss !== null) {
+      body.stopLevel = Number(request.stopLoss);
+    }
+    if (request.takeProfit !== undefined && request.takeProfit !== null) {
+      body.profitLevel = Number(request.takeProfit);
+    }
+    // Capital allows clearing via null
+    if (request.stopLoss === null) body.stopLevel = null;
+    if (request.takeProfit === null) body.profitLevel = null;
+
+    const res = await this.request<{ dealReference?: string }>(
+      "PUT",
+      `/api/v1/positions/${request.brokerPositionId}`,
+      body,
+    );
+
+    if (res.dealReference) {
+      const confirm = await this.waitConfirm(res.dealReference);
+      const rejected =
+        confirm.dealStatus === "REJECTED" ||
+        confirm.status === "REJECTED" ||
+        (confirm.reason &&
+          !confirm.dealId &&
+          confirm.dealStatus !== "ACCEPTED" &&
+          confirm.dealStatus !== "OPEN");
+      if (rejected) {
+        throw new Error(
+          `Capital modify rejected: ${confirm.reason ?? confirm.dealStatus ?? "unknown"}`,
+        );
+      }
+      // UNKNOWN after timeout — still re-fetch; may have applied
+    }
+
+    // Brief settle so getOpenPositions reflects new stop/profit levels
+    await new Promise((r) => setTimeout(r, 350));
     const positions = await this.getOpenPositions();
     const found = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
     if (!found) throw new Error("Position not found after modify");
-    return found;
+
+    // Prefer requested levels when broker readback omits them (common race)
+    return {
+      ...found,
+      stopLoss:
+        request.stopLoss !== undefined && request.stopLoss !== null
+          ? String(request.stopLoss)
+          : found.stopLoss,
+      takeProfit:
+        request.takeProfit !== undefined && request.takeProfit !== null
+          ? String(request.takeProfit)
+          : found.takeProfit,
+    };
   }
 
   async closePosition(request: BrokerClosePositionRequest): Promise<BrokerCloseResult> {

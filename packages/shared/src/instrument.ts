@@ -20,3 +20,24 @@ export function instrumentPipSize(symbol: string): number {
 
   return 0.1;
 }
+
+/** Floor protective distance so Capital min-stop rules don't reject BE/Trail/TP. */
+export function minProtectiveDistance(symbol: string, entryPrice: number): number {
+  const pip = instrumentPipSize(symbol);
+  const entry = Math.abs(Number(entryPrice)) || 0;
+  const s = String(symbol ?? "").toUpperCase();
+  const pct = entry > 0 ? entry * 0.0008 : 0;
+  const minPips = /XAU|GOLD/.test(s) ? 12 : /BTC|ETH|BITCOIN/.test(s) ? 8 : 8;
+  return Math.max(pip * minPips, pct, pip * 2);
+}
+
+export function formatInstrumentPrice(symbol: string, price: number | string): string {
+  const n = Number(price);
+  if (!Number.isFinite(n)) return String(price);
+  const s = String(symbol ?? "").toUpperCase();
+  if (/XAU|GOLD|XAG|SILVER/.test(s)) return n.toFixed(2);
+  if (/BTC|BITCOIN|ETH|ETHER/.test(s)) return n.toFixed(2);
+  if (/JPY/.test(s)) return n.toFixed(3);
+  if (/OIL|WTI|BRENT/.test(s)) return n.toFixed(2);
+  return n.toFixed(5);
+}

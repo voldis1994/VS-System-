@@ -6,7 +6,7 @@ import {
   ErrorCodes,
   StrategyStatus,
 } from "@nexus/domain";
-import { instrumentPipSize } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d } from "@nexus/shared";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -14,6 +14,7 @@ import { AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { AppError } from "../common/errors/app-error";
 import { StrategyRuntimeService } from "./strategy-runtime.service";
+import { PositionsService } from "../positions/positions.service";
 
 @Injectable()
 export class StrategiesService {
@@ -23,6 +24,7 @@ export class StrategiesService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     private readonly runtime: StrategyRuntimeService,
+    private readonly positions: PositionsService,
   ) {}
 
   list(organizationId: string) {
@@ -440,7 +442,7 @@ export class StrategiesService {
     return { action: "start", accountId: input.accountId, strategy: started };
   }
 
-  /** Push BE/Trail flags from strategy config onto already-open account positions. */
+  /** Push BE/Trail/TP from strategy config onto already-open account positions. */
   private async applyExitFlagsToOpenPositions(
     organizationId: string,
     accountId: string,
@@ -458,29 +460,81 @@ export class StrategiesService {
 
     const beEnabled = Boolean(config.breakEvenEnabled);
     const trailEnabled = Boolean(config.trailingEnabled);
+    const tpEnabled = config.takeProfitEnabled !== false;
     const beActPips = Number(config.breakEvenActivationPips ?? 10);
     const beOffPips = Number(config.breakEvenOffsetPips ?? 1);
     const trailPips = Number(config.trailingDistancePips ?? 15);
+    const atrTpMult = Number(config.atrTpMult ?? 2.2);
 
     for (const pos of open) {
+      const entry = Number(pos.averageEntry);
       const pip = instrumentPipSize(pos.symbol);
+      const minDist = minProtectiveDistance(pos.symbol, entry);
+      const beAct = Math.max(pip * Math.max(beActPips, 0.01), minDist);
+      const beOff = Math.max(pip * Math.max(beOffPips, 0), pip);
+      const trail = Math.max(pip * Math.max(trailPips, 0.01), minDist);
+
       await this.prisma.position.update({
         where: { id: pos.id },
         data: {
           strategyId: pos.strategyId ?? strategyId,
           breakEvenEnabled: beEnabled,
-          breakEvenActivation: beEnabled
-            ? (pip * Math.max(beActPips, 0.01)).toFixed(8)
-            : null,
-          breakEvenOffset: beEnabled
-            ? (pip * Math.max(beOffPips, 0)).toFixed(8)
-            : null,
+          breakEvenActivation: beEnabled ? beAct.toFixed(8) : null,
+          breakEvenOffset: beEnabled ? beOff.toFixed(8) : null,
           trailingEnabled: trailEnabled,
-          trailingDistance: trailEnabled
-            ? (pip * Math.max(trailPips, 0.01)).toFixed(8)
-            : null,
+          trailingDistance: trailEnabled ? trail.toFixed(8) : null,
         },
       });
+
+      // Push SL/TP to Capital for open positions
+      try {
+        const dir = pos.direction as "BUY" | "SELL";
+        let stopLoss = pos.stopLoss ? String(pos.stopLoss) : null;
+        if (!stopLoss && Number.isFinite(entry) && entry > 0) {
+          const slDist = Math.max(minDist * 0.85, entry * 0.0005);
+          stopLoss = formatInstrumentPrice(
+            pos.symbol,
+            dir === "BUY"
+              ? d(entry).minus(slDist).toNumber()
+              : d(entry).plus(slDist).toNumber(),
+          );
+        }
+
+        let takeProfit: string | null = pos.takeProfit ? String(pos.takeProfit) : null;
+        if (tpEnabled && Number.isFinite(entry) && entry > 0) {
+          const tpDist = Math.max(minDist * 1.5, entry * 0.001 * atrTpMult);
+          takeProfit = formatInstrumentPrice(
+            pos.symbol,
+            dir === "BUY"
+              ? d(entry).plus(tpDist).toNumber()
+              : d(entry).minus(tpDist).toNumber(),
+          );
+        } else if (!tpEnabled) {
+          takeProfit = null;
+        }
+
+        if (stopLoss || takeProfit !== undefined) {
+          await this.positions.modifySlTp(
+            organizationId,
+            "system",
+            pos.id,
+            {
+              stopLoss: stopLoss ?? undefined,
+              takeProfit,
+            },
+            `apply-exit-${strategyId}`,
+            { silent: true },
+          );
+        }
+      } catch (err) {
+        await this.notifications.create({
+          organizationId,
+          userId: null,
+          title: "Exit levels not applied",
+          body: `${pos.symbol}: ${err instanceof Error ? err.message : "modify failed"}`,
+          severity: "WARNING",
+        });
+      }
     }
   }
 

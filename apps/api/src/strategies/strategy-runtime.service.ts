@@ -7,7 +7,7 @@ import {
   VolumeMode,
 } from "@nexus/domain";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
-import { d, newId, instrumentPipSize } from "@nexus/shared";
+import { d, newId, instrumentPipSize, minProtectiveDistance, formatInstrumentPrice } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
 import { OrdersService } from "../orders/orders.service";
@@ -454,12 +454,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
 
         const pip = instrumentPipSize(brokerSymbol);
+        const minDist = minProtectiveDistance(brokerSymbol, entry);
         let stopDist =
           config.stopDistancePips != null
             ? pip * config.stopDistancePips
             : Math.max(ind.atr * atrStopMult, entry * 0.00065);
         // Initial SL ~35%+ closer to entry — wide ATR stops caused heavy early losses
-        stopDist = stopDist * 0.65;
+        stopDist = Math.max(stopDist * 0.65, minDist * 0.85);
         let tpDist =
           config.takeProfitPips != null
             ? pip * config.takeProfitPips
@@ -468,20 +469,24 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         if (takeProfitEnabled && tpDist < stopDist * 1.5) {
           tpDist = stopDist * 1.5;
         }
+        tpDist = Math.max(tpDist, minDist);
 
         const stopLoss =
           signal === "BUY"
-            ? d(entry).minus(stopDist).toFixed(5)
-            : d(entry).plus(stopDist).toFixed(5);
+            ? formatInstrumentPrice(brokerSymbol, d(entry).minus(stopDist).toNumber())
+            : formatInstrumentPrice(brokerSymbol, d(entry).plus(stopDist).toNumber());
         const takeProfit = takeProfitEnabled
           ? signal === "BUY"
-            ? d(entry).plus(tpDist).toFixed(5)
-            : d(entry).minus(tpDist).toFixed(5)
+            ? formatInstrumentPrice(brokerSymbol, d(entry).plus(tpDist).toNumber())
+            : formatInstrumentPrice(brokerSymbol, d(entry).minus(tpDist).toNumber())
           : undefined;
 
         const beActivationPips = config.breakEvenActivationPips ?? 10;
         const beOffsetPips = config.breakEvenOffsetPips ?? 1;
         const trailPips = config.trailingDistancePips ?? 15;
+        const beActDist = Math.max(pip * beActivationPips, minDist);
+        const beOffDist = Math.max(pip * beOffsetPips, pip);
+        const trailDist = Math.max(pip * trailPips, minDist);
 
         const account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
@@ -524,16 +529,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               stopLoss,
               takeProfit,
               trailingEnabled,
-              trailingDistance: trailingEnabled
-                ? (pip * trailPips).toFixed(8)
-                : undefined,
+              trailingDistance: trailingEnabled ? trailDist.toFixed(8) : undefined,
               breakEvenEnabled,
               breakEvenActivation: breakEvenEnabled
-                ? (pip * beActivationPips).toFixed(8)
+                ? beActDist.toFixed(8)
                 : undefined,
-              breakEvenOffset: breakEvenEnabled
-                ? (pip * beOffsetPips).toFixed(8)
-                : undefined,
+              breakEvenOffset: breakEvenEnabled ? beOffDist.toFixed(8) : undefined,
               strategyId: strategy.id,
               comment: `vs-strategy:${strategy.name}`,
               confirmSoftWarnings: true,
@@ -549,13 +550,54 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           if (child?.ok && child.position?.id) {
             await this.prisma.position.update({
               where: { id: child.position.id },
-              data: { strategyId: strategy.id, source: "STRATEGY" },
+              data: {
+                strategyId: strategy.id,
+                source: "STRATEGY",
+                breakEvenEnabled,
+                breakEvenActivation: breakEvenEnabled
+                  ? beActDist.toFixed(8)
+                  : null,
+                breakEvenOffset: breakEvenEnabled ? beOffDist.toFixed(8) : null,
+                trailingEnabled,
+                trailingDistance: trailingEnabled ? trailDist.toFixed(8) : null,
+              },
             });
+            // Re-attach SL/TP on Capital after fill (place sometimes drops levels)
+            try {
+              await this.positions.modifySlTp(
+                strategy.organizationId,
+                actorId,
+                child.position.id,
+                {
+                  stopLoss,
+                  takeProfit: takeProfit ?? null,
+                },
+                correlationId,
+                { silent: true },
+              );
+            } catch (attachErr) {
+              this.log.warn(
+                `Post-fill SL/TP attach failed: ${
+                  attachErr instanceof Error ? attachErr.message : attachErr
+                }`,
+              );
+              await this.notifications.create({
+                organizationId: strategy.organizationId,
+                userId: actorId === "system" ? null : actorId,
+                title: "SL/TP attach failed",
+                body: `${brokerSymbol}: ${
+                  attachErr instanceof Error ? attachErr.message : "modify failed"
+                }`,
+                severity: "WARNING",
+              });
+            }
             await this.notifications.create({
               organizationId: strategy.organizationId,
               userId: actorId === "system" ? null : actorId,
               title: `Auto ${signal}`,
-              body: `${strategy.name} → ${brokerSymbol} ${signal} @ ${entry}`,
+              body: `${strategy.name} → ${brokerSymbol} ${signal} @ ${entry} · SL ${stopLoss}${
+                takeProfit ? ` · TP ${takeProfit}` : ""
+              }`,
               severity: "SUCCESS",
             });
             acted = true;
@@ -564,6 +606,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               placed: true,
               direction: signal,
               entry,
+              stopLoss,
+              takeProfit: takeProfit ?? null,
               skip: undefined,
               reason: undefined,
             };

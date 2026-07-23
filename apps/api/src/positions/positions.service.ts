@@ -103,13 +103,26 @@ export class PositionsService {
       takeProfit: input.takeProfit === undefined ? undefined : input.takeProfit,
     });
 
+    const nextSl =
+      input.stopLoss !== undefined
+        ? input.stopLoss
+        : brokerPos.stopLoss != null
+          ? brokerPos.stopLoss
+          : position.stopLoss;
+    const nextTp =
+      input.takeProfit !== undefined
+        ? input.takeProfit
+        : brokerPos.takeProfit != null
+          ? brokerPos.takeProfit
+          : position.takeProfit;
+
     const updated = await this.prisma.position.update({
       where: { id },
       data: {
-        stopLoss: brokerPos.stopLoss ?? null,
-        takeProfit: brokerPos.takeProfit ?? null,
-        currentPrice: brokerPos.currentPrice,
-        unrealizedPnl: brokerPos.unrealizedPnl,
+        stopLoss: nextSl,
+        takeProfit: nextTp,
+        currentPrice: brokerPos.currentPrice ?? position.currentPrice,
+        unrealizedPnl: brokerPos.unrealizedPnl ?? position.unrealizedPnl,
       },
     });
 
@@ -348,7 +361,11 @@ export class PositionsService {
     );
     const final = await this.prisma.position.update({
       where: { id },
-      data: { breakEvenActivatedAt: new Date(), breakEvenEnabled: true },
+      data: {
+        breakEvenActivatedAt: new Date(),
+        breakEvenEnabled: true,
+        stopLoss: newSl,
+      },
     });
     await this.events.publish({
       eventType: DomainEventType.BreakEvenActivated,
@@ -381,7 +398,7 @@ export class PositionsService {
 
   /**
    * Auto BE + trailing for open positions (strategy / manual flags on Position).
-   * Uses mark price from `priceBySymbol` when provided.
+   * Prefers live broker marks over seed/sim ticks.
    */
   async autoManageProtections(
     priceBySymbol: Map<string, number>,
@@ -394,9 +411,37 @@ export class PositionsService {
       },
     });
 
+    // Refresh marks from connected brokers (fixes BE/Trail never arming on stale ticks)
+    const byAccount = new Map<string, typeof open>();
+    for (const p of open) {
+      const list = byAccount.get(p.accountId) ?? [];
+      list.push(p);
+      byAccount.set(p.accountId, list);
+    }
+    const brokerMarks = new Map<string, number>();
+    for (const [accountId, positions] of byAccount) {
+      const adapter = this.brokers.get(accountId);
+      if (!adapter) continue;
+      try {
+        const live = await adapter.getOpenPositions();
+        for (const p of positions) {
+          const match = live.find((x) => x.brokerPositionId === p.brokerPositionId);
+          if (!match) continue;
+          const mark = Number(match.currentPrice);
+          if (Number.isFinite(mark) && mark > 0) {
+            brokerMarks.set(p.id, mark);
+            brokerMarks.set(p.symbol, mark);
+          }
+        }
+      } catch {
+        // fall back to provided ticks
+      }
+    }
+
     for (const position of open) {
       try {
         const mark =
+          brokerMarks.get(position.id) ??
           priceBySymbol.get(position.symbol) ??
           (position.currentPrice != null ? Number(position.currentPrice) : NaN);
         if (!Number.isFinite(mark) || mark <= 0) continue;
@@ -428,12 +473,15 @@ export class PositionsService {
           }
         }
 
-        if (position.trailingEnabled && position.trailingDistance != null) {
-          const distance = String(position.trailingDistance);
+        // Re-read after possible BE
+        const fresh = await this.get(position.organizationId, position.id);
+
+        if (fresh.trailingEnabled && fresh.trailingDistance != null) {
+          const distance = String(fresh.trailingDistance);
           let armThreshold = Number(distance);
-          if (position.strategyId) {
+          if (fresh.strategyId) {
             const strategy = await this.prisma.strategy.findFirst({
-              where: { id: position.strategyId },
+              where: { id: fresh.strategyId },
               select: { configurationJson: true },
             });
             const cfg = (strategy?.configurationJson ?? {}) as {
@@ -447,12 +495,10 @@ export class PositionsService {
             }
           }
           const armed =
-            position.trailingActivatedAt != null ||
-            favorable >= armThreshold;
+            fresh.trailingActivatedAt != null || favorable >= armThreshold;
 
           if (!armed) continue;
 
-          const fresh = await this.get(position.organizationId, position.id);
           const candidate = trailingStopCandidate(
             dir,
             String(mark),
@@ -509,11 +555,19 @@ export class PositionsService {
           }
         }
       } catch (err) {
-        // keep managing other positions
-        console.warn(
-          `autoManageProtections ${position.id}:`,
-          err instanceof Error ? err.message : err,
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`autoManageProtections ${position.id}:`, msg);
+        try {
+          await this.notifications.create({
+            organizationId: position.organizationId,
+            userId: null,
+            title: "BE/Trail update failed",
+            body: `${position.symbol}: ${msg}`,
+            severity: "WARNING",
+          });
+        } catch {
+          // ignore notify failure
+        }
       }
     }
   }
