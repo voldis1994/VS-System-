@@ -150,9 +150,11 @@ function buildConfiguration(d: AccountDraft) {
     volume,
     oneTradeOnly: true,
     closeOnlyNoFlip: true,
-    autoAggressive: true,
+    autoAggressive: false,
+    sessionFilter: true,
+    minScore: 62,
     atrStopMult: 1.0,
-    atrTpMult: Number(d.atrTpMult) || 2.4,
+    atrTpMult: Number(d.atrTpMult) || 2.2,
     takeProfitEnabled: d.tpEnabled,
     breakEvenEnabled: d.beEnabled,
     breakEvenActivationPips: Number(d.beActivationPips) || 10,
@@ -161,8 +163,8 @@ function buildConfiguration(d: AccountDraft) {
     trailingDistancePips: Number(d.trailPips) || 15,
     trailingActivationPips: Number(d.trailActPips) || Number(d.trailPips) || 15,
     exitVersion: d.exitVersion,
-    minAdx: 12,
-    cooldownSeconds: 15,
+    minAdx: 18,
+    cooldownSeconds: 45,
   };
 }
 
@@ -692,6 +694,9 @@ export default function StrategiesPage() {
                       symbol?: string;
                       openTrades?: number;
                       cooldownSec?: number;
+                      score?: number;
+                      gate?: string;
+                      engine?: string;
                     };
                     const skipHint =
                       d.skip === "waiting_open_close"
@@ -700,13 +705,22 @@ export default function StrategiesPage() {
                           ? `Cooldown ${d.cooldownSec ?? "…"}s — pēc tam mēģinās vēlreiz.`
                           : d.skip === "same_signal"
                             ? "Tas pats signāls jau apstrādāts — gaida jaunu signālu / close."
-                            : d.skip === "not_enough_candles"
-                              ? "Vēl nav pietiekami market data — uzgaidi vai Sync."
-                              : d.error
-                                ? `Order kļūda: ${d.error}`
-                                : d.placed
-                                  ? "Order nosūtīts."
-                                  : null;
+                            : d.skip === "quality_wait" || d.gate === "score_low"
+                              ? `VS_PRO_V2 gaida kvalitāti (score ${d.score ?? 0}/62+) — mazāk treidu, mazāk micro minusu.`
+                              : d.gate === "session_off" || d.skip === "session_off"
+                                ? "Ārpus London/NY sesijas — gaida likvidāku laiku."
+                                : d.gate === "atr_dead" ||
+                                    d.gate === "atr_spike" ||
+                                    d.skip === "atr_dead" ||
+                                    d.skip === "atr_spike"
+                                  ? `Volatilitāte nav piemērota — skip.`
+                                  : d.skip === "not_enough_candles"
+                                    ? "Vēl nav pietiekami market data — uzgaidi vai Sync."
+                                    : d.error
+                                      ? `Order kļūda: ${d.error}`
+                                      : d.placed
+                                        ? "Order nosūtīts."
+                                        : null;
                     return (
                       <>
                         {skipHint ? (
@@ -722,8 +736,11 @@ export default function StrategiesPage() {
                         ) : null}
                         <div className="font-mono text-[11px] text-white/35">
                           {[
+                            d.engine ?? "VS_PRO_V2",
                             d.symbol ? `sym ${d.symbol}` : null,
                             d.signal ? `sig ${d.signal}` : null,
+                            typeof d.score === "number" ? `score ${d.score}` : null,
+                            d.gate ? `gate:${d.gate}` : null,
                             d.skip ? `skip:${d.skip}` : null,
                             d.reason ? `reason:${d.reason}` : null,
                             d.error ? `err:${d.error}` : null,

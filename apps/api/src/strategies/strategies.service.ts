@@ -134,7 +134,7 @@ export class StrategiesService {
         configurationJson: configurationJson as Prisma.InputJsonValue,
         deploymentStateJson: {
           startedAt: new Date().toISOString(),
-          engine: "VS_PRO_V1",
+          engine: "VS_PRO_V2",
           oneTradeOnly: true,
         },
         updatedById: actorId,
@@ -382,11 +382,13 @@ export class StrategiesService {
     }
 
     const displayName = `${account.name} · ${input.mode}`.slice(0, 120);
+    const cfgIn = input.configuration as Record<string, unknown>;
     const configuration = {
       ...input.configuration,
       oneTradeOnly: true,
       closeOnlyNoFlip: true,
-      autoAggressive: true,
+      // Respect client config; default selective (micro-safe)
+      autoAggressive: cfgIn.autoAggressive === true,
     };
 
     if (!strategy) {

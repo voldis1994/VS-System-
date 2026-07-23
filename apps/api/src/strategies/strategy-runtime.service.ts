@@ -26,11 +26,15 @@ type Indicators = {
   ema21: number;
   ema55: number;
   ema200: number;
+  ema9Prev: number;
+  ema21Prev: number;
   rsi: number;
   atr: number;
+  atrSlow: number;
   macd: number;
   macdSignal: number;
   macdHist: number;
+  macdHistPrev: number;
   bbMid: number;
   bbUpper: number;
   bbLower: number;
@@ -39,6 +43,7 @@ type Indicators = {
   minusDi: number;
   stochK: number;
   stochD: number;
+  stochKPrev: number;
   avgVolRange: number;
   lastRange: number;
 };
@@ -172,24 +177,33 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       autoAggressive?: boolean;
       /** Use RISK_PERCENT sizing (often fails on tiny LIVE equity) */
       useRiskPercent?: boolean;
+      /** Min confluence score 0-100 (default 62 — micro-selective) */
+      minScore?: number;
+      /** Prefer London/NY session hours (UTC) */
+      sessionFilter?: boolean;
     };
-    const cooldownMs = (config.cooldownSeconds ?? 15) * 1000;
+    const cooldownMs = (config.cooldownSeconds ?? 45) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
     const atrStopMult = config.atrStopMult ?? 1.0;
-    const atrTpMult = config.atrTpMult ?? 2.4;
+    const atrTpMult = config.atrTpMult ?? 2.2;
     const takeProfitEnabled = config.takeProfitEnabled !== false;
     const breakEvenEnabled = Boolean(config.breakEvenEnabled);
     const trailingEnabled = Boolean(config.trailingEnabled);
-    const minAdx = config.minAdx ?? 12;
+    const minAdx = config.minAdx ?? 18;
+    const minScore = config.minScore ?? 62;
+    const sessionFilter = config.sessionFilter !== false;
     const oneTradeOnly = config.oneTradeOnly !== false; // default ON
     const closeOnlyNoFlip = config.closeOnlyNoFlip ?? oneTradeOnly;
-    const autoAggressive = config.autoAggressive !== false;
+    // Default OFF — aggressive EMA fallback was deadly on micro accounts
+    const autoAggressive = config.autoAggressive === true;
     let lastStatus: Record<string, unknown> = {
       oneTradeOnly,
       takeProfitEnabled,
       breakEvenEnabled,
       trailingEnabled,
+      engine: "VS_PRO_V2",
+      minScore,
     };
 
     for (const symbol of symbols) {
@@ -214,17 +228,51 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      let signal = this.evaluate(strategy.mode as StrategyMode, ind, minAdx);
-      // Auto mode: if pro filters HOLD, fall back to fast EMA cross so it actually trades
-      if (signal === "HOLD" && (oneTradeOnly || autoAggressive)) {
-        signal = this.evaluateAuto(ind);
+      let scored = this.evaluatePro(
+        strategy.mode as StrategyMode,
+        ind,
+        minAdx,
+        minScore,
+        sessionFilter,
+      );
+      let signal = scored.signal;
+      // Optional aggressive path — OFF by default for micro accounts
+      if (signal === "HOLD" && autoAggressive) {
+        scored = this.evaluatePro(
+          StrategyMode.SCALPING,
+          ind,
+          Math.max(minAdx - 4, 14),
+          Math.max(minScore - 8, 55),
+          sessionFilter,
+        );
+        signal = scored.signal;
+      }
+
+      lastStatus = {
+        ...lastStatus,
+        score: scored.score,
+        gate: scored.gate,
+        bias: scored.bias,
+      };
+
+      if (signal === "HOLD") {
+        lastStatus = {
+          ...lastStatus,
+          symbol: brokerSymbol,
+          signal: "HOLD",
+          skip:
+            scored.gate === "score_low"
+              ? "quality_wait"
+              : scored.gate ?? "hold",
+        };
+        continue;
       }
 
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
       const key = `${strategy.id}:${brokerSymbol}`;
 
       // If account already has an open trade, explain that clearly (don't hide behind cooldown)
-      if (oneTradeOnly && signal !== "CLOSE" && signal !== "HOLD") {
+      if (oneTradeOnly && signal !== "CLOSE") {
         let blockedByOpen = false;
         let openCount = 0;
         for (const accountId of accountIds) {
@@ -347,8 +395,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        if (signal === "HOLD") continue;
-
         const opposite = openOnSymbol.filter((p) => p.direction !== signal);
         if (opposite.length > 0) {
           for (const pos of opposite) {
@@ -414,10 +460,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             : Math.max(ind.atr * atrStopMult, entry * 0.00065);
         // Initial SL ~35%+ closer to entry — wide ATR stops caused heavy early losses
         stopDist = stopDist * 0.65;
-        const tpDist =
+        let tpDist =
           config.takeProfitPips != null
             ? pip * config.takeProfitPips
             : Math.max(ind.atr * atrTpMult, entry * 0.0015);
+        // Enforce minimum ~1.5R so tight SL still has room to win
+        if (takeProfitEnabled && tpDist < stopDist * 1.5) {
+          tpDist = stopDist * 1.5;
+        }
 
         const stopLoss =
           signal === "BUY"
@@ -555,7 +605,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       data: {
         deploymentStateJson: {
           lastTickAt: new Date().toISOString(),
-          engine: "VS_PRO_V1",
+          engine: "VS_PRO_V2",
           oneTradeOnly,
           ...lastStatus,
         },
@@ -563,110 +613,247 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** Fast EMA cross for auto-trade when pro filters stay on HOLD */
-  private evaluateAuto(i: Indicators): Signal {
-    if (i.ema9 > i.ema21 && i.price >= i.ema9 && i.rsi >= 45 && i.rsi <= 75) {
-      return "BUY";
+  /**
+   * Professional confluence engine (VS_PRO_V2).
+   * Selective by design — micro accounts die on weak EMA spam.
+   * Tight SL stays outside this function (order placement).
+   */
+  private evaluatePro(
+    mode: StrategyMode,
+    i: Indicators,
+    minAdx: number,
+    minScore: number,
+    sessionFilter: boolean,
+  ): { signal: Signal; score: number; gate?: string; bias: string } {
+    const sessionOk = !sessionFilter || isLiquidSessionUtc();
+    if (!sessionOk) {
+      return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat" };
     }
-    if (i.ema9 < i.ema21 && i.price <= i.ema9 && i.rsi <= 55 && i.rsi >= 25) {
-      return "SELL";
-    }
-    if (i.rsi > 82 || i.rsi < 18) return "CLOSE";
-    return "HOLD";
-  }
 
-  private evaluate(mode: StrategyMode, i: Indicators, minAdx: number): Signal {
-    const bullTrend = i.ema21 > i.ema55 && i.ema55 > i.ema200;
-    const bearTrend = i.ema21 < i.ema55 && i.ema55 < i.ema200;
-    const macdBull = i.macdHist > 0 && i.macd > i.macdSignal;
-    const macdBear = i.macdHist < 0 && i.macd < i.macdSignal;
+    // Dead market / explosive spike — skip
+    const atrRatio = i.atrSlow > 0 ? i.atr / i.atrSlow : 1;
+    if (atrRatio < 0.55) {
+      return { signal: "HOLD", score: 0, gate: "atr_dead", bias: "flat" };
+    }
+    if (atrRatio > 2.4) {
+      return { signal: "HOLD", score: 0, gate: "atr_spike", bias: "flat" };
+    }
+
+    const bullStack = i.ema9 > i.ema21 && i.ema21 > i.ema55;
+    const bearStack = i.ema9 < i.ema21 && i.ema21 < i.ema55;
+    const bullTrend = bullStack && i.ema55 >= i.ema200 * 0.999;
+    const bearTrend = bearStack && i.ema55 <= i.ema200 * 1.001;
+    const emaRising = i.ema9 > i.ema9Prev && i.ema21 >= i.ema21Prev;
+    const emaFalling = i.ema9 < i.ema9Prev && i.ema21 <= i.ema21Prev;
+    const macdUp = i.macdHist > 0 && i.macdHist >= i.macdHistPrev;
+    const macdDown = i.macdHist < 0 && i.macdHist <= i.macdHistPrev;
+    const diBull = i.plusDi > i.minusDi;
+    const diBear = i.minusDi > i.plusDi;
+    const stochUp = i.stochK > i.stochD && i.stochK >= i.stochKPrev;
+    const stochDown = i.stochK < i.stochD && i.stochK <= i.stochKPrev;
     const trending = i.adx >= minAdx;
+    const rangeBound = i.adx < Math.max(minAdx - 4, 12);
 
+    // Soft close when momentum exhausts against open thesis
+    if (i.rsi > 78 && bearStack) {
+      return { signal: "CLOSE", score: 70, gate: "exhaust_long", bias: "bear" };
+    }
+    if (i.rsi < 22 && bullStack) {
+      return { signal: "CLOSE", score: 70, gate: "exhaust_short", bias: "bull" };
+    }
+
+    let buy = 0;
+    let sell = 0;
+    let gate = "confluence";
+
+    const addBuy = (pts: number) => {
+      buy += pts;
+    };
+    const addSell = (pts: number) => {
+      sell += pts;
+    };
+
+    // Shared structure score
+    if (trending && bullTrend) addBuy(18);
+    if (trending && bearTrend) addSell(18);
+    if (diBull) addBuy(10);
+    if (diBear) addSell(10);
+    if (macdUp) addBuy(12);
+    if (macdDown) addSell(12);
+    if (emaRising) addBuy(8);
+    if (emaFalling) addSell(8);
+    if (stochUp && i.stochK < 80) addBuy(8);
+    if (stochDown && i.stochK > 20) addSell(8);
+    if (i.rsi >= 48 && i.rsi <= 68) addBuy(8);
+    if (i.rsi <= 52 && i.rsi >= 32) addSell(8);
+    if (i.price >= i.ema21) addBuy(6);
+    if (i.price <= i.ema21) addSell(6);
+
+    // Mode-specific overlays (quality filters, not spam)
     switch (mode) {
       case StrategyMode.TREND: {
-        if (!trending) return "HOLD";
-        if (bullTrend && macdBull && i.rsi > 48 && i.rsi < 68 && i.price >= i.ema21)
-          return "BUY";
-        if (bearTrend && macdBear && i.rsi < 52 && i.rsi > 32 && i.price <= i.ema21)
-          return "SELL";
-        if (bullTrend && i.rsi > 78) return "CLOSE";
-        if (bearTrend && i.rsi < 22) return "CLOSE";
-        return "HOLD";
+        if (!trending) return { signal: "HOLD", score: 0, gate: "no_trend", bias: "flat" };
+        if (bullTrend && i.price >= i.ema21 && i.rsi > 50 && i.rsi < 66 && macdUp) addBuy(16);
+        if (bearTrend && i.price <= i.ema21 && i.rsi < 50 && i.rsi > 34 && macdDown) addSell(16);
+        break;
       }
       case StrategyMode.MOMENTUM: {
-        if (!trending) return "HOLD";
-        if (i.plusDi > i.minusDi && i.macdHist > 0 && i.rsi > 55 && i.price > i.ema9)
-          return "BUY";
-        if (i.minusDi > i.plusDi && i.macdHist < 0 && i.rsi < 45 && i.price < i.ema9)
-          return "SELL";
-        return "HOLD";
+        if (!trending) return { signal: "HOLD", score: 0, gate: "no_trend", bias: "flat" };
+        if (diBull && i.macdHist > 0 && i.rsi > 55 && i.rsi < 72 && i.price > i.ema9) addBuy(18);
+        if (diBear && i.macdHist < 0 && i.rsi < 45 && i.rsi > 28 && i.price < i.ema9) addSell(18);
+        break;
       }
       case StrategyMode.PULLBACK: {
-        if (!trending) return "HOLD";
-        if (bullTrend && i.price <= i.ema21 && i.rsi < 45 && i.rsi > 30 && macdBull)
-          return "BUY";
-        if (bearTrend && i.price >= i.ema21 && i.rsi > 55 && i.rsi < 70 && macdBear)
-          return "SELL";
-        return "HOLD";
+        if (!trending) return { signal: "HOLD", score: 0, gate: "no_trend", bias: "flat" };
+        if (
+          bullTrend &&
+          i.price <= i.ema21 &&
+          i.price >= i.ema55 &&
+          i.rsi > 36 &&
+          i.rsi < 48 &&
+          macdUp
+        ) {
+          addBuy(22);
+          gate = "pullback_long";
+        }
+        if (
+          bearTrend &&
+          i.price >= i.ema21 &&
+          i.price <= i.ema55 &&
+          i.rsi < 64 &&
+          i.rsi > 52 &&
+          macdDown
+        ) {
+          addSell(22);
+          gate = "pullback_short";
+        }
+        break;
+      }
+      case StrategyMode.BREAKOUT: {
+        if (!trending) return { signal: "HOLD", score: 0, gate: "no_trend", bias: "flat" };
+        if (
+          i.price > i.bbUpper &&
+          i.lastRange > i.avgVolRange * 1.15 &&
+          macdUp &&
+          diBull &&
+          i.rsi > 52 &&
+          i.rsi < 70
+        ) {
+          addBuy(20);
+          gate = "breakout_long";
+        }
+        if (
+          i.price < i.bbLower &&
+          i.lastRange > i.avgVolRange * 1.15 &&
+          macdDown &&
+          diBear &&
+          i.rsi < 48 &&
+          i.rsi > 30
+        ) {
+          addSell(20);
+          gate = "breakout_short";
+        }
+        break;
+      }
+      case StrategyMode.SCALPING: {
+        // Scalp still needs structure — not bare EMA cross
+        if (i.adx < Math.max(minAdx - 2, 16)) {
+          return { signal: "HOLD", score: 0, gate: "scalp_chop", bias: "flat" };
+        }
+        if (
+          bullStack &&
+          emaRising &&
+          macdUp &&
+          stochUp &&
+          diBull &&
+          i.rsi > 50 &&
+          i.rsi < 68 &&
+          i.price >= i.ema9
+        ) {
+          addBuy(20);
+          gate = "scalp_long";
+        }
+        if (
+          bearStack &&
+          emaFalling &&
+          macdDown &&
+          stochDown &&
+          diBear &&
+          i.rsi < 50 &&
+          i.rsi > 32 &&
+          i.price <= i.ema9
+        ) {
+          addSell(20);
+          gate = "scalp_short";
+        }
+        break;
       }
       case StrategyMode.RANGE:
       case StrategyMode.MEAN_REVERSION: {
-        if (trending && i.adx > 28) return "HOLD";
-        if (i.price <= i.bbLower && i.rsi < 32 && i.stochK < 25) return "BUY";
-        if (i.price >= i.bbUpper && i.rsi > 68 && i.stochK > 75) return "SELL";
-        if (Math.abs(i.price - i.bbMid) / i.bbMid < 0.0004) return "CLOSE";
-        return "HOLD";
-      }
-      case StrategyMode.BREAKOUT: {
-        if (!trending) return "HOLD";
-        if (i.price > i.bbUpper && i.lastRange > i.avgVolRange * 1.2 && macdBull && i.rsi > 52)
-          return "BUY";
-        if (i.price < i.bbLower && i.lastRange > i.avgVolRange * 1.2 && macdBear && i.rsi < 48)
-          return "SELL";
-        return "HOLD";
-      }
-      case StrategyMode.SCALPING: {
-        if (i.ema9 > i.ema21 && i.rsi > 52 && i.macdHist > 0 && i.stochK > i.stochD)
-          return "BUY";
-        if (i.ema9 < i.ema21 && i.rsi < 48 && i.macdHist < 0 && i.stochK < i.stochD)
-          return "SELL";
-        if (i.rsi > 80 || i.rsi < 20) return "CLOSE";
-        return "HOLD";
+        if (!rangeBound || i.adx > 26) {
+          return { signal: "HOLD", score: 0, gate: "not_range", bias: "flat" };
+        }
+        if (i.price <= i.bbLower && i.rsi < 34 && i.stochK < 28 && i.stochK > i.stochKPrev) {
+          addBuy(28);
+          gate = "mean_long";
+        }
+        if (i.price >= i.bbUpper && i.rsi > 66 && i.stochK > 72 && i.stochK < i.stochKPrev) {
+          addSell(28);
+          gate = "mean_short";
+        }
+        break;
       }
       case StrategyMode.REVERSAL: {
-        if (i.price < i.bbLower && i.rsi < 28 && i.stochK < 20) return "BUY";
-        if (i.price > i.bbUpper && i.rsi > 72 && i.stochK > 80) return "SELL";
-        return "HOLD";
-      }
-      case StrategyMode.GRID:
-      case StrategyMode.DCA: {
-        if (i.price < i.bbMid && i.rsi < 40) return "BUY";
-        if (i.price > i.bbMid && i.rsi > 60) return "SELL";
-        return "HOLD";
-      }
-      case StrategyMode.SESSION:
-      case StrategyMode.NEWS: {
-        // Trade only when volatility expands with trend confirmation
-        if (i.lastRange < i.avgVolRange * 0.8) return "HOLD";
-        if (bullTrend && macdBull && i.rsi > 50) return "BUY";
-        if (bearTrend && macdBear && i.rsi < 50) return "SELL";
-        return "HOLD";
-      }
-      case StrategyMode.ARBITRAGE_SIM:
-      case StrategyMode.MARKET_MAKING_SIM: {
-        if (i.price <= i.bbLower && i.rsi < 40) return "BUY";
-        if (i.price >= i.bbUpper && i.rsi > 60) return "SELL";
-        if (Math.abs(i.price - i.bbMid) / Math.max(i.bbMid, 1e-9) < 0.0003) return "CLOSE";
-        return "HOLD";
+        if (i.price < i.bbLower && i.rsi < 28 && i.stochK < 18 && macdUp) {
+          addBuy(26);
+          gate = "rev_long";
+        }
+        if (i.price > i.bbUpper && i.rsi > 72 && i.stochK > 82 && macdDown) {
+          addSell(26);
+          gate = "rev_short";
+        }
+        break;
       }
       case StrategyMode.CUSTOM:
       default: {
-        if (trending && bullTrend && macdBull && i.rsi >= 45 && i.rsi <= 65) return "BUY";
-        if (trending && bearTrend && macdBear && i.rsi <= 55 && i.rsi >= 35) return "SELL";
-        return "HOLD";
+        // Adaptive: trade with trend when scoreable, skip chop
+        if (!trending && !rangeBound) {
+          return { signal: "HOLD", score: 0, gate: "adaptive_flat", bias: "flat" };
+        }
+        if (trending && bullTrend && macdUp && diBull) addBuy(14);
+        if (trending && bearTrend && macdDown && diBear) addSell(14);
+        break;
       }
     }
+
+    // Penalize late chase
+    if (i.rsi > 70) buy -= 12;
+    if (i.rsi < 30) sell -= 12;
+    if (i.stochK > 85) buy -= 8;
+    if (i.stochK < 15) sell -= 8;
+
+    buy = Math.max(0, Math.min(100, buy));
+    sell = Math.max(0, Math.min(100, sell));
+
+    if (buy >= minScore && buy > sell + 6) {
+      return { signal: "BUY", score: buy, gate, bias: "bull" };
+    }
+    if (sell >= minScore && sell > buy + 6) {
+      return { signal: "SELL", score: sell, gate, bias: "bear" };
+    }
+    return {
+      signal: "HOLD",
+      score: Math.max(buy, sell),
+      gate: Math.max(buy, sell) > 0 ? "score_low" : gate,
+      bias: buy === sell ? "flat" : buy > sell ? "bull" : "bear",
+    };
   }
+}
+
+function isLiquidSessionUtc(now = new Date()): boolean {
+  const h = now.getUTCHours();
+  // Asia late + London + NY (approx 07:00–21:00 UTC) — skip thin overnight
+  return h >= 7 && h < 21;
 }
 
 function computeIndicators(candles: CandleLike[]): Indicators | null {
@@ -674,20 +861,31 @@ function computeIndicators(candles: CandleLike[]): Indicators | null {
   const highs = candles.map((c) => Number(c.high));
   const lows = candles.map((c) => Number(c.low));
   if (closes.some((n) => !Number.isFinite(n))) return null;
+  if (closes.length < 60) return null;
+
+  const closesPrev = closes.slice(0, -1);
+  const highsPrev = highs.slice(0, -1);
+  const lowsPrev = lows.slice(0, -1);
 
   const ema9 = ema(closes, 9);
   const ema21 = ema(closes, 21);
   const ema55 = ema(closes, 55);
   const ema200 = ema(closes, Math.min(200, closes.length - 1));
+  const ema9Prev = ema(closesPrev, 9);
+  const ema21Prev = ema(closesPrev, 21);
   const rsi = rsiWilder(closes, 14);
   const atr = atrWilder(highs, lows, closes, 14);
+  const atrSlow = atrWilder(highs, lows, closes, 28);
   const { macd, signal, hist } = macdLine(closes, 12, 26, 9);
+  const prevMacd = macdLine(closesPrev, 12, 26, 9);
   const bb = bollinger(closes, 20, 2);
   const dmi = adxDi(highs, lows, closes, 14);
   const st = stochastic(highs, lows, closes, 14, 3);
+  const stPrev = stochastic(highsPrev, lowsPrev, closesPrev, 14, 3);
   const ranges = candles.slice(-20).map((c) => Number(c.high) - Number(c.low));
   const avgVolRange = ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1);
-  const lastRange = Number(candles[candles.length - 1]!.high) - Number(candles[candles.length - 1]!.low);
+  const lastRange =
+    Number(candles[candles.length - 1]!.high) - Number(candles[candles.length - 1]!.low);
 
   return {
     price: closes[closes.length - 1]!,
@@ -695,11 +893,15 @@ function computeIndicators(candles: CandleLike[]): Indicators | null {
     ema21,
     ema55,
     ema200,
+    ema9Prev,
+    ema21Prev,
     rsi,
     atr,
+    atrSlow: atrSlow > 0 ? atrSlow : atr,
     macd,
     macdSignal: signal,
     macdHist: hist,
+    macdHistPrev: prevMacd.hist,
     bbMid: bb.mid,
     bbUpper: bb.upper,
     bbLower: bb.lower,
@@ -708,6 +910,7 @@ function computeIndicators(candles: CandleLike[]): Indicators | null {
     minusDi: dmi.minusDi,
     stochK: st.k,
     stochD: st.d,
+    stochKPrev: stPrev.k,
     avgVolRange,
     lastRange,
   };
