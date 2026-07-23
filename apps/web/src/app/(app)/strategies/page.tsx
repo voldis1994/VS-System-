@@ -151,7 +151,7 @@ function buildConfiguration(d: AccountDraft) {
     oneTradeOnly: true,
     closeOnlyNoFlip: true,
     autoAggressive: true,
-    atrStopMult: 1.6,
+    atrStopMult: 1.0,
     atrTpMult: Number(d.atrTpMult) || 2.4,
     takeProfitEnabled: d.tpEnabled,
     breakEvenEnabled: d.beEnabled,

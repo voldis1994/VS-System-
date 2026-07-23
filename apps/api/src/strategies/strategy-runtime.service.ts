@@ -176,7 +176,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const cooldownMs = (config.cooldownSeconds ?? 15) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
-    const atrStopMult = config.atrStopMult ?? 1.6;
+    const atrStopMult = config.atrStopMult ?? 1.0;
     const atrTpMult = config.atrTpMult ?? 2.4;
     const takeProfitEnabled = config.takeProfitEnabled !== false;
     const breakEvenEnabled = Boolean(config.breakEvenEnabled);
@@ -408,10 +408,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
 
         const pip = instrumentPipSize(brokerSymbol);
-        const stopDist =
+        let stopDist =
           config.stopDistancePips != null
             ? pip * config.stopDistancePips
-            : Math.max(ind.atr * atrStopMult, entry * 0.001);
+            : Math.max(ind.atr * atrStopMult, entry * 0.00065);
+        // Initial SL ~35%+ closer to entry — wide ATR stops caused heavy early losses
+        stopDist = stopDist * 0.65;
         const tpDist =
           config.takeProfitPips != null
             ? pip * config.takeProfitPips
