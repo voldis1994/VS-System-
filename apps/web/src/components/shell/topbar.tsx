@@ -92,7 +92,7 @@ export function Topbar() {
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-3">
               <h1 className="truncate font-sans text-2xl font-bold tracking-tight text-white">
-                NEXUS <span className="text-accent">PRO</span>
+                VS <span className="text-accent">System</span>
               </h1>
               <LiveDot label="FEED" />
             </div>

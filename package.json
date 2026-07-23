@@ -2,7 +2,7 @@
   "name": "nexus-pro",
   "version": "1.0.0",
   "private": true,
-  "description": "NEXUS PRO — multi-account trading management platform",
+  "description": "VS System — multi-account trading management platform",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "turbo run dev --parallel",

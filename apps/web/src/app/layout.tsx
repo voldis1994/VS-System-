@@ -18,8 +18,12 @@ const ibmMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NEXUS PRO",
-  description: "Multi-account trading management platform",
+  title: "VS System",
+  description: "VS System — multi-account trading management platform",
+  icons: {
+    icon: "/vs-system-logo.png",
+    apple: "/vs-system-logo.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

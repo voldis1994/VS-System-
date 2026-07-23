@@ -329,7 +329,7 @@ export class AuthService {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     return {
       secret,
-      otpauthUrl: authenticator.keyuri(user.email, "NEXUS PRO", secret),
+      otpauthUrl: authenticator.keyuri(user.email, "VS System", secret),
     };
   }
 

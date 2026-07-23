@@ -53,7 +53,7 @@ async function bootstrap() {
 
   await app.listen(env.API_PORT, env.API_HOST);
   // eslint-disable-next-line no-console
-  console.log(`NEXUS PRO API listening on http://${env.API_HOST}:${env.API_PORT}`);
+  console.log(`VS System API listening on http://${env.API_HOST}:${env.API_PORT}`);
 }
 
 bootstrap().catch((err) => {

@@ -14,11 +14,16 @@ async function main() {
   if (!org) {
     org = await prisma.organization.create({
       data: {
-        name: "NEXUS Demo",
+        name: "VS System",
         slug: "nexus-demo",
         defaultCurrency: "USD",
         timezone: "UTC",
       },
+    });
+  } else if (org.name === "NEXUS Demo") {
+    org = await prisma.organization.update({
+      where: { id: org.id },
+      data: { name: "VS System" },
     });
   }
 

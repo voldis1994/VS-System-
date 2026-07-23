@@ -14,7 +14,7 @@ export default function HomePage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center text-sm text-white/40">
-      Loading NEXUS PRO…
+      Loading VS System…
     </div>
   );
 }

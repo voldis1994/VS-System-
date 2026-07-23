@@ -6,6 +6,7 @@ import {
   StrategyMode,
   VolumeMode,
 } from "@nexus/domain";
+import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { d, newId } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -16,6 +17,31 @@ import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
 
 type Signal = "BUY" | "SELL" | "CLOSE" | "HOLD";
+
+type CandleLike = { open: unknown; high: unknown; low: unknown; close: unknown };
+
+type Indicators = {
+  price: number;
+  ema9: number;
+  ema21: number;
+  ema55: number;
+  ema200: number;
+  rsi: number;
+  atr: number;
+  macd: number;
+  macdSignal: number;
+  macdHist: number;
+  bbMid: number;
+  bbUpper: number;
+  bbLower: number;
+  adx: number;
+  plusDi: number;
+  minusDi: number;
+  stochK: number;
+  stochD: number;
+  avgVolRange: number;
+  lastRange: number;
+};
 
 @Injectable()
 export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
@@ -37,7 +63,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.timer = setInterval(() => void this.tickAll(), 5000);
-    this.log.log("Strategy runtime started (5s tick)");
+    this.log.log("VS System strategy runtime started (professional engine, 5s tick)");
   }
 
   onModuleDestroy() {
@@ -95,22 +121,29 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       cooldownSeconds?: number;
       stopDistancePips?: number;
       takeProfitPips?: number;
+      atrStopMult?: number;
+      atrTpMult?: number;
+      minAdx?: number;
     };
-    const cooldownMs = (config.cooldownSeconds ?? 60) * 1000;
+    const cooldownMs = (config.cooldownSeconds ?? 90) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
+    const atrStopMult = config.atrStopMult ?? 1.6;
+    const atrTpMult = config.atrTpMult ?? 2.4;
+    const minAdx = config.minAdx ?? 18;
 
     for (const symbol of symbols) {
-      const brokerSymbol = symbol === "NASDAQ100" ? "NAS100" : symbol;
+      const brokerSymbol = resolveCapitalEpic(symbol);
       const candles = await this.market.getCandles(
         brokerSymbol,
         config.timeframe ?? "1h",
-        120,
+        220,
       );
-      const closes = candles.map((c) => Number(c.close));
-      if (closes.length < 55) continue;
+      if (candles.length < 80) continue;
+      const ind = computeIndicators(candles);
+      if (!ind || ind.atr <= 0) continue;
 
-      const signal = this.evaluate(strategy.mode as StrategyMode, closes);
+      const signal = this.evaluate(strategy.mode as StrategyMode, ind, minAdx);
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
       const key = `${strategy.id}:${brokerSymbol}`;
       const lastAt = this.lastSignalAt.get(key) ?? 0;
@@ -123,7 +156,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         organizationId: strategy.organizationId,
         actorId,
         correlationId,
-        payload: { symbol: brokerSymbol, signal, mode: strategy.mode },
+        payload: {
+          symbol: brokerSymbol,
+          signal,
+          mode: strategy.mode,
+          rsi: ind.rsi,
+          adx: ind.adx,
+          atr: ind.atr,
+        },
       });
 
       for (const accountId of accountIds) {
@@ -154,7 +194,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
         if (signal === "HOLD") continue;
 
-        // Reverse: close opposite side first
         const opposite = open.filter((p) => p.direction !== signal);
         for (const pos of opposite) {
           await this.positions.close(
@@ -171,28 +210,30 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
         const tick = this.market.getTick(brokerSymbol);
         if (!tick) continue;
-        const entry = signal === "BUY" ? tick.ask : tick.bid;
-        const pip =
-          brokerSymbol === "EURUSD" || brokerSymbol.includes("USD") && brokerSymbol.length === 6
-            ? 0.0001
-            : 0.01;
-        const stopPips = config.stopDistancePips ?? 50;
-        const tpPips = config.takeProfitPips ?? 100;
+        const entry = Number(signal === "BUY" ? tick.ask : tick.bid);
+        const stopDist =
+          config.stopDistancePips != null
+            ? pipSize(brokerSymbol) * config.stopDistancePips
+            : ind.atr * atrStopMult;
+        const tpDist =
+          config.takeProfitPips != null
+            ? pipSize(brokerSymbol) * config.takeProfitPips
+            : ind.atr * atrTpMult;
+
         const stopLoss =
           signal === "BUY"
-            ? d(entry).minus(pip * stopPips).toFixed(5)
-            : d(entry).plus(pip * stopPips).toFixed(5);
+            ? d(entry).minus(stopDist).toFixed(5)
+            : d(entry).plus(stopDist).toFixed(5);
         const takeProfit =
           signal === "BUY"
-            ? d(entry).plus(pip * tpPips).toFixed(5)
-            : d(entry).minus(pip * tpPips).toFixed(5);
+            ? d(entry).plus(tpDist).toFixed(5)
+            : d(entry).minus(tpDist).toFixed(5);
 
         const account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
         });
         if (!account || account.status === "LOCKED") continue;
 
-        // Ensure broker connected
         if (!this.brokers.get(accountId)) {
           await this.brokers.connectAccount(account);
         }
@@ -215,20 +256,21 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             symbol: brokerSymbol,
             type: OrderType.MARKET,
             direction: signal === "BUY" ? OrderDirection.BUY : OrderDirection.SELL,
-            volumeMode: config.riskPercent ? VolumeMode.RISK_PERCENT : VolumeMode.FIXED_LOT,
+            volumeMode: config.riskPercent
+              ? VolumeMode.RISK_PERCENT
+              : VolumeMode.FIXED_LOT,
             volume: config.volume ?? "0.10",
             riskPercent: config.riskPercent ?? 0.5,
             stopLoss,
             takeProfit,
             strategyId: strategy.id,
-            comment: `strategy:${strategy.name}`,
+            comment: `vs-strategy:${strategy.name}`,
             confirmSoftWarnings: true,
             executionPolicy: "BEST_EFFORT",
           },
           correlationId,
         );
 
-        // Tag position with strategyId if order filled
         const child = result.results?.[0] as
           | { ok?: boolean; position?: { id: string } }
           | undefined;
@@ -243,7 +285,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           organizationId: strategy.organizationId,
           userId: actorId === "system" ? null : actorId,
           title: `Strategy signal: ${signal}`,
-          body: `${strategy.name} → ${brokerSymbol} ${signal}`,
+          body: `${strategy.name} → ${brokerSymbol} ${signal} (RSI ${ind.rsi.toFixed(1)} ADX ${ind.adx.toFixed(1)})`,
           severity: "INFO",
         });
       }
@@ -257,66 +299,157 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       data: {
         deploymentStateJson: {
           lastTickAt: new Date().toISOString(),
-          mode: "PAPER",
+          engine: "VS_PRO_V1",
         },
       },
     });
   }
 
-  private evaluate(mode: StrategyMode, closes: number[]): Signal {
-    const emaFast = ema(closes, 20);
-    const emaSlow = ema(closes, 50);
-    const price = closes[closes.length - 1]!;
-    const prevFast = ema(closes.slice(0, -1), 20);
-    const prevSlow = ema(closes.slice(0, -1), 50);
+  private evaluate(mode: StrategyMode, i: Indicators, minAdx: number): Signal {
+    const bullTrend = i.ema21 > i.ema55 && i.ema55 > i.ema200;
+    const bearTrend = i.ema21 < i.ema55 && i.ema55 < i.ema200;
+    const macdBull = i.macdHist > 0 && i.macd > i.macdSignal;
+    const macdBear = i.macdHist < 0 && i.macd < i.macdSignal;
+    const trending = i.adx >= minAdx;
 
     switch (mode) {
-      case StrategyMode.TREND:
-      case StrategyMode.MOMENTUM:
-      case StrategyMode.PULLBACK:
-      case StrategyMode.CUSTOM:
-      default: {
-        // Cross events preferred; also enter with trend if flat
-        if (prevFast <= prevSlow && emaFast > emaSlow) return "BUY";
-        if (prevFast >= prevSlow && emaFast < emaSlow) return "SELL";
-        if (emaFast > emaSlow * 1.00001 && price >= emaFast) return "BUY";
-        if (emaFast < emaSlow * 0.99999 && price <= emaFast) return "SELL";
+      case StrategyMode.TREND: {
+        if (!trending) return "HOLD";
+        if (bullTrend && macdBull && i.rsi > 48 && i.rsi < 68 && i.price >= i.ema21)
+          return "BUY";
+        if (bearTrend && macdBear && i.rsi < 52 && i.rsi > 32 && i.price <= i.ema21)
+          return "SELL";
+        if (bullTrend && i.rsi > 78) return "CLOSE";
+        if (bearTrend && i.rsi < 22) return "CLOSE";
+        return "HOLD";
+      }
+      case StrategyMode.MOMENTUM: {
+        if (!trending) return "HOLD";
+        if (i.plusDi > i.minusDi && i.macdHist > 0 && i.rsi > 55 && i.price > i.ema9)
+          return "BUY";
+        if (i.minusDi > i.plusDi && i.macdHist < 0 && i.rsi < 45 && i.price < i.ema9)
+          return "SELL";
+        return "HOLD";
+      }
+      case StrategyMode.PULLBACK: {
+        if (!trending) return "HOLD";
+        if (bullTrend && i.price <= i.ema21 && i.rsi < 45 && i.rsi > 30 && macdBull)
+          return "BUY";
+        if (bearTrend && i.price >= i.ema21 && i.rsi > 55 && i.rsi < 70 && macdBear)
+          return "SELL";
         return "HOLD";
       }
       case StrategyMode.RANGE:
       case StrategyMode.MEAN_REVERSION: {
-        const window = closes.slice(-20);
-        const mid = window.reduce((a, b) => a + b, 0) / window.length;
-        const high = Math.max(...window);
-        const low = Math.min(...window);
-        if (price <= low + (high - low) * 0.2) return "BUY";
-        if (price >= high - (high - low) * 0.2) return "SELL";
-        if (Math.abs(price - mid) / mid < 0.0002) return "CLOSE";
+        if (trending && i.adx > 28) return "HOLD";
+        if (i.price <= i.bbLower && i.rsi < 32 && i.stochK < 25) return "BUY";
+        if (i.price >= i.bbUpper && i.rsi > 68 && i.stochK > 75) return "SELL";
+        if (Math.abs(i.price - i.bbMid) / i.bbMid < 0.0004) return "CLOSE";
         return "HOLD";
       }
       case StrategyMode.BREAKOUT: {
-        const window = closes.slice(-30, -1);
-        const high = Math.max(...window);
-        const low = Math.min(...window);
-        if (price > high) return "BUY";
-        if (price < low) return "SELL";
+        if (!trending) return "HOLD";
+        if (i.price > i.bbUpper && i.lastRange > i.avgVolRange * 1.2 && macdBull && i.rsi > 52)
+          return "BUY";
+        if (i.price < i.bbLower && i.lastRange > i.avgVolRange * 1.2 && macdBear && i.rsi < 48)
+          return "SELL";
         return "HOLD";
       }
       case StrategyMode.SCALPING: {
-        const a = closes[closes.length - 3]!;
-        const b = closes[closes.length - 1]!;
-        const change = (b - a) / a;
-        if (change > 0.0003) return "BUY";
-        if (change < -0.0003) return "SELL";
+        if (i.ema9 > i.ema21 && i.rsi > 52 && i.macdHist > 0 && i.stochK > i.stochD)
+          return "BUY";
+        if (i.ema9 < i.ema21 && i.rsi < 48 && i.macdHist < 0 && i.stochK < i.stochD)
+          return "SELL";
+        if (i.rsi > 80 || i.rsi < 20) return "CLOSE";
         return "HOLD";
       }
       case StrategyMode.REVERSAL: {
-        if (prevFast >= prevSlow && emaFast < emaSlow) return "SELL";
-        if (prevFast <= prevSlow && emaFast > emaSlow) return "BUY";
+        if (i.price < i.bbLower && i.rsi < 28 && i.stochK < 20) return "BUY";
+        if (i.price > i.bbUpper && i.rsi > 72 && i.stochK > 80) return "SELL";
+        return "HOLD";
+      }
+      case StrategyMode.GRID:
+      case StrategyMode.DCA: {
+        if (i.price < i.bbMid && i.rsi < 40) return "BUY";
+        if (i.price > i.bbMid && i.rsi > 60) return "SELL";
+        return "HOLD";
+      }
+      case StrategyMode.SESSION:
+      case StrategyMode.NEWS: {
+        // Trade only when volatility expands with trend confirmation
+        if (i.lastRange < i.avgVolRange * 0.8) return "HOLD";
+        if (bullTrend && macdBull && i.rsi > 50) return "BUY";
+        if (bearTrend && macdBear && i.rsi < 50) return "SELL";
+        return "HOLD";
+      }
+      case StrategyMode.ARBITRAGE_SIM:
+      case StrategyMode.MARKET_MAKING_SIM: {
+        if (i.price <= i.bbLower && i.rsi < 40) return "BUY";
+        if (i.price >= i.bbUpper && i.rsi > 60) return "SELL";
+        if (Math.abs(i.price - i.bbMid) / Math.max(i.bbMid, 1e-9) < 0.0003) return "CLOSE";
+        return "HOLD";
+      }
+      case StrategyMode.CUSTOM:
+      default: {
+        if (trending && bullTrend && macdBull && i.rsi >= 45 && i.rsi <= 65) return "BUY";
+        if (trending && bearTrend && macdBear && i.rsi <= 55 && i.rsi >= 35) return "SELL";
         return "HOLD";
       }
     }
   }
+}
+
+function pipSize(symbol: string): number {
+  if (/^[A-Z]{6}$/.test(symbol)) {
+    return symbol.includes("JPY") ? 0.01 : 0.0001;
+  }
+  if (symbol === "GOLD" || symbol === "SILVER") return 0.1;
+  if (symbol.includes("BITCOIN") || symbol.includes("ETH")) return 1;
+  return 0.1;
+}
+
+function computeIndicators(candles: CandleLike[]): Indicators | null {
+  const closes = candles.map((c) => Number(c.close));
+  const highs = candles.map((c) => Number(c.high));
+  const lows = candles.map((c) => Number(c.low));
+  if (closes.some((n) => !Number.isFinite(n))) return null;
+
+  const ema9 = ema(closes, 9);
+  const ema21 = ema(closes, 21);
+  const ema55 = ema(closes, 55);
+  const ema200 = ema(closes, Math.min(200, closes.length - 1));
+  const rsi = rsiWilder(closes, 14);
+  const atr = atrWilder(highs, lows, closes, 14);
+  const { macd, signal, hist } = macdLine(closes, 12, 26, 9);
+  const bb = bollinger(closes, 20, 2);
+  const dmi = adxDi(highs, lows, closes, 14);
+  const st = stochastic(highs, lows, closes, 14, 3);
+  const ranges = candles.slice(-20).map((c) => Number(c.high) - Number(c.low));
+  const avgVolRange = ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1);
+  const lastRange = Number(candles[candles.length - 1]!.high) - Number(candles[candles.length - 1]!.low);
+
+  return {
+    price: closes[closes.length - 1]!,
+    ema9,
+    ema21,
+    ema55,
+    ema200,
+    rsi,
+    atr,
+    macd,
+    macdSignal: signal,
+    macdHist: hist,
+    bbMid: bb.mid,
+    bbUpper: bb.upper,
+    bbLower: bb.lower,
+    adx: dmi.adx,
+    plusDi: dmi.plusDi,
+    minusDi: dmi.minusDi,
+    stochK: st.k,
+    stochD: st.d,
+    avgVolRange,
+    lastRange,
+  };
 }
 
 function ema(values: number[], period: number): number {
@@ -327,4 +460,148 @@ function ema(values: number[], period: number): number {
     prev = values[i]! * k + prev * (1 - k);
   }
   return prev;
+}
+
+function rsiWilder(closes: number[], period: number): number {
+  if (closes.length <= period) return 50;
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const ch = closes[i]! - closes[i - 1]!;
+    if (ch >= 0) gain += ch;
+    else loss -= ch;
+  }
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const ch = closes[i]! - closes[i - 1]!;
+    avgGain = (avgGain * (period - 1) + Math.max(ch, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-ch, 0)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
+function atrWilder(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period: number,
+): number {
+  if (closes.length < period + 1) return 0;
+  const trs: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    const tr = Math.max(
+      highs[i]! - lows[i]!,
+      Math.abs(highs[i]! - closes[i - 1]!),
+      Math.abs(lows[i]! - closes[i - 1]!),
+    );
+    trs.push(tr);
+  }
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]!) / period;
+  }
+  return atr;
+}
+
+function macdLine(closes: number[], fast: number, slow: number, signalPeriod: number) {
+  const emaFastSeries: number[] = [];
+  const emaSlowSeries: number[] = [];
+  const kFast = 2 / (fast + 1);
+  const kSlow = 2 / (slow + 1);
+  let f = closes[0]!;
+  let s = closes[0]!;
+  for (let i = 0; i < closes.length; i++) {
+    f = i === 0 ? closes[0]! : closes[i]! * kFast + f * (1 - kFast);
+    s = i === 0 ? closes[0]! : closes[i]! * kSlow + s * (1 - kSlow);
+    emaFastSeries.push(f);
+    emaSlowSeries.push(s);
+  }
+  const macdSeries = emaFastSeries.map((v, i) => v - emaSlowSeries[i]!);
+  const signal = ema(macdSeries, signalPeriod);
+  const macd = macdSeries[macdSeries.length - 1]!;
+  return { macd, signal, hist: macd - signal };
+}
+
+function bollinger(closes: number[], period: number, mult: number) {
+  const window = closes.slice(-period);
+  const mid = window.reduce((a, b) => a + b, 0) / window.length;
+  const variance =
+    window.reduce((a, b) => a + (b - mid) ** 2, 0) / Math.max(window.length, 1);
+  const sd = Math.sqrt(variance);
+  return { mid, upper: mid + mult * sd, lower: mid - mult * sd };
+}
+
+function adxDi(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period: number,
+): { adx: number; plusDi: number; minusDi: number } {
+  if (closes.length < period + 2) return { adx: 0, plusDi: 0, minusDi: 0 };
+  const plusDm: number[] = [];
+  const minusDm: number[] = [];
+  const tr: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    const up = highs[i]! - highs[i - 1]!;
+    const down = lows[i - 1]! - lows[i]!;
+    plusDm.push(up > down && up > 0 ? up : 0);
+    minusDm.push(down > up && down > 0 ? down : 0);
+    tr.push(
+      Math.max(
+        highs[i]! - lows[i]!,
+        Math.abs(highs[i]! - closes[i - 1]!),
+        Math.abs(lows[i]! - closes[i - 1]!),
+      ),
+    );
+  }
+  const smooth = (arr: number[]) => {
+    let v = arr.slice(0, period).reduce((a, b) => a + b, 0);
+    const out = [v];
+    for (let i = period; i < arr.length; i++) {
+      v = v - v / period + arr[i]!;
+      out.push(v);
+    }
+    return out;
+  };
+  const trS = smooth(tr);
+  const pS = smooth(plusDm);
+  const mS = smooth(minusDm);
+  const dx: number[] = [];
+  for (let i = 0; i < trS.length; i++) {
+    const trv = trS[i]! || 1e-9;
+    const pdi = (100 * pS[i]!) / trv;
+    const mdi = (100 * mS[i]!) / trv;
+    const den = pdi + mdi || 1e-9;
+    dx.push((100 * Math.abs(pdi - mdi)) / den);
+  }
+  const adx = ema(dx, period);
+  const last = trS.length - 1;
+  const trv = trS[last]! || 1e-9;
+  return {
+    adx,
+    plusDi: (100 * pS[last]!) / trv,
+    minusDi: (100 * mS[last]!) / trv,
+  };
+}
+
+function stochastic(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period: number,
+  smooth: number,
+): { k: number; d: number } {
+  const ks: number[] = [];
+  for (let i = period - 1; i < closes.length; i++) {
+    const h = Math.max(...highs.slice(i - period + 1, i + 1));
+    const l = Math.min(...lows.slice(i - period + 1, i + 1));
+    const den = h - l || 1e-9;
+    ks.push(((closes[i]! - l) / den) * 100);
+  }
+  const k = ks[ks.length - 1] ?? 50;
+  const d = ema(ks.slice(-Math.max(smooth * 3, smooth)), smooth);
+  return { k, d };
 }

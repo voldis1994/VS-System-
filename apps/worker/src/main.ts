@@ -7,7 +7,7 @@ import { loadEnv } from "@nexus/config";
 async function main() {
   const env = loadEnv(process.env);
   // eslint-disable-next-line no-console
-  console.log(`NEXUS worker started (${env.NODE_ENV}) — trailing/virtual-SL loops ready`);
+  console.log(`VS System worker started (${env.NODE_ENV}) — trailing/virtual-SL loops ready`);
   setInterval(() => {
     // Heartbeat placeholder for queue consumers (BullMQ wired in production hardening phase)
   }, 30_000);

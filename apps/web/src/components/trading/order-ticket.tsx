@@ -8,8 +8,17 @@ import { useAuthStore } from "@/lib/auth-store";
 import { useAccounts, useInvalidateTrading, useTicks } from "@/lib/hooks";
 import { uuid } from "@/lib/utils";
 import { OrderDirection, OrderType, VolumeMode } from "@nexus/domain";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+
+type CapitalMarket = {
+  epic: string;
+  name: string;
+  instrumentType?: string;
+  bid?: number;
+  offer?: number;
+  marketStatus?: string;
+};
 
 export function OrderTicket() {
   const token = useAuthStore((s) => s.accessToken);
@@ -19,6 +28,9 @@ export function OrderTicket() {
 
   const [accountId, setAccountId] = useState("");
   const [symbol, setSymbol] = useState("EURUSD");
+  const [marketQuery, setMarketQuery] = useState("");
+  const [markets, setMarkets] = useState<CapitalMarket[]>([]);
+  const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [direction, setDirection] = useState<"BUY" | "SELL">("BUY");
   const [type, setType] = useState<"MARKET" | "LIMIT" | "STOP">("MARKET");
   const [volumeMode, setVolumeMode] = useState<"FIXED_LOT" | "RISK_PERCENT">("FIXED_LOT");
@@ -29,8 +41,68 @@ export function OrderTicket() {
   const [takeProfit, setTakeProfit] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const symbols = (ticks ?? []).map((t) => t.symbol);
   const selectedAccount = (accounts ?? []).find((a) => a.id === accountId) ?? accounts?.[0];
+  const isCapital = selectedAccount?.provider === "CAPITAL";
+
+  const symbolOptions = useMemo(() => {
+    if (markets.length > 0) return markets;
+    const fromTicks = (ticks ?? []).map((t) => ({
+      epic: t.symbol,
+      name: t.symbol,
+    }));
+    return fromTicks.length
+      ? fromTicks
+      : [
+          { epic: "EURUSD", name: "EUR/USD" },
+          { epic: "GOLD", name: "Gold" },
+          { epic: "BITCOIN", name: "Bitcoin" },
+          { epic: "US100", name: "US Tech 100" },
+          { epic: "US30", name: "Wall Street 30" },
+        ];
+  }, [markets, ticks]);
+
+  async function loadMarkets(q?: string) {
+    if (!token) return;
+    setLoadingMarkets(true);
+    try {
+      const res = await api<{ markets: CapitalMarket[] }>(
+        `/capital/markets${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+        { token },
+      );
+      setMarkets(res.markets ?? []);
+      if (!q && res.markets?.[0] && !symbol) {
+        setSymbol(res.markets[0].epic);
+      }
+    } catch (e) {
+      if (isCapital) {
+        toast.error(e instanceof Error ? e.message : "Markets load failed");
+      }
+    } finally {
+      setLoadingMarkets(false);
+    }
+  }
+
+  async function syncMarkets() {
+    if (!token) return;
+    setLoadingMarkets(true);
+    try {
+      const res = await api<{ count: number }>("/capital/markets/sync", {
+        method: "POST",
+        token,
+      });
+      toast.success(`Synced ${res.count} Capital.com markets`);
+      await loadMarkets();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setLoadingMarkets(false);
+    }
+  }
+
+  useEffect(() => {
+    if (isCapital) void loadMarkets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCapital, token]);
 
   async function submit() {
     const acc = selectedAccount;
@@ -93,12 +165,34 @@ export function OrderTicket() {
           </Select>
         </Field>
 
+        {isCapital ? (
+          <div className="flex gap-2">
+            <Input
+              value={marketQuery}
+              onChange={(e) => setMarketQuery(e.target.value)}
+              placeholder="Search Capital markets (GOLD, BITCOIN…)"
+              className="font-mono text-xs"
+            />
+            <Button
+              size="sm"
+              loading={loadingMarkets}
+              onClick={() => void loadMarkets(marketQuery.trim() || undefined)}
+            >
+              Find
+            </Button>
+            <Button size="sm" variant="outline" loading={loadingMarkets} onClick={() => void syncMarkets()}>
+              Sync
+            </Button>
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Symbol">
+          <Field label="Symbol (Capital epic)">
             <Select value={symbol} onChange={(e) => setSymbol(e.target.value)}>
-              {(symbols.length ? symbols : ["EURUSD", "XAUUSD", "BTCUSD"]).map((s) => (
-                <option key={s} value={s}>
-                  {s}
+              {symbolOptions.map((s) => (
+                <option key={s.epic} value={s.epic}>
+                  {s.epic}
+                  {s.name && s.name !== s.epic ? ` — ${s.name}` : ""}
                 </option>
               ))}
             </Select>

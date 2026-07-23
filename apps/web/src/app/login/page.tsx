@@ -119,8 +119,14 @@ export default function LoginPage() {
         className="relative w-full max-w-md rounded-xl border border-white/10 bg-navy-900/85 p-6 shadow-glow backdrop-blur"
       >
         <div className="mb-6 text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/vs-system-logo.png"
+            alt="VS System"
+            className="mx-auto mb-3 h-16 w-16 rounded-xl object-cover ring-1 ring-white/15"
+          />
           <div className="font-sans text-3xl font-bold tracking-tight text-white">
-            NEXUS <span className="text-accent">PRO</span>
+            VS <span className="text-accent">System</span>
           </div>
           <p className="mt-2 text-sm text-white/45">Multi-account trading command center</p>
         </div>

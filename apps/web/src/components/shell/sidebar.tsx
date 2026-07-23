@@ -39,11 +39,21 @@ export function Sidebar() {
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-white/[0.06] bg-navy-950/90">
       <div className="border-b border-white/[0.06] px-4 py-4">
-        <div className="font-sans text-lg font-bold tracking-tight text-white">
-          NEXUS <span className="text-accent">PRO</span>
-        </div>
-        <div className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-white/35">
-          Trading Platform
+        <div className="flex items-center gap-2.5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/vs-system-logo.png"
+            alt="VS System"
+            className="h-9 w-9 rounded-md object-cover ring-1 ring-white/10"
+          />
+          <div>
+            <div className="font-sans text-lg font-bold tracking-tight text-white">
+              VS <span className="text-accent">System</span>
+            </div>
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-white/35">
+              Trading Platform
+            </div>
+          </div>
         </div>
       </div>
       <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
@@ -67,7 +77,7 @@ export function Sidebar() {
         })}
       </nav>
       <div className="border-t border-white/[0.06] p-3 text-[10px] text-white/30">
-        Paper mode default · Live gated
+        VS System · Capital.com LIVE ready
       </div>
     </aside>
   );

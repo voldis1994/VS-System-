@@ -1,4 +1,4 @@
-# NEXUS PRO
+# VS System
 
 Multi-account trading operations platform (management & execution coordination — not a broker).
 
@@ -9,14 +9,14 @@ Multi-account trading operations platform (management & execution coordination �
 - **apps/worker** — background workers
 - **packages/domain** — enums, events, RBAC, Zod schemas
 - **packages/shared** — Decimal math, risk formulas, time helpers
-- **packages/broker-adapters** — Paper + mock MT4/MT5/cTrader/Binance/Bybit
+- **packages/broker-adapters** — Paper + Capital.com + mock brokers
 - **packages/config** — env validation
 
 ## Quick start (Windows)
 
 1. Install [Node.js LTS](https://nodejs.org), [Docker Desktop](https://www.docker.com/products/docker-desktop/), enable WSL if asked.
 2. Start Docker Desktop (Engine running).
-3. Double-click `start-nexus.bat` in the project folder.
+3. Double-click `start-nexus.bat` (or `start-vs-system.bat`) in the project folder.
 
 UI: http://localhost:3000  
 Login: `owner@nexus.pro` / `NexusOwner123!` (PIN `123456`)

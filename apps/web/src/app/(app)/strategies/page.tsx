@@ -9,22 +9,48 @@ import { useAuthStore } from "@/lib/auth-store";
 import { useAccounts, useStrategies } from "@/lib/hooks";
 import { StrategyMode } from "@nexus/domain";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+
+type CapitalMarket = { epic: string; name: string };
+
+const MODE_HELP: Record<string, string> = {
+  TREND: "EMA 21/55/200 + MACD + RSI + ADX trend filter",
+  MOMENTUM: "DI+/DI− + MACD histogram + RSI momentum",
+  PULLBACK: "Trend pullback to EMA21 with RSI reset",
+  RANGE: "Bollinger + Stochastic mean reversion (low ADX)",
+  MEAN_REVERSION: "Bollinger fade with RSI/Stoch extremes",
+  BREAKOUT: "BB break + range expansion + MACD confirm",
+  SCALPING: "EMA9/21 micro trend + Stoch cross",
+  REVERSAL: "Exhaustion at BB bands with RSI extremes",
+  GRID: "Grid-style dips/rips around BB mid",
+  DCA: "Scaled entries on RSI weakness/strength",
+  SESSION: "Volatility expansion + trend confirm",
+  NEWS: "High-range impulse with trend filter",
+  CUSTOM: "Balanced multi-factor professional default",
+};
 
 export default function StrategiesPage() {
   const token = useAuthStore((s) => s.accessToken);
   const { data: strategies, isLoading } = useStrategies();
   const { data: accounts } = useAccounts();
   const qc = useQueryClient();
-  const [name, setName] = useState("Trend Rider");
+  const [name, setName] = useState("VS Trend Pro");
   const [mode, setMode] = useState<string>(StrategyMode.TREND);
   const [accountId, setAccountId] = useState("");
-  const [symbols, setSymbols] = useState("EURUSD");
+  const [symbols, setSymbols] = useState("EURUSD,GOLD,US100");
   const [riskPercent, setRiskPercent] = useState("0.5");
+  const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [lastBacktest, setLastBacktest] = useState<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    void api<{ markets: CapitalMarket[] }>("/capital/markets", { token })
+      .then((res) => setMarkets((res.markets ?? []).slice(0, 300)))
+      .catch(() => undefined);
+  }, [token]);
 
   async function create() {
     const acc = accountId || accounts?.[0]?.id;
@@ -48,15 +74,19 @@ export default function StrategiesPage() {
           configuration: {
             timeframe: "1h",
             riskPercent: Number(riskPercent) || 0.5,
-            stopDistancePips: 50,
-            takeProfitPips: 100,
-            cooldownSeconds: 60,
+            atrStopMult: 1.6,
+            atrTpMult: 2.4,
+            minAdx: 18,
+            cooldownSeconds: 90,
           },
           assignedAccountIds: [acc],
-          assignedSymbols: symbols.split(",").map((s) => s.trim()).filter(Boolean),
+          assignedSymbols: symbols
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
         }),
       });
-      toast.success("Stratēģija izveidota");
+      toast.success("Professional strategy created");
       void qc.invalidateQueries({ queryKey: ["strategies"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Create failed");
@@ -78,7 +108,7 @@ export default function StrategiesPage() {
           `Backtest: ${String(res.trades ?? 0)} trades, P/L ${String(res.netProfit ?? 0)}`,
         );
       } else if (action === "start") {
-        toast.success("Stratēģija RUNNING — signāli ik pēc ~5s");
+        toast.success("Strategy RUNNING — professional engine (ATR/RSI/MACD/ADX)");
       } else {
         toast.success(`Strategy ${action}`);
       }
@@ -92,12 +122,22 @@ export default function StrategiesPage() {
     }
   }
 
+  function addEpic(epic: string) {
+    const list = symbols
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!list.includes(epic)) {
+      setSymbols([...list, epic].join(","));
+    }
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Panel title="Create Strategy">
         <p className="mb-3 text-xs text-white/45">
-          Start ieslēdz runtime: EMA trend / range / breakout signāli automātiski atver un aizver
-          paper treidus uz izvēlētā konta.
+          VS System professional engine: EMA stack, RSI, MACD, Bollinger, ADX/DI, Stochastic,
+          ATR-based SL/TP. Use Capital.com epic names (GOLD, BITCOIN, US100…).
         </p>
         <div className="space-y-3">
           <Field label="Name">
@@ -112,6 +152,7 @@ export default function StrategiesPage() {
               ))}
             </Select>
           </Field>
+          <p className="text-[11px] text-accent-soft">{MODE_HELP[mode] ?? MODE_HELP.CUSTOM}</p>
           <Field label="Account (must be CONNECTED)">
             <Select
               value={accountId || accounts?.[0]?.id || ""}
@@ -124,14 +165,38 @@ export default function StrategiesPage() {
               ))}
             </Select>
           </Field>
-          <Field label="Symbols">
-            <Input value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+          <Field label="Symbols (Capital epics, comma-separated)">
+            <Input
+              value={symbols}
+              onChange={(e) => setSymbols(e.target.value)}
+              className="font-mono text-xs"
+              placeholder="EURUSD,GOLD,BITCOIN,US100"
+            />
           </Field>
+          {markets.length > 0 ? (
+            <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto">
+              {markets.slice(0, 80).map((m) => (
+                <button
+                  key={m.epic}
+                  type="button"
+                  className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-white/60 hover:border-accent/50 hover:text-white"
+                  onClick={() => addEpic(m.epic)}
+                  title={m.name}
+                >
+                  {m.epic}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-white/35">
+              Connect Capital → Terminal Sync markets, lai redzētu visus epic.
+            </p>
+          )}
           <Field label="Risk % per trade">
             <Input value={riskPercent} onChange={(e) => setRiskPercent(e.target.value)} />
           </Field>
           <Button variant="primary" className="w-full" loading={creating} onClick={() => void create()}>
-            Create
+            Create professional strategy
           </Button>
         </div>
       </Panel>
@@ -142,7 +207,10 @@ export default function StrategiesPage() {
         ) : (
           <div className="space-y-3">
             {(strategies ?? []).map((s) => {
-              const deploy = (s.deploymentStateJson ?? {}) as { lastTickAt?: string };
+              const deploy = (s.deploymentStateJson ?? {}) as {
+                lastTickAt?: string;
+                engine?: string;
+              };
               return (
                 <div
                   key={s.id}
@@ -163,6 +231,7 @@ export default function StrategiesPage() {
                       >
                         {s.status}
                       </Badge>
+                      {deploy.engine ? <Badge tone="neutral">{deploy.engine}</Badge> : null}
                     </div>
                     {deploy.lastTickAt ? (
                       <div className="mt-1 text-[11px] text-white/35">

@@ -4,6 +4,11 @@ import {
   OrderType,
 } from "@nexus/domain";
 import { d, toUtcIso } from "@nexus/shared";
+import {
+  CAPITAL_SEARCH_SEEDS,
+  resolveCapitalEpic,
+  type CapitalMarketInfo,
+} from "./capital-markets";
 import type {
   BrokerAccountEvent,
   BrokerAccountState,
@@ -235,46 +240,197 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async getSymbols(): Promise<BrokerSymbol[]> {
+    const markets = await this.listCapitalMarkets();
+    return markets.map((m) => this.toBrokerSymbol(m));
+  }
+
+  /**
+   * Discover Capital.com markets (epics + display names + live quotes when available).
+   * Uses seeded searches across FX / indices / commodities / crypto / shares.
+   */
+  async listCapitalMarkets(searchTerm?: string): Promise<CapitalMarketInfo[]> {
     await this.ensureSession();
-    const terms = ["EURUSD", "XAUUSD", "BTCUSD", "US100", "US30"];
-    const out: BrokerSymbol[] = [];
-    for (const term of terms) {
+    const byEpic = new Map<string, CapitalMarketInfo>();
+
+    const ingest = (markets?: Array<Record<string, unknown>>) => {
+      for (const m of markets ?? []) {
+        const epic = String(m.epic ?? "");
+        if (!epic) continue;
+        const existing = byEpic.get(epic);
+        const next: CapitalMarketInfo = {
+          epic,
+          name: String(m.instrumentName ?? m.name ?? existing?.name ?? epic),
+          instrumentType: String(
+            m.instrumentType ?? existing?.instrumentType ?? "CFD",
+          ),
+          bid: numOrUndef(m.bid) ?? existing?.bid,
+          offer: numOrUndef(m.offer) ?? existing?.offer,
+          high: numOrUndef(m.high) ?? existing?.high,
+          low: numOrUndef(m.low) ?? existing?.low,
+          percentageChange:
+            numOrUndef(m.percentageChange) ?? existing?.percentageChange,
+          marketStatus: String(m.marketStatus ?? existing?.marketStatus ?? ""),
+        };
+        byEpic.set(epic, next);
+      }
+    };
+
+    if (searchTerm?.trim()) {
       try {
-        const res = await this.request<{
-          markets?: Array<{
-            epic: string;
-            instrumentName?: string;
-            instrumentType?: string;
-            bid?: number;
-            offer?: number;
-            scalingFactor?: number;
-          }>;
-        }>("GET", `/api/v1/markets?searchTerm=${encodeURIComponent(term)}`);
-        for (const m of res.markets ?? []) {
-          out.push({
-            brokerSymbol: m.epic,
-            canonicalSymbol: term,
-            assetClass: m.instrumentType ?? "CFD",
-            baseAsset: term.slice(0, 3),
-            quoteAsset: term.slice(3) || "USD",
-            pricePrecision: 5,
-            volumePrecision: 2,
-            minVolume: "0.01",
-            maxVolume: "100",
-            volumeStep: "0.01",
-            tickSize: "0.00001",
-            tickValue: "1",
-            contractSize: "1",
-            minStopDistance: "0.00010",
-            tradingHoursJson: { provider: "CAPITAL" },
-          });
-        }
+        const res = await this.request<{ markets?: Array<Record<string, unknown>> }>(
+          "GET",
+          `/api/v1/markets?searchTerm=${encodeURIComponent(searchTerm.trim())}`,
+        );
+        ingest(res.markets);
       } catch {
-        // skip term
+        // ignore
+      }
+      return [...byEpic.values()].sort((a, b) => a.epic.localeCompare(b.epic));
+    }
+
+    // Prefer full catalogue when API allows (no query = all markets)
+    try {
+      const all = await this.request<{ markets?: Array<Record<string, unknown>> }>(
+        "GET",
+        "/api/v1/markets",
+      );
+      if (all.markets && all.markets.length > 0) {
+        ingest(all.markets);
+        return [...byEpic.values()].sort((a, b) => a.epic.localeCompare(b.epic));
+      }
+    } catch {
+      // fall through to seeded discovery
+    }
+
+    for (const term of CAPITAL_SEARCH_SEEDS) {
+      try {
+        const res = await this.request<{ markets?: Array<Record<string, unknown>> }>(
+          "GET",
+          `/api/v1/markets?searchTerm=${encodeURIComponent(term)}`,
+        );
+        ingest(res.markets);
+      } catch {
+        // continue
       }
     }
-    return out;
+
+    // Walk market navigation for any remaining groups
+    try {
+      await this.walkMarketNavigation(undefined, ingest, 0);
+    } catch {
+      // optional
+    }
+
+    return [...byEpic.values()].sort((a, b) => a.epic.localeCompare(b.epic));
   }
+
+  async getMarketQuote(epic: string): Promise<CapitalMarketInfo | null> {
+    await this.ensureSession();
+    const resolved = resolveCapitalEpic(epic);
+    try {
+      const res = await this.request<{
+        market?: Record<string, unknown>;
+        instrument?: { epic?: string; name?: string; type?: string };
+        snapshot?: {
+          bid?: number;
+          offer?: number;
+          high?: number;
+          low?: number;
+          percentageChange?: number;
+          marketStatus?: string;
+        };
+      }>("GET", `/api/v1/markets/${encodeURIComponent(resolved)}`);
+      const epicOut = String(res.instrument?.epic ?? res.market?.epic ?? resolved);
+      return {
+        epic: epicOut,
+        name: String(res.instrument?.name ?? res.market?.instrumentName ?? epicOut),
+        instrumentType: String(res.instrument?.type ?? res.market?.instrumentType ?? "CFD"),
+        bid: numOrUndef(res.snapshot?.bid ?? res.market?.bid),
+        offer: numOrUndef(res.snapshot?.offer ?? res.market?.offer),
+        high: numOrUndef(res.snapshot?.high ?? res.market?.high),
+        low: numOrUndef(res.snapshot?.low ?? res.market?.low),
+        percentageChange: numOrUndef(
+          res.snapshot?.percentageChange ?? res.market?.percentageChange,
+        ),
+        marketStatus: String(
+          res.snapshot?.marketStatus ?? res.market?.marketStatus ?? "",
+        ),
+      };
+    } catch {
+      try {
+        const res = await this.request<{ markets?: Array<Record<string, unknown>> }>(
+          "GET",
+          `/api/v1/markets?epics=${encodeURIComponent(resolved)}`,
+        );
+        const m = res.markets?.[0];
+        if (!m) return null;
+        return {
+          epic: String(m.epic),
+          name: String(m.instrumentName ?? m.epic),
+          instrumentType: String(m.instrumentType ?? "CFD"),
+          bid: numOrUndef(m.bid),
+          offer: numOrUndef(m.offer),
+          high: numOrUndef(m.high),
+          low: numOrUndef(m.low),
+          percentageChange: numOrUndef(m.percentageChange),
+          marketStatus: String(m.marketStatus ?? ""),
+        };
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  private toBrokerSymbol(m: CapitalMarketInfo): BrokerSymbol {
+    const epic = m.epic;
+    const fx = /^[A-Z]{6}$/.test(epic);
+    return {
+      brokerSymbol: epic,
+      canonicalSymbol: epic,
+      assetClass: m.instrumentType ?? "CFD",
+      baseAsset: fx ? epic.slice(0, 3) : epic,
+      quoteAsset: fx ? epic.slice(3) : "USD",
+      pricePrecision: fx ? 5 : 2,
+      volumePrecision: 2,
+      minVolume: "0.01",
+      maxVolume: "500",
+      volumeStep: "0.01",
+      tickSize: fx ? "0.00001" : "0.01",
+      tickValue: "1",
+      contractSize: "1",
+      minStopDistance: fx ? "0.00010" : "0.1",
+      tradingHoursJson: {
+        provider: "CAPITAL",
+        name: m.name,
+        marketStatus: m.marketStatus,
+      },
+    };
+  }
+
+  private async walkMarketNavigation(
+    nodeId: string | undefined,
+    ingest: (markets?: Array<Record<string, unknown>>) => void,
+    depth: number,
+  ): Promise<void> {
+    if (depth > 4) return;
+    const path = nodeId
+      ? `/api/v1/marketnavigation/${encodeURIComponent(nodeId)}?limit=500`
+      : "/api/v1/marketnavigation";
+    const res = await this.request<{
+      nodes?: Array<{ id: string; name?: string }>;
+      markets?: Array<Record<string, unknown>>;
+    }>("GET", path);
+    ingest(res.markets);
+    for (const node of res.nodes ?? []) {
+      if (!node.id) continue;
+      try {
+        await this.walkMarketNavigation(node.id, ingest, depth + 1);
+      } catch {
+        // skip node
+      }
+    }
+  }
+
 
   async getOpenOrders(): Promise<BrokerOrder[]> {
     await this.ensureSession();
@@ -368,7 +524,7 @@ export class CapitalComAdapter implements BrokerAdapter {
 
     if (request.type !== OrderType.MARKET) {
       const body = {
-        epic: request.symbol,
+        epic: resolveCapitalEpic(request.symbol),
         direction: request.direction,
         size: Number(request.volume),
         level: request.price ? Number(request.price) : undefined,
@@ -395,7 +551,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
 
     const body: Record<string, unknown> = {
-      epic: request.symbol,
+      epic: resolveCapitalEpic(request.symbol),
       direction: request.direction,
       size: Number(request.volume),
     };
@@ -700,3 +856,10 @@ export class CapitalComAdapter implements BrokerAdapter {
     return JSON.parse(text) as T;
   }
 }
+
+function numOrUndef(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
