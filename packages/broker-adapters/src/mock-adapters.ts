@@ -1,4 +1,5 @@
 import { PaperBrokerAdapter } from "./paper-adapter";
+import { CapitalComAdapter } from "./capital-com-adapter";
 import type { BrokerAdapter, BrokerConnectionConfig, ConnectionResult } from "./types";
 
 /** Mock adapters reuse paper engine with a different provider label for local development. */
@@ -49,6 +50,8 @@ export function createBrokerAdapter(provider: string): BrokerAdapter {
       return new MockBinanceAdapter();
     case "BYBIT":
       return new MockBybitAdapter();
+    case "CAPITAL":
+      return new CapitalComAdapter();
     case "PAPER":
     default:
       return new PaperBrokerAdapter();

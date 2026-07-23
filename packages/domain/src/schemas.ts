@@ -57,6 +57,14 @@ export const CreateAccountSchema = z.object({
   startingBalance: z.string().regex(/^\d+(\.\d{1,8})?$/).default("100000"),
   externalAccountId: z.string().optional(),
   serverName: z.string().optional(),
+  credentials: z
+    .object({
+      apiKey: z.string().min(8),
+      identifier: z.string().min(3),
+      password: z.string().min(4),
+      demo: z.boolean().default(true),
+    })
+    .optional(),
 });
 
 export const PlaceOrderSchema = z.object({

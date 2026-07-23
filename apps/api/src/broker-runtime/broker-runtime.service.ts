@@ -1,12 +1,21 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { createBrokerAdapter, type BrokerAdapter } from "@nexus/broker-adapters";
+import { loadEnv } from "@nexus/config";
 import { PrismaService } from "../prisma/prisma.service";
 import { Prisma } from "@prisma/client";
+import { decryptSecret } from "../common/crypto/crypto.util";
 
 @Injectable()
 export class BrokerRuntimeService implements OnModuleInit {
   private readonly log = new Logger(BrokerRuntimeService.name);
   private readonly adapters = new Map<string, BrokerAdapter>();
+  private readonly env = (() => {
+    try {
+      return loadEnv(process.env);
+    } catch {
+      return { ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? "" };
+    }
+  })();
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -27,17 +36,32 @@ export class BrokerRuntimeService implements OnModuleInit {
     brokerStateJson?: Prisma.JsonValue | null;
   }): Promise<BrokerAdapter> {
     const existing = this.adapters.get(account.id);
-    if (existing) return existing;
+    if (existing) {
+      // For Capital.com, refresh session by reconnecting if needed
+      if (account.provider === "CAPITAL") {
+        try {
+          const health = await existing.healthCheck();
+          if (health.healthy) return existing;
+        } catch {
+          this.adapters.delete(account.id);
+        }
+      } else {
+        return existing;
+      }
+    }
 
+    const credentials = await this.loadCredentials(account.id);
     const adapter = createBrokerAdapter(account.provider);
     await adapter.connect({
       accountId: account.id,
       leverage: account.leverage,
       startingBalance: String(account.balance),
       baseCurrency: account.baseCurrency,
+      credentials,
     });
 
     if (
+      account.provider === "PAPER" &&
       account.brokerStateJson &&
       typeof account.brokerStateJson === "object" &&
       "hydrate" in adapter &&
@@ -54,28 +78,31 @@ export class BrokerRuntimeService implements OnModuleInit {
     }
 
     this.adapters.set(account.id, adapter);
-    this.log.log(`Broker adapter connected for account ${account.id}`);
+    this.log.log(`Broker adapter connected for account ${account.id} (${account.provider})`);
     return adapter;
   }
 
   async persistState(accountId: string): Promise<void> {
     const adapter = this.adapters.get(accountId);
-    if (!adapter || !("snapshot" in adapter) || typeof adapter.snapshot !== "function") {
-      return;
-    }
-    const snapshot = adapter.snapshot();
+    if (!adapter) return;
+
     const state = await adapter.getAccountState();
+    const data: Prisma.TradingAccountUpdateInput = {
+      balance: state.balance,
+      equity: state.equity,
+      freeMargin: state.freeMargin,
+      usedMargin: state.usedMargin,
+      marginLevel: state.marginLevel,
+      connectionStatus: "CONNECTED",
+    };
+
+    if ("snapshot" in adapter && typeof adapter.snapshot === "function") {
+      data.brokerStateJson = adapter.snapshot() as Prisma.InputJsonValue;
+    }
+
     await this.prisma.tradingAccount.update({
       where: { id: accountId },
-      data: {
-        balance: state.balance,
-        equity: state.equity,
-        freeMargin: state.freeMargin,
-        usedMargin: state.usedMargin,
-        marginLevel: state.marginLevel,
-        brokerStateJson: snapshot as Prisma.InputJsonValue,
-        connectionStatus: "CONNECTED",
-      },
+      data,
     });
   }
 
@@ -89,6 +116,8 @@ export class BrokerRuntimeService implements OnModuleInit {
     });
     for (const account of accounts) {
       try {
+        // Skip auto-restore of live Capital without explicit connect in this phase if preferred —
+        // still attempt so server restart recovers DEMO sessions when credentials exist.
         await this.connectAccount(account);
         await this.persistState(account.id);
       } catch (err) {
@@ -104,9 +133,29 @@ export class BrokerRuntimeService implements OnModuleInit {
   async disconnect(accountId: string): Promise<void> {
     const adapter = this.adapters.get(accountId);
     if (adapter) {
-      await this.persistState(accountId);
+      try {
+        await this.persistState(accountId);
+      } catch {
+        // ignore
+      }
       await adapter.disconnect();
       this.adapters.delete(accountId);
+    }
+  }
+
+  private async loadCredentials(
+    accountId: string,
+  ): Promise<Record<string, string> | undefined> {
+    const cred = await this.prisma.brokerCredential.findUnique({
+      where: { accountId },
+    });
+    if (!cred) return undefined;
+    try {
+      const plain = decryptSecret(cred.encryptedPayload, this.env.ENCRYPTION_KEY);
+      return JSON.parse(plain) as Record<string, string>;
+    } catch (err) {
+      this.log.error(`Failed to decrypt credentials for ${accountId}`, err as Error);
+      throw new Error("Invalid broker credentials");
     }
   }
 }

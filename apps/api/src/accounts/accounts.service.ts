@@ -4,15 +4,25 @@ import {
   DomainEventType,
   ErrorCodes,
 } from "@nexus/domain";
+import { loadEnv } from "@nexus/config";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { EventBusService } from "../events/event-bus.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { AppError } from "../common/errors/app-error";
 import { NotificationsService } from "../notifications/notifications.service";
+import { encryptSecret } from "../common/crypto/crypto.util";
 
 @Injectable()
 export class AccountsService {
+  private readonly env = (() => {
+    try {
+      return loadEnv(process.env);
+    } catch {
+      return { ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? "" };
+    }
+  })();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -97,6 +107,25 @@ export class AccountsService {
       },
     });
 
+    if (input.credentials) {
+      const payload = encryptSecret(
+        JSON.stringify({
+          apiKey: input.credentials.apiKey,
+          identifier: input.credentials.identifier,
+          password: input.credentials.password,
+          demo: String(input.credentials.demo ?? true),
+        }),
+        this.env.ENCRYPTION_KEY,
+      );
+      await this.prisma.brokerCredential.create({
+        data: {
+          accountId: account.id,
+          encryptedPayload: payload,
+          keyVersion: 1,
+        },
+      });
+    }
+
     await this.events.publish({
       eventType: DomainEventType.AccountCreated,
       aggregateId: account.id,
@@ -139,59 +168,69 @@ export class AccountsService {
       data: { connectionStatus: "CONNECTING" },
     });
 
-    const adapter = await this.brokers.connectAccount(account);
-    const health = await adapter.healthCheck();
-    const state = await adapter.getAccountState();
-    const connection = await adapter.connect({
-      accountId: account.id,
-      leverage: account.leverage,
-      startingBalance: String(account.balance),
-      baseCurrency: account.baseCurrency,
-    });
+    try {
+      const adapter = await this.brokers.connectAccount(account);
+      const health = await adapter.healthCheck();
+      const state = await adapter.getAccountState();
 
-    const updated = await this.prisma.tradingAccount.update({
-      where: { id },
-      data: {
-        connectionStatus: health.healthy ? "CONNECTED" : "ERROR",
-        externalAccountId: connection.externalAccountId,
-        balance: state.balance,
-        equity: state.equity,
-        freeMargin: state.freeMargin,
-        usedMargin: state.usedMargin,
-        marginLevel: state.marginLevel,
-      },
-    });
+      const updated = await this.prisma.tradingAccount.update({
+        where: { id },
+        data: {
+          connectionStatus: health.healthy ? "CONNECTED" : "ERROR",
+          externalAccountId:
+            (health.details?.externalAccountId as string | undefined) ??
+            account.externalAccountId,
+          balance: state.balance,
+          equity: state.equity,
+          freeMargin: state.freeMargin,
+          usedMargin: state.usedMargin,
+          marginLevel: state.marginLevel,
+          dayStartEquity: state.equity,
+          peakEquity: state.equity,
+        },
+      });
 
-    await this.brokers.persistState(id);
+      await this.brokers.persistState(id);
 
-    await this.events.publish({
-      eventType: DomainEventType.AccountConnected,
-      aggregateId: id,
-      organizationId,
-      actorId,
-      correlationId,
-      payload: { externalAccountId: connection.externalAccountId },
-    });
+      await this.events.publish({
+        eventType: DomainEventType.AccountConnected,
+        aggregateId: id,
+        organizationId,
+        actorId,
+        correlationId,
+        payload: { externalAccountId: updated.externalAccountId },
+      });
 
-    await this.audit.record({
-      organizationId,
-      actorId,
-      action: "ACCOUNT_CONNECTED",
-      resourceType: "TradingAccount",
-      resourceId: id,
-      after: updated,
-      correlationId,
-    });
+      await this.audit.record({
+        organizationId,
+        actorId,
+        action: "ACCOUNT_CONNECTED",
+        resourceType: "TradingAccount",
+        resourceId: id,
+        after: updated,
+        correlationId,
+      });
 
-    await this.notifications.create({
-      organizationId,
-      userId: actorId,
-      title: "Account connected",
-      body: `${updated.name} is ${updated.connectionStatus}`,
-      severity: "SUCCESS",
-    });
+      await this.notifications.create({
+        organizationId,
+        userId: actorId,
+        title: "Account connected",
+        body: `${updated.name} is ${updated.connectionStatus}`,
+        severity: "SUCCESS",
+      });
 
-    return updated;
+      return updated;
+    } catch (err) {
+      await this.prisma.tradingAccount.update({
+        where: { id },
+        data: { connectionStatus: "ERROR" },
+      });
+      throw new AppError(
+        ErrorCodes.BROKER_CONNECTION_FAILED,
+        err instanceof Error ? err.message : "Broker connection failed",
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
   }
 
   async disconnect(

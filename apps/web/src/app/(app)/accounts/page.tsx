@@ -17,34 +17,63 @@ export default function AccountsPage() {
   const token = useAuthStore((s) => s.accessToken);
   const { data: accounts, isLoading } = useAccounts();
   const qc = useQueryClient();
+  const [provider, setProvider] = useState<"PAPER" | "CAPITAL">("PAPER");
   const [name, setName] = useState("Paper Account");
   const [startingBalance, setStartingBalance] = useState("100000");
   const [leverage, setLeverage] = useState("100");
+  const [apiKey, setApiKey] = useState("");
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [demo, setDemo] = useState(true);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   async function createAccount() {
-    const parsed = CreateAccountSchema.safeParse({
-      name,
-      provider: Provider.PAPER,
-      platform: "PAPER",
-      accountType: AccountType.PAPER,
-      startingBalance,
-      leverage: Number(leverage),
-    });
+    const payload =
+      provider === "CAPITAL"
+        ? {
+            name: name || "Capital.com",
+            provider: Provider.CAPITAL,
+            platform: "CAPITAL",
+            accountType: demo ? AccountType.DEMO : AccountType.LIVE,
+            leverage: Number(leverage),
+            startingBalance: "0",
+            credentials: {
+              apiKey,
+              identifier,
+              password,
+              demo,
+            },
+          }
+        : {
+            name,
+            provider: Provider.PAPER,
+            platform: "PAPER",
+            accountType: AccountType.PAPER,
+            startingBalance,
+            leverage: Number(leverage),
+          };
+
+    const parsed = CreateAccountSchema.safeParse(payload);
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? "Invalid account data");
       return;
     }
     setCreating(true);
     try {
-      await api("/accounts", {
+      const account = await api<{ id: string }>("/accounts", {
         method: "POST",
         token: token!,
         body: JSON.stringify(parsed.data),
       });
-      toast.success("Paper account created");
+      toast.success(provider === "CAPITAL" ? "Capital.com account created" : "Paper account created");
       void qc.invalidateQueries({ queryKey: ["accounts"] });
+      if (provider === "CAPITAL") {
+        await api(`/accounts/${account.id}/connect`, { method: "POST", token: token! });
+        toast.success(demo ? "Capital.com DEMO connected" : "Capital.com LIVE connected");
+        void qc.invalidateQueries({ queryKey: ["accounts"] });
+        void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Create failed");
     } finally {
@@ -87,25 +116,90 @@ export default function AccountsPage() {
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Create Paper Account" className="lg:col-span-1">
+        <Panel title="Add Account" className="lg:col-span-1">
           <div className="space-y-3">
+            <Field label="Provider">
+              <Select
+                value={provider}
+                onChange={(e) => {
+                  const p = e.target.value as "PAPER" | "CAPITAL";
+                  setProvider(p);
+                  setName(p === "CAPITAL" ? "Capital.com Demo" : "Paper Account");
+                }}
+              >
+                <option value="PAPER">Paper (simulator)</option>
+                <option value="CAPITAL">Capital.com</option>
+              </Select>
+            </Field>
             <Field label="Name">
               <Input value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
-            <Field label="Starting balance">
-              <Input value={startingBalance} onChange={(e) => setStartingBalance(e.target.value)} className="font-mono" />
-            </Field>
-            <Field label="Leverage">
-              <Select value={leverage} onChange={(e) => setLeverage(e.target.value)}>
-                {["50", "100", "200", "500"].map((v) => (
-                  <option key={v} value={v}>
-                    1:{v}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Button variant="primary" className="w-full" loading={creating} onClick={() => void createAccount()}>
-              Create paper account
+
+            {provider === "PAPER" ? (
+              <>
+                <Field label="Starting balance">
+                  <Input
+                    value={startingBalance}
+                    onChange={(e) => setStartingBalance(e.target.value)}
+                    className="font-mono"
+                  />
+                </Field>
+                <Field label="Leverage">
+                  <Select value={leverage} onChange={(e) => setLeverage(e.target.value)}>
+                    {["50", "100", "200", "500"].map((v) => (
+                      <option key={v} value={v}>
+                        1:{v}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </>
+            ) : (
+              <>
+                <p className="text-[11px] leading-relaxed text-white/45">
+                  Capital.com → Settings → API integrations → Generate key. Sāc ar{" "}
+                  <strong className="text-white/70">Demo</strong>.
+                </p>
+                <Field label="Mode">
+                  <Select
+                    value={demo ? "demo" : "live"}
+                    onChange={(e) => setDemo(e.target.value === "demo")}
+                  >
+                    <option value="demo">DEMO (recommended)</option>
+                    <option value="live">LIVE (real money)</option>
+                  </Select>
+                </Field>
+                <Field label="Email / login">
+                  <Input
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                    placeholder="you@email.com"
+                  />
+                </Field>
+                <Field label="API Key">
+                  <Input
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    className="font-mono"
+                  />
+                </Field>
+                <Field label="API Password">
+                  <Input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </Field>
+              </>
+            )}
+
+            <Button
+              variant="primary"
+              className="w-full"
+              loading={creating}
+              onClick={() => void createAccount()}
+            >
+              {provider === "CAPITAL" ? "Connect Capital.com" : "Create paper account"}
             </Button>
           </div>
         </Panel>
@@ -123,7 +217,8 @@ export default function AccountsPage() {
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-white">{a.name}</span>
-                      <Badge tone="accent">{a.accountType}</Badge>
+                      <Badge tone="accent">{a.provider}</Badge>
+                      <Badge tone="neutral">{a.accountType}</Badge>
                       <Badge tone={a.connectionStatus === "CONNECTED" ? "profit" : "neutral"}>
                         {a.connectionStatus}
                       </Badge>
@@ -175,7 +270,9 @@ export default function AccountsPage() {
                 </div>
               ))}
               {(accounts ?? []).length === 0 ? (
-                <div className="py-8 text-center text-sm text-white/35">Create a paper account to begin</div>
+                <div className="py-8 text-center text-sm text-white/35">
+                  Add Paper or Capital.com account
+                </div>
               ) : null}
             </div>
           )}

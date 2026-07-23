@@ -142,6 +142,7 @@ export enum Provider {
   CTRADER = "CTRADER",
   BINANCE = "BINANCE",
   BYBIT = "BYBIT",
+  CAPITAL = "CAPITAL",
 }
 
 export enum ExecutionPolicy {
