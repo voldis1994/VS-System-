@@ -67,6 +67,11 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
 
     await this.createSession();
+    const session = await this.request<{
+      accountId?: string;
+      currentAccountId?: string;
+    }>("GET", "/api/v1/session");
+
     const accounts = await this.request<{
       accounts: Array<{
         accountId: string;
@@ -78,12 +83,34 @@ export class CapitalComAdapter implements BrokerAdapter {
 
     const preferred =
       accounts.accounts?.find((a) => a.preferred) ?? accounts.accounts?.[0];
+    const currentAccountId = String(
+      session.currentAccountId ??
+        session.accountId ??
+        this.externalAccountId ??
+        "",
+    );
+
     if (preferred) {
       this.externalAccountId = preferred.accountId;
-      // Switch session to preferred account
-      await this.request("PUT", "/api/v1/session", {
-        accountId: preferred.accountId,
-      });
+      // Only switch when Capital is on a different financial account
+      if (
+        preferred.accountId &&
+        String(preferred.accountId) !== currentAccountId
+      ) {
+        try {
+          await this.request("PUT", "/api/v1/session", {
+            accountId: preferred.accountId,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Already on this account — treat as success
+          if (!msg.includes("error.not-different.accountId")) {
+            throw err;
+          }
+        }
+      }
+    } else if (currentAccountId) {
+      this.externalAccountId = currentAccountId;
     }
 
     this.connected = true;
@@ -499,6 +526,14 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
     this.tokens = { cst, securityToken };
     this.lastHeartbeatAt = toUtcIso();
+    try {
+      const body = (await res.json()) as { accountId?: string };
+      if (body.accountId) {
+        this.externalAccountId = body.accountId;
+      }
+    } catch {
+      // body optional
+    }
   }
 
   /** Accept boolean or string demo flags from encrypted credential payloads. */
