@@ -120,6 +120,25 @@ export class AccountsController {
     );
   }
 
+  @Post(":id/enable-live")
+  @RequirePermissions("accounts:live")
+  enableLive(
+    @Param("id") id: string,
+    @Body() body: { riskAccepted?: boolean },
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.accounts.enableLive(
+      req.user.organizationId,
+      req.user.userId,
+      id,
+      req.correlationId ?? "unknown",
+      {
+        tradingPinVerified: req.user.tradingPinVerified,
+        riskAccepted: Boolean(body?.riskAccepted),
+      },
+    );
+  }
+
   @Post(":id/unlock")
   @RequirePermissions("accounts:lock")
   unlock(

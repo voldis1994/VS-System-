@@ -187,6 +187,11 @@ export class AccountsService {
           marginLevel: state.marginLevel,
           dayStartEquity: state.equity,
           peakEquity: state.equity,
+          // Capital.com LIVE: enable real order routing after successful broker connect
+          liveTradingEnabled:
+            account.provider === "CAPITAL" && account.accountType === "LIVE"
+              ? true
+              : account.liveTradingEnabled,
         },
       });
 
@@ -370,6 +375,72 @@ export class AccountsService {
       resourceId: id,
       correlationId,
     });
+    return updated;
+  }
+
+  async enableLive(
+    organizationId: string,
+    actorId: string,
+    id: string,
+    correlationId: string,
+    opts: { tradingPinVerified: boolean; riskAccepted: boolean },
+  ) {
+    const account = await this.get(organizationId, id);
+    if (account.provider !== "CAPITAL" && account.accountType !== "LIVE") {
+      // allow any LIVE-typed account
+    }
+    if (account.accountType !== "LIVE" && account.provider === "CAPITAL") {
+      throw new AppError(
+        ErrorCodes.ACCOUNT_LIVE_NOT_ENABLED,
+        "Account is not LIVE type — recreate with Mode LIVE",
+      );
+    }
+    if (!opts.tradingPinVerified) {
+      throw new AppError(
+        ErrorCodes.AUTH_TRADING_PIN_REQUIRED,
+        "Verify trading PIN first",
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (!opts.riskAccepted) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "You must accept the live trading risk warning",
+      );
+    }
+    if (account.connectionStatus !== "CONNECTED") {
+      throw new AppError(
+        ErrorCodes.ACCOUNT_DISCONNECTED,
+        "Connect Capital.com LIVE first",
+      );
+    }
+
+    const updated = await this.prisma.tradingAccount.update({
+      where: { id },
+      data: {
+        liveTradingEnabled: true,
+        accountType: "LIVE",
+      },
+    });
+
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "ACCOUNT_LIVE_ENABLED",
+      resourceType: "TradingAccount",
+      resourceId: id,
+      after: { liveTradingEnabled: true, riskAccepted: true },
+      correlationId,
+    });
+
+    await this.notifications.create({
+      organizationId,
+      userId: actorId,
+      title: "LIVE trading enabled",
+      body: `${updated.name} can place real Capital.com orders`,
+      severity: "CRITICAL",
+    });
+
     return updated;
   }
 

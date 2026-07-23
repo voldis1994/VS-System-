@@ -24,15 +24,26 @@ export default function AccountsPage() {
   const [apiKey, setApiKey] = useState("");
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [demo, setDemo] = useState(true);
+  const [demo, setDemo] = useState(false);
+  const [riskAccepted, setRiskAccepted] = useState(false);
+  const tradingPinVerified = useAuthStore((s) => s.tradingPinVerified);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   async function createAccount() {
+    if (provider === "CAPITAL" && !demo && !riskAccepted) {
+      toast.error("Apstiprini LIVE riska brīdinājumu");
+      return;
+    }
+    if (provider === "CAPITAL" && !demo && !tradingPinVerified) {
+      toast.error("Vispirms Verify PIN (augšējā josla)");
+      return;
+    }
+
     const payload =
       provider === "CAPITAL"
         ? {
-            name: name || "Capital.com",
+            name: name || (demo ? "Capital.com Demo" : "Capital.com LIVE"),
             provider: Provider.CAPITAL,
             platform: "CAPITAL",
             accountType: demo ? AccountType.DEMO : AccountType.LIVE,
@@ -67,13 +78,19 @@ export default function AccountsPage() {
         body: JSON.stringify(parsed.data),
       });
       toast.success(provider === "CAPITAL" ? "Capital.com account created" : "Paper account created");
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      if (provider === "CAPITAL") {
-        await api(`/accounts/${account.id}/connect`, { method: "POST", token: token! });
-        toast.success(demo ? "Capital.com DEMO connected" : "Capital.com LIVE connected");
-        void qc.invalidateQueries({ queryKey: ["accounts"] });
-        void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
+      await api(`/accounts/${account.id}/connect`, { method: "POST", token: token! });
+      if (provider === "CAPITAL" && !demo) {
+        await api(`/accounts/${account.id}/enable-live`, {
+          method: "POST",
+          token: token!,
+          body: JSON.stringify({ riskAccepted: true }),
+        });
+        toast.success("Capital.com LIVE connected — real orders enabled");
+      } else {
+        toast.success(demo ? "Capital.com DEMO connected" : "Connected");
       }
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Create failed");
     } finally {
@@ -124,7 +141,8 @@ export default function AccountsPage() {
                 onChange={(e) => {
                   const p = e.target.value as "PAPER" | "CAPITAL";
                   setProvider(p);
-                  setName(p === "CAPITAL" ? "Capital.com Demo" : "Paper Account");
+                  setName(p === "CAPITAL" ? "Capital.com LIVE" : "Paper Account");
+                  if (p === "CAPITAL") setDemo(false);
                 }}
               >
                 <option value="PAPER">Paper (simulator)</option>
@@ -157,18 +175,36 @@ export default function AccountsPage() {
             ) : (
               <>
                 <p className="text-[11px] leading-relaxed text-white/45">
-                  Capital.com → Settings → API integrations → Generate key. Sāc ar{" "}
-                  <strong className="text-white/70">Demo</strong>.
+                  Capital.com → Settings → API integrations → Generate key uz{" "}
+                  <strong className="text-white/80">REAL</strong> konta (ne Demo).
                 </p>
                 <Field label="Mode">
                   <Select
                     value={demo ? "demo" : "live"}
-                    onChange={(e) => setDemo(e.target.value === "demo")}
+                    onChange={(e) => {
+                      const isDemo = e.target.value === "demo";
+                      setDemo(isDemo);
+                      setName(isDemo ? "Capital.com Demo" : "Capital.com LIVE");
+                    }}
                   >
-                    <option value="demo">DEMO (recommended)</option>
                     <option value="live">LIVE (real money)</option>
+                    <option value="demo">DEMO</option>
                   </Select>
                 </Field>
+                {!demo ? (
+                  <label className="flex items-start gap-2 rounded-md border border-loss/40 bg-loss/10 p-2 text-[11px] text-white/80">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={riskAccepted}
+                      onChange={(e) => setRiskAccepted(e.target.checked)}
+                    />
+                    <span>
+                      Saprotu: LIVE treidi iet uz reālo Capital.com naudu. CFD risks ir augsts.
+                      {!tradingPinVerified ? " Vispirms Verify PIN augšā." : ""}
+                    </span>
+                  </label>
+                ) : null}
                 <Field label="Email / login">
                   <Input
                     value={identifier}
@@ -199,7 +235,7 @@ export default function AccountsPage() {
               loading={creating}
               onClick={() => void createAccount()}
             >
-              {provider === "CAPITAL" ? "Connect Capital.com" : "Create paper account"}
+              {provider === "CAPITAL" ? "Connect Capital.com LIVE" : "Create paper account"}
             </Button>
           </div>
         </Panel>
@@ -222,7 +258,9 @@ export default function AccountsPage() {
                       <Badge tone={a.connectionStatus === "CONNECTED" ? "profit" : "neutral"}>
                         {a.connectionStatus}
                       </Badge>
-                      <Badge tone={a.status === "LOCKED" ? "warn" : "neutral"}>{a.status}</Badge>
+                      <Badge tone={a.liveTradingEnabled ? "loss" : "neutral"}>
+                        {a.liveTradingEnabled ? "LIVE ON" : "LIVE OFF"}
+                      </Badge>
                     </div>
                     <div className="mt-1 flex flex-wrap gap-3 font-mono text-xs text-white/50">
                       <span>Eq {formatMoney(a.equity, a.baseCurrency)}</span>
