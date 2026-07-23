@@ -120,6 +120,21 @@ export const ClosePositionSchema = z.object({
   clientRequestId: z.string().uuid(),
 });
 
+/** Exit / protection options shared by all strategy modes (scalping, trend, …). */
+export const StrategyExitConfigSchema = z.object({
+  takeProfitEnabled: z.boolean().default(true),
+  atrTpMult: z.number().min(0.1).max(20).optional(),
+  takeProfitPips: z.number().min(1).max(5000).optional(),
+  atrStopMult: z.number().min(0.1).max(20).optional(),
+  stopDistancePips: z.number().min(1).max(5000).optional(),
+  breakEvenEnabled: z.boolean().default(false),
+  breakEvenActivationPips: z.number().min(1).max(2000).default(10),
+  breakEvenOffsetPips: z.number().min(0).max(500).default(1),
+  trailingEnabled: z.boolean().default(false),
+  trailingDistancePips: z.number().min(1).max(2000).default(15),
+  trailingActivationPips: z.number().min(0).max(2000).optional(),
+});
+
 export const CreateStrategySchema = z.object({
   name: z.string().min(2).max(120),
   mode: z.nativeEnum(StrategyMode),
@@ -127,6 +142,8 @@ export const CreateStrategySchema = z.object({
   assignedAccountIds: z.array(z.string().uuid()).default([]),
   assignedSymbols: z.array(z.string()).default([]),
 });
+
+export type StrategyExitConfig = z.infer<typeof StrategyExitConfigSchema>;
 
 export const InviteUserSchema = z.object({
   email: z.string().email(),

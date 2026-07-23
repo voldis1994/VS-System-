@@ -74,6 +74,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      await this.manageExitProtections();
+
       const running = await this.prisma.strategy.findMany({
         where: { status: "RUNNING" },
       });
@@ -101,6 +103,27 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Auto BE + trailing for flagged open positions (all strategies / modes). */
+  private async manageExitProtections() {
+    const open = await this.prisma.position.findMany({
+      where: {
+        status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+        OR: [{ breakEvenEnabled: true }, { trailingEnabled: true }],
+      },
+      select: { symbol: true },
+    });
+    const priceBySymbol = new Map<string, number>();
+    for (const { symbol } of open) {
+      if (priceBySymbol.has(symbol)) continue;
+      const tick = this.market.getTick(symbol);
+      if (tick) {
+        const mid = (Number(tick.bid) + Number(tick.ask)) / 2;
+        if (Number.isFinite(mid) && mid > 0) priceBySymbol.set(symbol, mid);
+      }
+    }
+    await this.positions.autoManageProtections(priceBySymbol, newId());
+  }
+
   private async tickStrategy(strategy: {
     id: string;
     organizationId: string;
@@ -123,6 +146,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       takeProfitPips?: number;
       atrStopMult?: number;
       atrTpMult?: number;
+      takeProfitEnabled?: boolean;
+      breakEvenEnabled?: boolean;
+      breakEvenActivationPips?: number;
+      breakEvenOffsetPips?: number;
+      trailingEnabled?: boolean;
+      trailingDistancePips?: number;
+      trailingActivationPips?: number;
       minAdx?: number;
       /** Max 1 open position for the whole strategy until it closes */
       oneTradeOnly?: boolean;
@@ -138,11 +168,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const correlationId = newId();
     const atrStopMult = config.atrStopMult ?? 1.6;
     const atrTpMult = config.atrTpMult ?? 2.4;
+    const takeProfitEnabled = config.takeProfitEnabled !== false;
+    const breakEvenEnabled = Boolean(config.breakEvenEnabled);
+    const trailingEnabled = Boolean(config.trailingEnabled);
     const minAdx = config.minAdx ?? 12;
     const oneTradeOnly = config.oneTradeOnly !== false; // default ON
     const closeOnlyNoFlip = config.closeOnlyNoFlip ?? oneTradeOnly;
     const autoAggressive = config.autoAggressive !== false;
-    let lastStatus: Record<string, unknown> = { oneTradeOnly };
+    let lastStatus: Record<string, unknown> = {
+      oneTradeOnly,
+      takeProfitEnabled,
+      breakEvenEnabled,
+      trailingEnabled,
+    };
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
@@ -305,23 +343,29 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
+        const pip = pipSize(brokerSymbol);
         const stopDist =
           config.stopDistancePips != null
-            ? pipSize(brokerSymbol) * config.stopDistancePips
+            ? pip * config.stopDistancePips
             : Math.max(ind.atr * atrStopMult, entry * 0.001);
         const tpDist =
           config.takeProfitPips != null
-            ? pipSize(brokerSymbol) * config.takeProfitPips
+            ? pip * config.takeProfitPips
             : Math.max(ind.atr * atrTpMult, entry * 0.0015);
 
         const stopLoss =
           signal === "BUY"
             ? d(entry).minus(stopDist).toFixed(5)
             : d(entry).plus(stopDist).toFixed(5);
-        const takeProfit =
-          signal === "BUY"
+        const takeProfit = takeProfitEnabled
+          ? signal === "BUY"
             ? d(entry).plus(tpDist).toFixed(5)
-            : d(entry).minus(tpDist).toFixed(5);
+            : d(entry).minus(tpDist).toFixed(5)
+          : undefined;
+
+        const beActivationPips = config.breakEvenActivationPips ?? 10;
+        const beOffsetPips = config.breakEvenOffsetPips ?? 1;
+        const trailPips = config.trailingDistancePips ?? 15;
 
         const account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
@@ -363,6 +407,17 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               riskPercent: config.riskPercent ?? 0.5,
               stopLoss,
               takeProfit,
+              trailingEnabled,
+              trailingDistance: trailingEnabled
+                ? (pip * trailPips).toFixed(8)
+                : undefined,
+              breakEvenEnabled,
+              breakEvenActivation: breakEvenEnabled
+                ? (pip * beActivationPips).toFixed(8)
+                : undefined,
+              breakEvenOffset: breakEvenEnabled
+                ? (pip * beOffsetPips).toFixed(8)
+                : undefined,
               strategyId: strategy.id,
               comment: `vs-strategy:${strategy.name}`,
               confirmSoftWarnings: true,

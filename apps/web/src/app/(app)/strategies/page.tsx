@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge, Toggle } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/input";
 import { Panel } from "@/components/ui/panel";
@@ -50,6 +50,16 @@ export default function StrategiesPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
 
+  // Exit options — same for every strategy mode (scalping, trend, …)
+  const [tpEnabled, setTpEnabled] = useState(true);
+  const [atrTpMult, setAtrTpMult] = useState("2.4");
+  const [beEnabled, setBeEnabled] = useState(false);
+  const [beActivationPips, setBeActivationPips] = useState("10");
+  const [beOffsetPips, setBeOffsetPips] = useState("1");
+  const [trailEnabled, setTrailEnabled] = useState(false);
+  const [trailPips, setTrailPips] = useState("15");
+  const [trailActPips, setTrailActPips] = useState("15");
+
   const filteredMarkets = useMemo(() => {
     const q = marketFilter.trim().toLowerCase();
     if (!q) return markets;
@@ -61,6 +71,29 @@ export default function StrategiesPage() {
         (m.label ?? "").toLowerCase().includes(q),
     );
   }, [markets, marketFilter]);
+
+  function buildConfiguration() {
+    return {
+      timeframe: "15m",
+      riskPercent: Number(riskPercent) || 0.5,
+      useRiskPercent: false,
+      volume: "0.01",
+      oneTradeOnly: true,
+      closeOnlyNoFlip: true,
+      autoAggressive: true,
+      atrStopMult: 1.6,
+      atrTpMult: Number(atrTpMult) || 2.4,
+      takeProfitEnabled: tpEnabled,
+      breakEvenEnabled: beEnabled,
+      breakEvenActivationPips: Number(beActivationPips) || 10,
+      breakEvenOffsetPips: Number(beOffsetPips) || 1,
+      trailingEnabled: trailEnabled,
+      trailingDistancePips: Number(trailPips) || 15,
+      trailingActivationPips: Number(trailActPips) || Number(trailPips) || 15,
+      minAdx: 12,
+      cooldownSeconds: 45,
+    };
+  }
 
   async function loadMarkets() {
     if (!token) return;
@@ -93,6 +126,29 @@ export default function StrategiesPage() {
     }
   }, [connectedAccounts, accountId]);
 
+  useEffect(() => {
+    const s = (strategies ?? []).find((x) => x.id === selectedStrategyId);
+    if (!s) return;
+    const c = (s.configurationJson ?? {}) as Record<string, unknown>;
+    if (typeof c.takeProfitEnabled === "boolean") setTpEnabled(c.takeProfitEnabled);
+    if (typeof c.atrTpMult === "number") setAtrTpMult(String(c.atrTpMult));
+    if (typeof c.breakEvenEnabled === "boolean") setBeEnabled(c.breakEvenEnabled);
+    if (typeof c.breakEvenActivationPips === "number") {
+      setBeActivationPips(String(c.breakEvenActivationPips));
+    }
+    if (typeof c.breakEvenOffsetPips === "number") {
+      setBeOffsetPips(String(c.breakEvenOffsetPips));
+    }
+    if (typeof c.trailingEnabled === "boolean") setTrailEnabled(c.trailingEnabled);
+    if (typeof c.trailingDistancePips === "number") {
+      setTrailPips(String(c.trailingDistancePips));
+    }
+    if (typeof c.trailingActivationPips === "number") {
+      setTrailActPips(String(c.trailingActivationPips));
+    }
+    if (typeof c.riskPercent === "number") setRiskPercent(String(c.riskPercent));
+  }, [selectedStrategyId, strategies]);
+
   async function syncMarkets() {
     if (!token) return;
     setSyncing(true);
@@ -115,6 +171,7 @@ export default function StrategiesPage() {
     if ((strategies ?? []).length > 0) return;
     setBusy(true);
     try {
+      const configuration = buildConfiguration();
       for (const mode of PRESET_MODES) {
         await api("/strategies", {
           method: "POST",
@@ -122,19 +179,7 @@ export default function StrategiesPage() {
           body: JSON.stringify({
             name: `VS ${mode}`,
             mode,
-          configuration: {
-              timeframe: "15m",
-              riskPercent: Number(riskPercent) || 0.5,
-              useRiskPercent: false,
-              volume: "0.01",
-              oneTradeOnly: true,
-              closeOnlyNoFlip: true,
-              autoAggressive: true,
-              atrStopMult: 1.6,
-              atrTpMult: 2.4,
-              minAdx: 12,
-              cooldownSeconds: 45,
-            },
+            configuration,
             assignedAccountIds: [accountId],
             assignedSymbols: [marketEpic || "EURUSD"],
           }),
@@ -169,7 +214,6 @@ export default function StrategiesPage() {
 
     setBusy(true);
     try {
-      // Stop other running strategies (one auto bot at a time)
       for (const s of strategies ?? []) {
         if (s.status === "RUNNING" && s.id !== strategyId) {
           await api(`/strategies/${s.id}/stop`, { method: "POST", token: token! });
@@ -180,19 +224,7 @@ export default function StrategiesPage() {
         method: "PATCH",
         token: token!,
         body: JSON.stringify({
-          configuration: {
-            timeframe: "15m",
-            riskPercent: Number(riskPercent) || 0.5,
-            useRiskPercent: false,
-            volume: "0.01",
-            oneTradeOnly: true,
-            closeOnlyNoFlip: true,
-            autoAggressive: true,
-            atrStopMult: 1.6,
-            atrTpMult: 2.4,
-            minAdx: 12,
-            cooldownSeconds: 45,
-          },
+          configuration: buildConfiguration(),
           assignedAccountIds: [acc],
           assignedSymbols: [epic],
         }),
@@ -204,8 +236,15 @@ export default function StrategiesPage() {
       });
 
       const m = markets.find((x) => x.epic === epic);
+      const exits = [
+        tpEnabled ? "TP" : null,
+        beEnabled ? "BE" : null,
+        trailEnabled ? "Trail" : null,
+      ]
+        .filter(Boolean)
+        .join("+");
       toast.success(
-        `AUTO ON · ${m?.code ?? "—"} ${epic} — 1 trade until close`,
+        `AUTO ON · ${m?.code ?? "—"} ${epic} · ${exits || "SL only"} — 1 trade until close`,
         { duration: 8000 },
       );
       void qc.invalidateQueries({ queryKey: ["strategies"] });
@@ -237,9 +276,9 @@ export default function StrategiesPage() {
     <div className="space-y-4">
       <Panel title="Auto trade — 1 klikšķis">
         <p className="mb-3 text-sm text-white/55">
-          Izvēlies stratēģiju + tirgu → <strong className="text-white">Start</strong>.
-          VS System pats sūta BUY/SELL. Vienlaikus tikai <strong className="text-accent">1 treids</strong> —
-          nākamais tikai pēc aizvēršanas.
+          Izvēlies stratēģiju + tirgu + izejas (TP / BE / Trail) →{" "}
+          <strong className="text-white">Start</strong>. Vienlaikus tikai{" "}
+          <strong className="text-accent">1 treids</strong> — nākamais pēc aizvēršanas.
         </p>
 
         <div className="grid gap-3 md:grid-cols-2">
@@ -312,6 +351,86 @@ export default function StrategiesPage() {
           </Field>
         </div>
 
+        <div className="mt-4 rounded-md border border-white/[0.08] bg-white/[0.02] p-3">
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-white/45">
+            4. Izejas opcijas (visām stratēģijām)
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="space-y-2">
+              <Toggle
+                checked={tpEnabled}
+                onChange={setTpEnabled}
+                label={tpEnabled ? "TP ON" : "TP OFF"}
+              />
+              <Field label="TP ATR×">
+                <Input
+                  value={atrTpMult}
+                  disabled={!tpEnabled}
+                  onChange={(e) => setAtrTpMult(e.target.value)}
+                  className="font-mono"
+                />
+              </Field>
+              <p className="text-[11px] text-white/35">
+                Take profit pie ordera. OFF = tikai SL (+ BE/Trail).
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Toggle
+                checked={beEnabled}
+                onChange={setBeEnabled}
+                label={beEnabled ? "BE ON" : "BE OFF"}
+              />
+              <Field label="BE aktivācija (pips)">
+                <Input
+                  value={beActivationPips}
+                  disabled={!beEnabled}
+                  onChange={(e) => setBeActivationPips(e.target.value)}
+                  className="font-mono"
+                />
+              </Field>
+              <Field label="BE offset (pips)">
+                <Input
+                  value={beOffsetPips}
+                  disabled={!beEnabled}
+                  onChange={(e) => setBeOffsetPips(e.target.value)}
+                  className="font-mono"
+                />
+              </Field>
+              <p className="text-[11px] text-white/35">
+                Pēc X pips peļņas SL → entry + offset.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Toggle
+                checked={trailEnabled}
+                onChange={setTrailEnabled}
+                label={trailEnabled ? "Trail ON" : "Trail OFF"}
+              />
+              <Field label="Trail distance (pips)">
+                <Input
+                  value={trailPips}
+                  disabled={!trailEnabled}
+                  onChange={(e) => setTrailPips(e.target.value)}
+                  className="font-mono"
+                />
+              </Field>
+              <Field label="Trail start (pips)">
+                <Input
+                  value={trailActPips}
+                  disabled={!trailEnabled}
+                  onChange={(e) => setTrailActPips(e.target.value)}
+                  className="font-mono"
+                />
+              </Field>
+              <p className="text-[11px] text-white/35">
+                Auto SL seko cenai pēc start pips.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <div className="mt-4 flex flex-wrap gap-2">
           <Button variant="success" size="lg" loading={busy} onClick={() => void startAuto()}>
             START auto trade
@@ -350,6 +469,11 @@ export default function StrategiesPage() {
           <div className="space-y-2">
             {(strategies ?? []).map((s) => {
               const symbols = (s.assignedSymbols as string[] | undefined) ?? [];
+              const cfg = (s.configurationJson ?? {}) as {
+                takeProfitEnabled?: boolean;
+                breakEvenEnabled?: boolean;
+                trailingEnabled?: boolean;
+              };
               const deploy = (s.deploymentStateJson ?? {}) as {
                 lastTickAt?: string;
                 signal?: string;
@@ -387,6 +511,11 @@ export default function StrategiesPage() {
                         {s.status}
                       </Badge>
                       <Badge tone="neutral">1 trade</Badge>
+                      {cfg.takeProfitEnabled !== false ? (
+                        <Badge tone="profit">TP</Badge>
+                      ) : null}
+                      {cfg.breakEvenEnabled ? <Badge tone="accent">BE</Badge> : null}
+                      {cfg.trailingEnabled ? <Badge tone="accent">Trail</Badge> : null}
                       {deploy.signal ? (
                         <Badge tone="accent">sig {deploy.signal}</Badge>
                       ) : null}

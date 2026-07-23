@@ -84,6 +84,7 @@ export class PositionsService {
     id: string,
     raw: unknown,
     correlationId: string,
+    opts?: { silent?: boolean },
   ) {
     const input = ModifySlTpSchema.parse(raw);
     const position = await this.get(organizationId, id);
@@ -134,23 +135,25 @@ export class PositionsService {
     }
 
     await this.brokers.persistState(position.accountId);
-    await this.audit.record({
-      organizationId,
-      actorId,
-      action: "POSITION_SL_TP_UPDATED",
-      resourceType: "Position",
-      resourceId: id,
-      before: position,
-      after: updated,
-      correlationId,
-    });
-    await this.notifications.create({
-      organizationId,
-      userId: actorId,
-      title: "SL/TP updated",
-      body: `${updated.symbol} protective levels updated`,
-      severity: "SUCCESS",
-    });
+    if (!opts?.silent) {
+      await this.audit.record({
+        organizationId,
+        actorId,
+        action: "POSITION_SL_TP_UPDATED",
+        resourceType: "Position",
+        resourceId: id,
+        before: position,
+        after: updated,
+        correlationId,
+      });
+      await this.notifications.create({
+        organizationId,
+        userId: actorId === "system" ? null : actorId,
+        title: "SL/TP updated",
+        body: `${updated.symbol} protective levels updated`,
+        severity: "SUCCESS",
+      });
+    }
     return updated;
   }
 
@@ -323,6 +326,7 @@ export class PositionsService {
     actorId: string,
     id: string,
     correlationId: string,
+    opts?: { silent?: boolean },
   ) {
     const position = await this.get(organizationId, id);
     if (position.breakEvenActivatedAt) {
@@ -340,6 +344,7 @@ export class PositionsService {
       id,
       { stopLoss: newSl },
       correlationId,
+      { silent: opts?.silent },
     );
     const final = await this.prisma.position.update({
       where: { id },
@@ -362,7 +367,155 @@ export class PositionsService {
       after: final,
       correlationId,
     });
+    if (!opts?.silent) {
+      await this.notifications.create({
+        organizationId,
+        userId: actorId === "system" ? null : actorId,
+        title: "Break-even ON",
+        body: `${final.symbol} SL → ${newSl}`,
+        severity: "SUCCESS",
+      });
+    }
     return { ...final, previous: updated };
+  }
+
+  /**
+   * Auto BE + trailing for open positions (strategy / manual flags on Position).
+   * Uses mark price from `priceBySymbol` when provided.
+   */
+  async autoManageProtections(
+    priceBySymbol: Map<string, number>,
+    correlationId: string,
+  ) {
+    const open = await this.prisma.position.findMany({
+      where: {
+        status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+        OR: [{ breakEvenEnabled: true }, { trailingEnabled: true }],
+      },
+    });
+
+    for (const position of open) {
+      try {
+        const mark =
+          priceBySymbol.get(position.symbol) ??
+          (position.currentPrice != null ? Number(position.currentPrice) : NaN);
+        if (!Number.isFinite(mark) || mark <= 0) continue;
+
+        await this.prisma.position.update({
+          where: { id: position.id },
+          data: { currentPrice: mark },
+        });
+
+        const entry = Number(position.averageEntry);
+        const dir = position.direction as "BUY" | "SELL";
+        const favorable =
+          dir === "BUY" ? mark - entry : entry - mark;
+
+        if (
+          position.breakEvenEnabled &&
+          !position.breakEvenActivatedAt &&
+          position.breakEvenActivation != null
+        ) {
+          const activation = Number(position.breakEvenActivation);
+          if (Number.isFinite(activation) && favorable >= activation) {
+            await this.activateBreakEven(
+              position.organizationId,
+              "system",
+              position.id,
+              correlationId,
+              { silent: false },
+            );
+          }
+        }
+
+        if (position.trailingEnabled && position.trailingDistance != null) {
+          const distance = String(position.trailingDistance);
+          let armThreshold = Number(distance);
+          if (position.strategyId) {
+            const strategy = await this.prisma.strategy.findFirst({
+              where: { id: position.strategyId },
+              select: { configurationJson: true },
+            });
+            const cfg = (strategy?.configurationJson ?? {}) as {
+              trailingActivationPips?: number;
+              trailingDistancePips?: number;
+            };
+            if (cfg.trailingActivationPips != null) {
+              const trailPips = cfg.trailingDistancePips ?? 15;
+              const ratio = cfg.trailingActivationPips / Math.max(trailPips, 1);
+              armThreshold = Number(distance) * ratio;
+            }
+          }
+          const armed =
+            position.trailingActivatedAt != null ||
+            favorable >= armThreshold;
+
+          if (!armed) continue;
+
+          const fresh = await this.get(position.organizationId, position.id);
+          const candidate = trailingStopCandidate(
+            dir,
+            String(mark),
+            distance,
+            fresh.stopLoss ? String(fresh.stopLoss) : null,
+          );
+          const existing = fresh.stopLoss ? String(fresh.stopLoss) : null;
+          if (existing && d(candidate).eq(d(existing))) continue;
+
+          const firstArm = !fresh.trailingActivatedAt;
+          await this.modifySlTp(
+            position.organizationId,
+            "system",
+            position.id,
+            { stopLoss: candidate },
+            correlationId,
+            { silent: !firstArm },
+          );
+          await this.prisma.position.update({
+            where: { id: position.id },
+            data: {
+              trailingEnabled: true,
+              trailingDistance: distance,
+              trailingActivatedAt: fresh.trailingActivatedAt ?? new Date(),
+              stopLoss: candidate,
+              currentPrice: mark,
+            },
+          });
+          if (firstArm) {
+            await this.events.publish({
+              eventType: DomainEventType.TrailingStopActivated,
+              aggregateId: position.id,
+              organizationId: position.organizationId,
+              actorId: "system",
+              correlationId,
+              payload: { stopLoss: candidate, distance },
+            });
+            await this.notifications.create({
+              organizationId: position.organizationId,
+              userId: null,
+              title: "Trailing ON",
+              body: `${position.symbol} trail SL → ${candidate}`,
+              severity: "SUCCESS",
+            });
+          } else {
+            await this.events.publish({
+              eventType: DomainEventType.TrailingStopMoved,
+              aggregateId: position.id,
+              organizationId: position.organizationId,
+              actorId: "system",
+              correlationId,
+              payload: { stopLoss: candidate, distance },
+            });
+          }
+        }
+      } catch (err) {
+        // keep managing other positions
+        console.warn(
+          `autoManageProtections ${position.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
   }
 
   async updateTrailing(
@@ -397,13 +550,16 @@ export class PositionsService {
       body.distance,
       position.stopLoss ? String(position.stopLoss) : null,
     );
-    await this.modifySlTp(
-      organizationId,
-      actorId,
-      id,
-      { stopLoss: candidate },
-      correlationId,
-    );
+    const existing = position.stopLoss ? String(position.stopLoss) : null;
+    if (!existing || !d(candidate).eq(d(existing))) {
+      await this.modifySlTp(
+        organizationId,
+        actorId,
+        id,
+        { stopLoss: candidate },
+        correlationId,
+      );
+    }
     const updated = await this.prisma.position.update({
       where: { id },
       data: {
