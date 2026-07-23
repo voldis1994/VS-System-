@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { TradingPinModal } from "@/components/ui/trading-pin-modal";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import { useAnalytics, useNotifications, useTicks } from "@/lib/hooks";
+import { useAccounts, useAnalytics, useNotifications, useTicks } from "@/lib/hooks";
 import { formatMoney, formatPnl, pnlClass } from "@/lib/utils";
 import { Bell, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -28,6 +28,20 @@ export function Topbar() {
   const { data: analytics } = useAnalytics();
   const { data: ticks } = useTicks();
   const { data: notifications } = useNotifications();
+  const { data: accounts } = useAccounts();
+
+  const liveReady = useMemo(
+    () =>
+      (accounts ?? []).some(
+        (a) =>
+          a.connectionStatus === "CONNECTED" &&
+          a.liveTradingEnabled &&
+          (a.accountType === "LIVE" || a.provider === "CAPITAL"),
+      ),
+    [accounts],
+  );
+
+  const liveActive = liveModeRequested && liveReady && tradingPinVerified;
 
   const unread = useMemo(
     () => (notifications ?? []).filter((n) => !n.readAt).length,
@@ -52,16 +66,23 @@ export function Topbar() {
   function onLiveToggle(next: boolean) {
     if (!next) {
       setLiveModeRequested(false);
-      toast.message("Switched to Paper Trading");
+      toast.message("Switched to Paper focus");
       return;
     }
     if (!tradingPinVerified) {
       setPinOpen(true);
-      toast.warning("Verify trading PIN before requesting live mode");
+      toast.warning("Verify trading PIN first");
+      return;
+    }
+    if (!liveReady) {
+      toast.error(
+        "No LIVE Capital.com account connected. Accounts → Capital.com LIVE → Connect (LIVE ON).",
+        { duration: 8000 },
+      );
       return;
     }
     setLiveModeRequested(true);
-    toast.warning("Live Trading requested — still blocked. Paper remains default.");
+    toast.success("LIVE mode ON — orders go to Capital.com real money");
   }
 
   return (
@@ -101,10 +122,9 @@ export function Topbar() {
           <div className="flex items-center gap-3">
             <div className="flex flex-col items-end gap-1">
               <Toggle
-                checked={liveModeRequested}
+                checked={liveActive}
                 onChange={onLiveToggle}
-                disabled={!tradingPinVerified && liveModeRequested}
-                label={liveModeRequested ? "Live requested" : "Paper"}
+                label={liveActive ? "LIVE" : "Paper"}
               />
               {!tradingPinVerified ? (
                 <button
@@ -114,9 +134,13 @@ export function Topbar() {
                 >
                   Verify PIN
                 </button>
-              ) : liveModeRequested ? (
-                <span className="text-[10px] text-amber-300">Live blocked — paper default</span>
-              ) : null}
+              ) : liveActive ? (
+                <span className="text-[10px] text-loss">Capital.com LIVE</span>
+              ) : liveReady ? (
+                <span className="text-[10px] text-amber-300">LIVE ready — toggle on</span>
+              ) : (
+                <span className="text-[10px] text-white/35">Connect LIVE account</span>
+              )}
             </div>
 
             <div className="relative">
@@ -186,7 +210,7 @@ export function Topbar() {
         open={pinOpen}
         onClose={() => setPinOpen(false)}
         onVerified={() => {
-          /* PIN verified — live still requires explicit toggle and remains blocked */
+          toast.success("PIN verified — you can enable LIVE");
         }}
       />
     </>
