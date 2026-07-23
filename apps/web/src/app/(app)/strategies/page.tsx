@@ -122,15 +122,18 @@ export default function StrategiesPage() {
           body: JSON.stringify({
             name: `VS ${mode}`,
             mode,
-            configuration: {
-              timeframe: "1h",
+          configuration: {
+              timeframe: "15m",
               riskPercent: Number(riskPercent) || 0.5,
+              useRiskPercent: false,
+              volume: "0.01",
               oneTradeOnly: true,
               closeOnlyNoFlip: true,
+              autoAggressive: true,
               atrStopMult: 1.6,
               atrTpMult: 2.4,
-              minAdx: 18,
-              cooldownSeconds: 90,
+              minAdx: 12,
+              cooldownSeconds: 45,
             },
             assignedAccountIds: [accountId],
             assignedSymbols: [marketEpic || "EURUSD"],
@@ -178,14 +181,17 @@ export default function StrategiesPage() {
         token: token!,
         body: JSON.stringify({
           configuration: {
-            timeframe: "1h",
+            timeframe: "15m",
             riskPercent: Number(riskPercent) || 0.5,
+            useRiskPercent: false,
+            volume: "0.01",
             oneTradeOnly: true,
             closeOnlyNoFlip: true,
+            autoAggressive: true,
             atrStopMult: 1.6,
             atrTpMult: 2.4,
-            minAdx: 18,
-            cooldownSeconds: 60,
+            minAdx: 12,
+            cooldownSeconds: 45,
           },
           assignedAccountIds: [acc],
           assignedSymbols: [epic],
@@ -344,6 +350,14 @@ export default function StrategiesPage() {
           <div className="space-y-2">
             {(strategies ?? []).map((s) => {
               const symbols = (s.assignedSymbols as string[] | undefined) ?? [];
+              const deploy = (s.deploymentStateJson ?? {}) as {
+                lastTickAt?: string;
+                signal?: string;
+                skip?: string;
+                error?: string;
+                placed?: boolean;
+                symbol?: string;
+              };
               return (
                 <div
                   key={s.id}
@@ -373,9 +387,18 @@ export default function StrategiesPage() {
                         {s.status}
                       </Badge>
                       <Badge tone="neutral">1 trade</Badge>
+                      {deploy.signal ? (
+                        <Badge tone="accent">sig {deploy.signal}</Badge>
+                      ) : null}
                     </div>
                     <div className="mt-1 font-mono text-[11px] text-white/40">
-                      {symbols.length ? symbols.join(", ") : "nav tirgus — izvēlies Sync + Start"}
+                      {symbols.length ? symbols.join(", ") : "nav tirgus — Sync + Start"}
+                      {deploy.lastTickAt
+                        ? ` · tick ${new Date(deploy.lastTickAt).toLocaleTimeString()}`
+                        : ""}
+                      {deploy.skip ? ` · skip:${deploy.skip}` : ""}
+                      {deploy.error ? ` · err:${deploy.error}` : ""}
+                      {deploy.placed ? " · ORDER SENT" : ""}
                     </div>
                   </button>
                   <div className="flex gap-1.5">

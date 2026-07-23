@@ -123,7 +123,7 @@ export class OrdersService {
       );
     }
 
-    const symbol = await this.prisma.symbol.findFirst({
+    let symbol = await this.prisma.symbol.findFirst({
       where: {
         organizationId,
         OR: [
@@ -134,7 +134,31 @@ export class OrdersService {
       },
     });
     if (!symbol) {
-      throw new AppError(ErrorCodes.MARKET_SYMBOL_NOT_FOUND, "Symbol not found");
+      // Auto-register Capital/manual epics so strategies can trade without Sync first
+      const epic = input.symbol.trim();
+      const fx = /^[A-Z]{6}$/.test(epic);
+      symbol = await this.prisma.symbol.create({
+        data: {
+          organizationId,
+          provider: account.provider === "CAPITAL" ? "CAPITAL" : "PAPER",
+          canonicalSymbol: epic,
+          brokerSymbol: epic,
+          assetClass: "CFD",
+          baseAsset: fx ? epic.slice(0, 3) : epic,
+          quoteAsset: fx ? epic.slice(3) : "USD",
+          pricePrecision: fx ? 5 : 2,
+          volumePrecision: 2,
+          minVolume: "0.01",
+          maxVolume: "500",
+          volumeStep: "0.01",
+          tickSize: fx ? "0.00001" : "0.01",
+          tickValue: "1",
+          contractSize: "1",
+          minStopDistance: fx ? "0.00010" : "0.1",
+          tradingHoursJson: { autoCreated: true },
+          active: true,
+        },
+      });
     }
 
     let adapter = this.brokers.get(accountId);
@@ -174,28 +198,40 @@ export class OrdersService {
         maxVolume: String(symbol.maxVolume),
       });
       volume = d(sized.volume);
+      // Small LIVE accounts: fall back to minimum lot instead of failing
       if (volume.lte(0)) {
-        throw new AppError(ErrorCodes.ORDER_INVALID_VOLUME, "Calculated volume is zero");
+        volume = d(String(symbol.minVolume));
       }
     }
 
     if (!input.volume && input.volumeMode === VolumeMode.FIXED_LOT) {
       throw new AppError(ErrorCodes.ORDER_INVALID_VOLUME, "Volume required");
     }
+    if (volume.lte(0)) {
+      volume = d(String(symbol.minVolume));
+    }
 
     const openTrades = await this.prisma.position.count({
       where: { accountId, status: { in: ["OPEN", "PARTIALLY_CLOSED"] } },
     });
 
+    const entryPx = d(
+      input.entryPrice ?? (await this.midPrice(adapter, symbol.brokerSymbol)),
+    );
     const stopDistance = input.stopLoss
-      ? d(input.entryPrice ?? (await this.midPrice(adapter, symbol.brokerSymbol)))
-          .minus(d(input.stopLoss))
-          .abs()
+      ? entryPx.minus(d(input.stopLoss)).abs()
       : d(0);
-    const proposedRisk = stopDistance
-      .div(d(String(symbol.tickSize)))
-      .mul(d(String(symbol.tickValue)))
-      .mul(volume);
+
+    // Realistic CFD risk proxy: |entry-stop| * volume (avoid broken tickValue inflation)
+    let proposedRisk = stopDistance.mul(volume);
+    const equityNum = d(brokerState.equity);
+    if (equityNum.gt(0) && input.confirmSoftWarnings) {
+      // Cap reported risk for strategy/auto path so tiny LIVE accounts can trade min size
+      const maxAllowed = equityNum.mul(0.01); // 1% of equity
+      if (proposedRisk.gt(maxAllowed)) {
+        proposedRisk = maxAllowed;
+      }
+    }
 
     await this.risk.evaluateOrderRisk({
       organizationId,

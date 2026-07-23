@@ -128,33 +128,79 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       oneTradeOnly?: boolean;
       /** If true, opposite signal closes only (no flip). Default true with oneTradeOnly */
       closeOnlyNoFlip?: boolean;
+      /** Fall back to fast EMA signals when pro filters HOLD */
+      autoAggressive?: boolean;
+      /** Use RISK_PERCENT sizing (often fails on tiny LIVE equity) */
+      useRiskPercent?: boolean;
     };
-    const cooldownMs = (config.cooldownSeconds ?? 90) * 1000;
+    const cooldownMs = (config.cooldownSeconds ?? 45) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
     const atrStopMult = config.atrStopMult ?? 1.6;
     const atrTpMult = config.atrTpMult ?? 2.4;
-    const minAdx = config.minAdx ?? 18;
+    const minAdx = config.minAdx ?? 12;
     const oneTradeOnly = config.oneTradeOnly !== false; // default ON
     const closeOnlyNoFlip = config.closeOnlyNoFlip ?? oneTradeOnly;
+    const autoAggressive = config.autoAggressive !== false;
+    let lastStatus: Record<string, unknown> = { oneTradeOnly };
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
       const candles = await this.market.getCandles(
         brokerSymbol,
-        config.timeframe ?? "1h",
+        config.timeframe ?? "15m",
         220,
       );
-      if (candles.length < 80) continue;
+      if (candles.length < 55) {
+        lastStatus = {
+          ...lastStatus,
+          symbol: brokerSymbol,
+          skip: "not_enough_candles",
+          candles: candles.length,
+        };
+        continue;
+      }
       const ind = computeIndicators(candles);
-      if (!ind || ind.atr <= 0) continue;
+      if (!ind || ind.atr <= 0) {
+        lastStatus = { ...lastStatus, symbol: brokerSymbol, skip: "indicators_failed" };
+        continue;
+      }
 
-      const signal = this.evaluate(strategy.mode as StrategyMode, ind, minAdx);
+      let signal = this.evaluate(strategy.mode as StrategyMode, ind, minAdx);
+      // Auto mode: if pro filters HOLD, fall back to fast EMA cross so it actually trades
+      if (signal === "HOLD" && (oneTradeOnly || autoAggressive)) {
+        signal = this.evaluateAuto(ind);
+      }
+
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
       const key = `${strategy.id}:${brokerSymbol}`;
       const lastAt = this.lastSignalAt.get(key) ?? 0;
-      if (Date.now() - lastAt < cooldownMs) continue;
-      if (this.lastFingerprint.get(key) === fingerprint && signal !== "CLOSE") continue;
+      if (Date.now() - lastAt < cooldownMs) {
+        lastStatus = {
+          ...lastStatus,
+          symbol: brokerSymbol,
+          signal,
+          skip: "cooldown",
+        };
+        continue;
+      }
+      if (this.lastFingerprint.get(key) === fingerprint && signal !== "CLOSE") {
+        lastStatus = {
+          ...lastStatus,
+          symbol: brokerSymbol,
+          signal,
+          skip: "same_signal",
+        };
+        continue;
+      }
+
+      lastStatus = {
+        ...lastStatus,
+        symbol: brokerSymbol,
+        signal,
+        rsi: Number(ind.rsi.toFixed(1)),
+        adx: Number(ind.adx.toFixed(1)),
+      };
 
       await this.events.publish({
         eventType: DomainEventType.StrategySignalGenerated,
@@ -199,8 +245,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           oneTradeOnly &&
           openAnywhere.some((p) => p.symbol !== brokerSymbol);
 
-        // One-trade mode: ignore other symbols while a position is open elsewhere
         if (hasOtherSymbolOpen) {
+          lastStatus = { ...lastStatus, skip: "other_symbol_open" };
           continue;
         }
 
@@ -232,7 +278,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               correlationId,
             );
           }
-          // One trade only: close opposite and wait for flat — do not flip same tick
           if (closeOnlyNoFlip) {
             this.lastSignalAt.set(key, Date.now());
             this.lastFingerprint.set(key, fingerprint);
@@ -243,22 +288,31 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const sameSide = openOnSymbol.filter((p) => p.direction === signal);
         if (sameSide.length > 0) continue;
 
-        // Still flat? If any strategy position remains, skip new entry
         if (oneTradeOnly && openAnywhere.length > 0 && opposite.length === 0) {
           continue;
         }
 
         const tick = this.market.getTick(brokerSymbol);
-        if (!tick) continue;
-        const entry = Number(signal === "BUY" ? tick.ask : tick.bid);
+        const entry = Number(
+          tick
+            ? signal === "BUY"
+              ? tick.ask
+              : tick.bid
+            : ind.price,
+        );
+        if (!Number.isFinite(entry) || entry <= 0) {
+          lastStatus = { ...lastStatus, skip: "no_price" };
+          continue;
+        }
+
         const stopDist =
           config.stopDistancePips != null
             ? pipSize(brokerSymbol) * config.stopDistancePips
-            : ind.atr * atrStopMult;
+            : Math.max(ind.atr * atrStopMult, entry * 0.001);
         const tpDist =
           config.takeProfitPips != null
             ? pipSize(brokerSymbol) * config.takeProfitPips
-            : ind.atr * atrTpMult;
+            : Math.max(ind.atr * atrTpMult, entry * 0.0015);
 
         const stopLoss =
           signal === "BUY"
@@ -272,7 +326,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
         });
-        if (!account || account.status === "LOCKED") continue;
+        if (!account || account.status === "LOCKED") {
+          lastStatus = { ...lastStatus, skip: "account_locked_or_missing" };
+          continue;
+        }
 
         if (!this.brokers.get(accountId)) {
           await this.brokers.connectAccount(account);
@@ -287,47 +344,79 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           payload: { accountId, symbol: brokerSymbol, direction: signal },
         });
 
-        const result = await this.orders.place(
-          strategy.organizationId,
-          actorId,
-          {
-            clientRequestId: newId(),
-            accountIds: [accountId],
-            symbol: brokerSymbol,
-            type: OrderType.MARKET,
-            direction: signal === "BUY" ? OrderDirection.BUY : OrderDirection.SELL,
-            volumeMode: config.riskPercent
-              ? VolumeMode.RISK_PERCENT
-              : VolumeMode.FIXED_LOT,
-            volume: config.volume ?? "0.10",
-            riskPercent: config.riskPercent ?? 0.5,
-            stopLoss,
-            takeProfit,
-            strategyId: strategy.id,
-            comment: `vs-strategy:${strategy.name}`,
-            confirmSoftWarnings: true,
-            executionPolicy: "BEST_EFFORT",
-          },
-          correlationId,
-        );
+        // Prefer fixed min lot for auto — risk% often zeros on tiny LIVE equity
+        const useRisk =
+          Boolean(config.useRiskPercent) && Boolean(config.riskPercent);
+        try {
+          const result = await this.orders.place(
+            strategy.organizationId,
+            actorId,
+            {
+              clientRequestId: newId(),
+              accountIds: [accountId],
+              symbol: brokerSymbol,
+              type: OrderType.MARKET,
+              direction:
+                signal === "BUY" ? OrderDirection.BUY : OrderDirection.SELL,
+              volumeMode: useRisk ? VolumeMode.RISK_PERCENT : VolumeMode.FIXED_LOT,
+              volume: config.volume ?? "0.01",
+              riskPercent: config.riskPercent ?? 0.5,
+              stopLoss,
+              takeProfit,
+              strategyId: strategy.id,
+              comment: `vs-strategy:${strategy.name}`,
+              confirmSoftWarnings: true,
+              executionPolicy: "BEST_EFFORT",
+            },
+            correlationId,
+          );
 
-        const child = result.results?.[0] as
-          | { ok?: boolean; position?: { id: string } }
-          | undefined;
-        if (child?.ok && child.position?.id) {
-          await this.prisma.position.update({
-            where: { id: child.position.id },
-            data: { strategyId: strategy.id, source: "STRATEGY" },
+          const child = result.results?.[0] as
+            | { ok?: boolean; position?: { id: string }; message?: string }
+            | undefined;
+
+          if (child?.ok && child.position?.id) {
+            await this.prisma.position.update({
+              where: { id: child.position.id },
+              data: { strategyId: strategy.id, source: "STRATEGY" },
+            });
+            await this.notifications.create({
+              organizationId: strategy.organizationId,
+              userId: actorId === "system" ? null : actorId,
+              title: `Auto ${signal}`,
+              body: `${strategy.name} → ${brokerSymbol} ${signal} @ ${entry}`,
+              severity: "SUCCESS",
+            });
+            lastStatus = {
+              ...lastStatus,
+              placed: true,
+              direction: signal,
+              entry,
+            };
+          } else {
+            const msg = child?.message ?? "order not accepted";
+            this.log.warn(`Strategy order failed: ${msg}`);
+            await this.notifications.create({
+              organizationId: strategy.organizationId,
+              userId: actorId === "system" ? null : actorId,
+              title: "Strategy order failed",
+              body: `${strategy.name} ${brokerSymbol}: ${msg}`,
+              severity: "WARNING",
+            });
+            lastStatus = { ...lastStatus, placed: false, error: msg };
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "order error";
+          this.log.error(`Strategy place threw: ${msg}`);
+          await this.notifications.create({
+            organizationId: strategy.organizationId,
+            userId: actorId === "system" ? null : actorId,
+            title: "Strategy order error",
+            body: `${strategy.name} ${brokerSymbol}: ${msg}`,
+            severity: "CRITICAL",
           });
+          lastStatus = { ...lastStatus, placed: false, error: msg };
         }
-
-        await this.notifications.create({
-          organizationId: strategy.organizationId,
-          userId: actorId === "system" ? null : actorId,
-          title: `Auto ${signal}`,
-          body: `${strategy.name} → ${brokerSymbol} ${signal} (1 trade only)`,
-          severity: "INFO",
-        });
       }
 
       this.lastSignalAt.set(key, Date.now());
@@ -341,9 +430,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           lastTickAt: new Date().toISOString(),
           engine: "VS_PRO_V1",
           oneTradeOnly,
+          ...lastStatus,
         },
       },
     });
+  }
+
+  /** Fast EMA cross for auto-trade when pro filters stay on HOLD */
+  private evaluateAuto(i: Indicators): Signal {
+    if (i.ema9 > i.ema21 && i.price >= i.ema9 && i.rsi >= 45 && i.rsi <= 75) {
+      return "BUY";
+    }
+    if (i.ema9 < i.ema21 && i.price <= i.ema9 && i.rsi <= 55 && i.rsi >= 25) {
+      return "SELL";
+    }
+    if (i.rsi > 82 || i.rsi < 18) return "CLOSE";
+    return "HOLD";
   }
 
   private evaluate(mode: StrategyMode, i: Indicators, minAdx: number): Signal {
