@@ -136,7 +136,7 @@ export class StrategiesService {
       organizationId,
       userId: actorId,
       title: "Strategy started",
-      body: `${updated.name} running in paper mode`,
+      body: `${updated.name} running on assigned accounts`,
       severity: "SUCCESS",
     });
     return updated;
