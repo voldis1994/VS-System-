@@ -14,10 +14,8 @@ import { toast } from "sonner";
 type CapitalMarket = {
   epic: string;
   name: string;
-  instrumentType?: string;
-  bid?: number;
-  offer?: number;
-  marketStatus?: string;
+  code?: string;
+  label?: string;
 };
 
 export function OrderTicket() {
@@ -27,7 +25,7 @@ export function OrderTicket() {
   const invalidate = useInvalidateTrading();
 
   const [accountId, setAccountId] = useState("");
-  const [symbol, setSymbol] = useState("EURUSD");
+  const [symbol, setSymbol] = useState("");
   const [marketQuery, setMarketQuery] = useState("");
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
@@ -46,19 +44,11 @@ export function OrderTicket() {
 
   const symbolOptions = useMemo(() => {
     if (markets.length > 0) return markets;
-    const fromTicks = (ticks ?? []).map((t) => ({
+    return (ticks ?? []).map((t) => ({
       epic: t.symbol,
       name: t.symbol,
+      label: t.symbol,
     }));
-    return fromTicks.length
-      ? fromTicks
-      : [
-          { epic: "EURUSD", name: "EUR/USD" },
-          { epic: "GOLD", name: "Gold" },
-          { epic: "BITCOIN", name: "Bitcoin" },
-          { epic: "US100", name: "US Tech 100" },
-          { epic: "US30", name: "Wall Street 30" },
-        ];
   }, [markets, ticks]);
 
   async function loadMarkets(q?: string) {
@@ -70,9 +60,7 @@ export function OrderTicket() {
         { token },
       );
       setMarkets(res.markets ?? []);
-      if (!q && res.markets?.[0] && !symbol) {
-        setSymbol(res.markets[0].epic);
-      }
+      if (!symbol && res.markets?.[0]) setSymbol(res.markets[0].epic);
     } catch (e) {
       if (isCapital) {
         toast.error(e instanceof Error ? e.message : "Markets load failed");
@@ -90,7 +78,7 @@ export function OrderTicket() {
         method: "POST",
         token,
       });
-      toast.success(`Synced ${res.count} Capital.com markets`);
+      toast.success(`Synced ${res.count} markets (#0001–#${String(res.count).padStart(4, "0")})`);
       await loadMarkets();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Sync failed");
@@ -108,6 +96,10 @@ export function OrderTicket() {
     const acc = selectedAccount;
     if (!acc) {
       toast.error("Select an account");
+      return;
+    }
+    if (!symbol) {
+      toast.error("Select a market");
       return;
     }
     if (volumeMode === "FIXED_LOT" && !volume) {
@@ -170,7 +162,7 @@ export function OrderTicket() {
             <Input
               value={marketQuery}
               onChange={(e) => setMarketQuery(e.target.value)}
-              placeholder="Search Capital markets (GOLD, BITCOIN…)"
+              placeholder="Search #0042 / GOLD / EUR…"
               className="font-mono text-xs"
             />
             <Button
@@ -180,19 +172,26 @@ export function OrderTicket() {
             >
               Find
             </Button>
-            <Button size="sm" variant="outline" loading={loadingMarkets} onClick={() => void syncMarkets()}>
+            <Button
+              size="sm"
+              variant="outline"
+              loading={loadingMarkets}
+              onClick={() => void syncMarkets()}
+            >
               Sync
             </Button>
           </div>
         ) : null}
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Symbol (Capital epic)">
+          <Field label="Market (# · epic — name)">
             <Select value={symbol} onChange={(e) => setSymbol(e.target.value)}>
+              {symbolOptions.length === 0 ? <option value="">Sync markets…</option> : null}
               {symbolOptions.map((s) => (
                 <option key={s.epic} value={s.epic}>
-                  {s.epic}
-                  {s.name && s.name !== s.epic ? ` — ${s.name}` : ""}
+                  {"label" in s && s.label
+                    ? s.label
+                    : `${"code" in s && s.code ? s.code : ""} · ${s.epic} — ${s.name}`}
                 </option>
               ))}
             </Select>
@@ -266,7 +265,7 @@ export function OrderTicket() {
           variant="primary"
           className="w-full"
           loading={loading}
-          disabled={!selectedAccount}
+          disabled={!selectedAccount || !symbol}
           onClick={() => void submit()}
         >
           Submit {direction}

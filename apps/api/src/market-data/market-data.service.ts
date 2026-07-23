@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import {
   CapitalComAdapter,
+  formatMarketCode,
   resolveCapitalEpic,
   type CapitalMarketInfo,
 } from "@nexus/broker-adapters";
@@ -107,37 +108,44 @@ export class MarketDataService implements OnModuleInit {
   async listCapitalMarkets(organizationId: string, search?: string) {
     const adapter = await this.getCapitalAdapter(organizationId);
     if (!adapter) {
-      return {
-        source: "cache" as const,
-        markets: search
+      const markets = this.withMarketCodes(
+        search
           ? this.capitalMarketsCache.filter(
               (m) =>
                 m.epic.toLowerCase().includes(search.toLowerCase()) ||
-                m.name.toLowerCase().includes(search.toLowerCase()),
+                m.name.toLowerCase().includes(search.toLowerCase()) ||
+                formatMarketCode(
+                  this.capitalMarketsCache.findIndex((x) => x.epic === m.epic),
+                ).includes(search),
             )
           : this.capitalMarketsCache,
-      };
+      );
+      return { source: "cache" as const, markets, count: markets.length };
     }
 
     if (search?.trim()) {
-      const markets = await adapter.listCapitalMarkets(search.trim());
+      const markets = this.withMarketCodes(
+        await adapter.listCapitalMarkets(search.trim()),
+      );
       for (const m of markets) this.upsertPriceFromMarket(m);
-      return { source: "live" as const, markets };
+      return { source: "live" as const, markets, count: markets.length };
     }
 
     const fresh =
       Date.now() - this.capitalMarketsCachedAt < 10 * 60_000 &&
       this.capitalMarketsCache.length > 0;
     if (fresh) {
-      return { source: "cache" as const, markets: this.capitalMarketsCache };
+      const markets = this.withMarketCodes(this.capitalMarketsCache);
+      return { source: "cache" as const, markets, count: markets.length };
     }
 
-    const markets = await adapter.listCapitalMarkets();
-    this.capitalMarketsCache = markets;
+    const raw = await adapter.listCapitalMarkets();
+    this.capitalMarketsCache = raw;
     this.capitalMarketsCachedAt = Date.now();
-    for (const m of markets) this.upsertPriceFromMarket(m);
-    await this.persistSymbols(organizationId, markets);
-    return { source: "live" as const, markets };
+    for (const m of raw) this.upsertPriceFromMarket(m);
+    await this.persistSymbols(organizationId, raw);
+    const markets = this.withMarketCodes(raw);
+    return { source: "live" as const, markets, count: markets.length };
   }
 
   async syncCapitalMarkets(organizationId: string) {
@@ -145,13 +153,25 @@ export class MarketDataService implements OnModuleInit {
     if (!adapter) {
       throw new Error("Connect a Capital.com account first");
     }
-    const markets = await adapter.listCapitalMarkets();
-    this.capitalMarketsCache = markets;
+    const raw = await adapter.listCapitalMarkets();
+    this.capitalMarketsCache = raw;
     this.capitalMarketsCachedAt = Date.now();
-    for (const m of markets) this.upsertPriceFromMarket(m);
-    const saved = await this.persistSymbols(organizationId, markets);
-    this.log.log(`Synced ${markets.length} Capital.com markets (${saved} symbols stored)`);
-    return { count: markets.length, saved };
+    for (const m of raw) this.upsertPriceFromMarket(m);
+    const saved = await this.persistSymbols(organizationId, raw);
+    this.log.log(`Synced ${raw.length} Capital.com markets (${saved} symbols stored)`);
+    return {
+      count: raw.length,
+      saved,
+      markets: this.withMarketCodes(raw).slice(0, 200),
+    };
+  }
+
+  private withMarketCodes(markets: CapitalMarketInfo[]) {
+    return markets.map((m, index) => ({
+      ...m,
+      code: formatMarketCode(index),
+      label: `${formatMarketCode(index)} · ${m.epic} — ${m.name}`,
+    }));
   }
 
   private async persistSymbols(organizationId: string, markets: CapitalMarketInfo[]) {

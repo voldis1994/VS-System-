@@ -9,214 +9,355 @@ import { useAuthStore } from "@/lib/auth-store";
 import { useAccounts, useStrategies } from "@/lib/hooks";
 import { StrategyMode } from "@nexus/domain";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-type CapitalMarket = { epic: string; name: string };
-
-const MODE_HELP: Record<string, string> = {
-  TREND: "EMA 21/55/200 + MACD + RSI + ADX trend filter",
-  MOMENTUM: "DI+/DI− + MACD histogram + RSI momentum",
-  PULLBACK: "Trend pullback to EMA21 with RSI reset",
-  RANGE: "Bollinger + Stochastic mean reversion (low ADX)",
-  MEAN_REVERSION: "Bollinger fade with RSI/Stoch extremes",
-  BREAKOUT: "BB break + range expansion + MACD confirm",
-  SCALPING: "EMA9/21 micro trend + Stoch cross",
-  REVERSAL: "Exhaustion at BB bands with RSI extremes",
-  GRID: "Grid-style dips/rips around BB mid",
-  DCA: "Scaled entries on RSI weakness/strength",
-  SESSION: "Volatility expansion + trend confirm",
-  NEWS: "High-range impulse with trend filter",
-  CUSTOM: "Balanced multi-factor professional default",
+type CapitalMarket = {
+  epic: string;
+  name: string;
+  code?: string;
+  label?: string;
 };
+
+const PRESET_MODES = [
+  StrategyMode.TREND,
+  StrategyMode.MOMENTUM,
+  StrategyMode.PULLBACK,
+  StrategyMode.BREAKOUT,
+  StrategyMode.SCALPING,
+  StrategyMode.MEAN_REVERSION,
+  StrategyMode.REVERSAL,
+] as const;
 
 export default function StrategiesPage() {
   const token = useAuthStore((s) => s.accessToken);
   const { data: strategies, isLoading } = useStrategies();
   const { data: accounts } = useAccounts();
   const qc = useQueryClient();
-  const [name, setName] = useState("VS Trend Pro");
-  const [mode, setMode] = useState<string>(StrategyMode.TREND);
+
+  const connectedAccounts = useMemo(
+    () => (accounts ?? []).filter((a) => a.connectionStatus === "CONNECTED"),
+    [accounts],
+  );
+
+  const [selectedStrategyId, setSelectedStrategyId] = useState("");
   const [accountId, setAccountId] = useState("");
-  const [symbols, setSymbols] = useState("EURUSD,GOLD,US100");
-  const [riskPercent, setRiskPercent] = useState("0.5");
+  const [marketEpic, setMarketEpic] = useState("");
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
-  const [creating, setCreating] = useState(false);
+  const [marketFilter, setMarketFilter] = useState("");
+  const [riskPercent, setRiskPercent] = useState("0.5");
+  const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [lastBacktest, setLastBacktest] = useState<Record<string, unknown> | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
-  useEffect(() => {
+  const filteredMarkets = useMemo(() => {
+    const q = marketFilter.trim().toLowerCase();
+    if (!q) return markets;
+    return markets.filter(
+      (m) =>
+        m.epic.toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q) ||
+        (m.code ?? "").includes(q) ||
+        (m.label ?? "").toLowerCase().includes(q),
+    );
+  }, [markets, marketFilter]);
+
+  async function loadMarkets() {
     if (!token) return;
-    void api<{ markets: CapitalMarket[] }>("/capital/markets", { token })
-      .then((res) => setMarkets((res.markets ?? []).slice(0, 300)))
-      .catch(() => undefined);
-  }, [token]);
-
-  async function create() {
-    const acc = accountId || accounts?.[0]?.id;
-    if (!acc) {
-      toast.error("Vispirms izveido un Connect kontu");
-      return;
-    }
-    const connected = accounts?.find((a) => a.id === acc);
-    if (connected?.connectionStatus !== "CONNECTED") {
-      toast.error("Kontam jābūt CONNECTED");
-      return;
-    }
-    setCreating(true);
     try {
-      await api("/strategies", {
-        method: "POST",
-        token: token!,
-        body: JSON.stringify({
-          name,
-          mode,
-          configuration: {
-            timeframe: "1h",
-            riskPercent: Number(riskPercent) || 0.5,
-            atrStopMult: 1.6,
-            atrTpMult: 2.4,
-            minAdx: 18,
-            cooldownSeconds: 90,
-          },
-          assignedAccountIds: [acc],
-          assignedSymbols: symbols
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        }),
-      });
-      toast.success("Professional strategy created");
-      void qc.invalidateQueries({ queryKey: ["strategies"] });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Create failed");
-    } finally {
-      setCreating(false);
+      const res = await api<{ markets: CapitalMarket[]; count?: number }>(
+        "/capital/markets",
+        { token },
+      );
+      setMarkets(res.markets ?? []);
+      if (!marketEpic && res.markets?.[0]) setMarketEpic(res.markets[0].epic);
+    } catch {
+      // connect Capital first
     }
   }
 
-  async function run(id: string, action: "start" | "stop" | "validate" | "backtest") {
-    setBusyId(id);
+  useEffect(() => {
+    void loadMarkets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  useEffect(() => {
+    if (!selectedStrategyId && strategies?.[0]) {
+      setSelectedStrategyId(strategies[0].id);
+    }
+  }, [strategies, selectedStrategyId]);
+
+  useEffect(() => {
+    if (!accountId && connectedAccounts[0]) {
+      setAccountId(connectedAccounts[0].id);
+    }
+  }, [connectedAccounts, accountId]);
+
+  async function syncMarkets() {
+    if (!token) return;
+    setSyncing(true);
     try {
-      const res = await api<Record<string, unknown>>(`/strategies/${id}/${action}`, {
+      const res = await api<{ count: number; markets?: CapitalMarket[] }>(
+        "/capital/markets/sync",
+        { method: "POST", token },
+      );
+      toast.success(`Capital markets: ${res.count} (0001–${String(res.count).padStart(4, "0")})`);
+      await loadMarkets();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Sync failed — connect Capital first");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function ensurePresets() {
+    if (!token || !accountId) return;
+    if ((strategies ?? []).length > 0) return;
+    setBusy(true);
+    try {
+      for (const mode of PRESET_MODES) {
+        await api("/strategies", {
+          method: "POST",
+          token,
+          body: JSON.stringify({
+            name: `VS ${mode}`,
+            mode,
+            configuration: {
+              timeframe: "1h",
+              riskPercent: Number(riskPercent) || 0.5,
+              oneTradeOnly: true,
+              closeOnlyNoFlip: true,
+              atrStopMult: 1.6,
+              atrTpMult: 2.4,
+              minAdx: 18,
+              cooldownSeconds: 90,
+            },
+            assignedAccountIds: [accountId],
+            assignedSymbols: [marketEpic || "EURUSD"],
+          }),
+        });
+      }
+      toast.success("Stratēģijas izveidotas — izvēlies un Start");
+      void qc.invalidateQueries({ queryKey: ["strategies"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Preset create failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** One click: bind market+account → Start auto (1 trade only) */
+  async function startAuto() {
+    const strategyId = selectedStrategyId || strategies?.[0]?.id;
+    const acc = accountId || connectedAccounts[0]?.id;
+    const epic = marketEpic || markets[0]?.epic;
+    if (!strategyId) {
+      toast.error("Izveido / izvēlies stratēģiju");
+      return;
+    }
+    if (!acc) {
+      toast.error("Nav CONNECTED konta");
+      return;
+    }
+    if (!epic) {
+      toast.error("Vispirms Sync Capital markets");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      // Stop other running strategies (one auto bot at a time)
+      for (const s of strategies ?? []) {
+        if (s.status === "RUNNING" && s.id !== strategyId) {
+          await api(`/strategies/${s.id}/stop`, { method: "POST", token: token! });
+        }
+      }
+
+      await api(`/strategies/${strategyId}`, {
+        method: "PATCH",
+        token: token!,
+        body: JSON.stringify({
+          configuration: {
+            timeframe: "1h",
+            riskPercent: Number(riskPercent) || 0.5,
+            oneTradeOnly: true,
+            closeOnlyNoFlip: true,
+            atrStopMult: 1.6,
+            atrTpMult: 2.4,
+            minAdx: 18,
+            cooldownSeconds: 60,
+          },
+          assignedAccountIds: [acc],
+          assignedSymbols: [epic],
+        }),
+      });
+
+      await api(`/strategies/${strategyId}/start`, {
         method: "POST",
         token: token!,
       });
-      if (action === "backtest") {
-        setLastBacktest(res);
-        toast.success(
-          `Backtest: ${String(res.trades ?? 0)} trades, P/L ${String(res.netProfit ?? 0)}`,
-        );
-      } else if (action === "start") {
-        toast.success("Strategy RUNNING — professional engine (ATR/RSI/MACD/ADX)");
-      } else {
-        toast.success(`Strategy ${action}`);
-      }
+
+      const m = markets.find((x) => x.epic === epic);
+      toast.success(
+        `AUTO ON · ${m?.code ?? "—"} ${epic} — 1 trade until close`,
+        { duration: 8000 },
+      );
       void qc.invalidateQueries({ queryKey: ["strategies"] });
       void qc.invalidateQueries({ queryKey: ["positions"] });
-      void qc.invalidateQueries({ queryKey: ["orders"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : `${action} failed`);
+      toast.error(e instanceof Error ? e.message : "Start failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopStrategy(id: string) {
+    setBusyId(id);
+    try {
+      await api(`/strategies/${id}/stop`, { method: "POST", token: token! });
+      toast.success("Auto trading STOPPED");
+      void qc.invalidateQueries({ queryKey: ["strategies"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Stop failed");
     } finally {
       setBusyId(null);
     }
   }
 
-  function addEpic(epic: string) {
-    const list = symbols
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!list.includes(epic)) {
-      setSymbols([...list, epic].join(","));
-    }
-  }
+  const selected = (strategies ?? []).find((s) => s.id === selectedStrategyId);
+  const running = (strategies ?? []).filter((s) => s.status === "RUNNING");
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <Panel title="Create Strategy">
-        <p className="mb-3 text-xs text-white/45">
-          VS System professional engine: EMA stack, RSI, MACD, Bollinger, ADX/DI, Stochastic,
-          ATR-based SL/TP. Use Capital.com epic names (GOLD, BITCOIN, US100…).
+    <div className="space-y-4">
+      <Panel title="Auto trade — 1 klikšķis">
+        <p className="mb-3 text-sm text-white/55">
+          Izvēlies stratēģiju + tirgu → <strong className="text-white">Start</strong>.
+          VS System pats sūta BUY/SELL. Vienlaikus tikai <strong className="text-accent">1 treids</strong> —
+          nākamais tikai pēc aizvēršanas.
         </p>
-        <div className="space-y-3">
-          <Field label="Name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <Field label="Mode">
-            <Select value={mode} onChange={(e) => setMode(e.target.value)}>
-              {Object.values(StrategyMode).map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <p className="text-[11px] text-accent-soft">{MODE_HELP[mode] ?? MODE_HELP.CUSTOM}</p>
-          <Field label="Account (must be CONNECTED)">
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="1. Stratēģija">
             <Select
-              value={accountId || accounts?.[0]?.id || ""}
-              onChange={(e) => setAccountId(e.target.value)}
+              value={selectedStrategyId}
+              onChange={(e) => setSelectedStrategyId(e.target.value)}
             >
-              {(accounts ?? []).map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} · {a.connectionStatus}
+              {(strategies ?? []).length === 0 ? (
+                <option value="">Nav stratēģiju — spied Create presets</option>
+              ) : null}
+              {(strategies ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} · {s.mode} · {s.status}
                 </option>
               ))}
             </Select>
           </Field>
-          <Field label="Symbols (Capital epics, comma-separated)">
+
+          <Field label="2. Konts (CONNECTED)">
+            <Select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+              {connectedAccounts.length === 0 ? (
+                <option value="">Nav connected konta</option>
+              ) : null}
+              {connectedAccounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · {a.provider} · {a.accountType}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field label={`3. Tirgus (Capital #0001–#${String(Math.max(markets.length, 1)).padStart(4, "0")})`}>
+            <div className="flex gap-2">
+              <Input
+                value={marketFilter}
+                onChange={(e) => setMarketFilter(e.target.value)}
+                placeholder="Meklē: 0042 / GOLD / EUR"
+                className="font-mono text-xs"
+              />
+              <Button size="sm" variant="outline" loading={syncing} onClick={() => void syncMarkets()}>
+                Sync
+              </Button>
+            </div>
+            <Select
+              className="mt-2"
+              value={marketEpic}
+              onChange={(e) => setMarketEpic(e.target.value)}
+            >
+              {filteredMarkets.length === 0 ? (
+                <option value="">Sync Capital markets…</option>
+              ) : null}
+              {filteredMarkets.map((m) => (
+                <option key={m.epic} value={m.epic}>
+                  {m.label ?? `${m.code ?? "????"} · ${m.epic} — ${m.name}`}
+                </option>
+              ))}
+            </Select>
+            <p className="mt-1 text-[11px] text-white/35">
+              Sarakstā: kods · epic · nosaukums (piem. 0007 · GOLD — Gold)
+            </p>
+          </Field>
+
+          <Field label="Risk % / trade">
             <Input
-              value={symbols}
-              onChange={(e) => setSymbols(e.target.value)}
-              className="font-mono text-xs"
-              placeholder="EURUSD,GOLD,BITCOIN,US100"
+              value={riskPercent}
+              onChange={(e) => setRiskPercent(e.target.value)}
+              className="font-mono"
             />
           </Field>
-          {markets.length > 0 ? (
-            <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto">
-              {markets.slice(0, 80).map((m) => (
-                <button
-                  key={m.epic}
-                  type="button"
-                  className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-white/60 hover:border-accent/50 hover:text-white"
-                  onClick={() => addEpic(m.epic)}
-                  title={m.name}
-                >
-                  {m.epic}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[11px] text-white/35">
-              Connect Capital → Terminal Sync markets, lai redzētu visus epic.
-            </p>
-          )}
-          <Field label="Risk % per trade">
-            <Input value={riskPercent} onChange={(e) => setRiskPercent(e.target.value)} />
-          </Field>
-          <Button variant="primary" className="w-full" loading={creating} onClick={() => void create()}>
-            Create professional strategy
-          </Button>
         </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="success" size="lg" loading={busy} onClick={() => void startAuto()}>
+            START auto trade
+          </Button>
+          {selected?.status === "RUNNING" || running.length > 0 ? (
+            <Button
+              variant="danger"
+              size="lg"
+              loading={!!busyId}
+              onClick={() =>
+                void stopStrategy(selectedStrategyId || running[0]!.id)
+              }
+            >
+              STOP
+            </Button>
+          ) : null}
+          {(strategies ?? []).length === 0 ? (
+            <Button variant="outline" loading={busy} onClick={() => void ensurePresets()}>
+              Create preset strategies
+            </Button>
+          ) : null}
+        </div>
+
+        {running.length > 0 ? (
+          <div className="mt-3 rounded-md border border-profit/30 bg-profit/10 px-3 py-2 text-xs text-white/80">
+            RUNNING: {running.map((s) => s.name).join(", ")} — gaida signālu, tad 1 BUY/SELL līdz
+            close.
+          </div>
+        ) : null}
       </Panel>
 
-      <Panel title="Strategies" className="lg:col-span-2">
+      <Panel title="Pieejamās stratēģijas">
         {isLoading ? (
           <div className="py-8 text-center text-sm text-white/35">Loading…</div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {(strategies ?? []).map((s) => {
-              const deploy = (s.deploymentStateJson ?? {}) as {
-                lastTickAt?: string;
-                engine?: string;
-              };
+              const symbols = (s.assignedSymbols as string[] | undefined) ?? [];
               return (
                 <div
                   key={s.id}
-                  className="flex flex-col gap-3 rounded-md border border-white/[0.06] p-3 md:flex-row md:items-center md:justify-between"
+                  className={`flex flex-col gap-2 rounded-md border p-3 md:flex-row md:items-center md:justify-between ${
+                    selectedStrategyId === s.id
+                      ? "border-accent/50 bg-accent/10"
+                      : "border-white/[0.06] bg-white/[0.02]"
+                  }`}
                 >
-                  <div>
+                  <button
+                    type="button"
+                    className="text-left"
+                    onClick={() => setSelectedStrategyId(s.id)}
+                  >
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-white">{s.name}</span>
                       <Badge tone="accent">{s.mode}</Badge>
@@ -231,62 +372,53 @@ export default function StrategiesPage() {
                       >
                         {s.status}
                       </Badge>
-                      {deploy.engine ? <Badge tone="neutral">{deploy.engine}</Badge> : null}
+                      <Badge tone="neutral">1 trade</Badge>
                     </div>
-                    {deploy.lastTickAt ? (
-                      <div className="mt-1 text-[11px] text-white/35">
-                        Last tick: {new Date(deploy.lastTickAt).toLocaleTimeString()}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
+                    <div className="mt-1 font-mono text-[11px] text-white/40">
+                      {symbols.length ? symbols.join(", ") : "nav tirgus — izvēlies Sync + Start"}
+                    </div>
+                  </button>
+                  <div className="flex gap-1.5">
                     <Button
                       size="sm"
-                      loading={busyId === s.id}
-                      onClick={() => void run(s.id, "validate")}
+                      variant={selectedStrategyId === s.id ? "primary" : "outline"}
+                      onClick={() => setSelectedStrategyId(s.id)}
                     >
-                      Validate
+                      Izvēlēties
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="success"
-                      loading={busyId === s.id}
-                      onClick={() => void run(s.id, "start")}
-                    >
-                      Start
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      loading={busyId === s.id}
-                      onClick={() => void run(s.id, "stop")}
-                    >
-                      Stop
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={busyId === s.id}
-                      onClick={() => void run(s.id, "backtest")}
-                    >
-                      Backtest
-                    </Button>
+                    {s.status === "RUNNING" ? (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        loading={busyId === s.id}
+                        onClick={() => void stopStrategy(s.id)}
+                      >
+                        Stop
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="success"
+                        loading={busy}
+                        onClick={() => {
+                          setSelectedStrategyId(s.id);
+                          void startAuto();
+                        }}
+                      >
+                        Start
+                      </Button>
+                    )}
                   </div>
                 </div>
               );
             })}
             {(strategies ?? []).length === 0 ? (
-              <div className="py-8 text-center text-sm text-white/35">No strategies yet</div>
+              <div className="py-6 text-center text-sm text-white/35">
+                Nav stratēģiju. Spied <strong>Create preset strategies</strong>.
+              </div>
             ) : null}
           </div>
         )}
-        {lastBacktest ? (
-          <div className="mt-4 rounded-md border border-white/[0.08] bg-white/[0.02] p-3 text-xs text-white/70">
-            Backtest result: trades={String(lastBacktest.trades)} · net=
-            {String(lastBacktest.netProfit)} · winRate={String(lastBacktest.winRate)} · maxDD=
-            {String(lastBacktest.maxDrawdown)}
-          </div>
-        ) : null}
       </Panel>
     </div>
   );

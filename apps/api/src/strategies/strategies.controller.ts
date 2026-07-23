@@ -102,7 +102,13 @@ export class StrategiesController {
   @RequirePermissions("strategies:manage")
   patch(
     @Param("id") id: string,
-    @Body() body: { name?: string; configuration?: Record<string, unknown> },
+    @Body()
+    body: {
+      name?: string;
+      configuration?: Record<string, unknown>;
+      assignedAccountIds?: string[];
+      assignedSymbols?: string[];
+    },
     @Req() req: Request & { user: AuthUser; correlationId?: string },
   ) {
     return this.strategies.update(

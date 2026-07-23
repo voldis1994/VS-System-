@@ -105,14 +105,34 @@ export class StrategiesService {
     correlationId: string,
   ) {
     const strategy = await this.require(organizationId, id);
-    if (strategy.status !== StrategyStatus.VALID && strategy.status !== StrategyStatus.STOPPED && strategy.status !== StrategyStatus.PAUSED) {
+    if (
+      strategy.status !== StrategyStatus.VALID &&
+      strategy.status !== StrategyStatus.STOPPED &&
+      strategy.status !== StrategyStatus.PAUSED
+    ) {
       await this.validate(organizationId, actorId, id, correlationId);
     }
+
+    const prevConfig =
+      strategy.configurationJson && typeof strategy.configurationJson === "object"
+        ? (strategy.configurationJson as Record<string, unknown>)
+        : {};
+    const configurationJson = {
+      ...prevConfig,
+      oneTradeOnly: prevConfig.oneTradeOnly !== false,
+      closeOnlyNoFlip: prevConfig.closeOnlyNoFlip ?? true,
+    };
+
     const updated = await this.prisma.strategy.update({
       where: { id },
       data: {
         status: StrategyStatus.RUNNING,
-        deploymentStateJson: { startedAt: new Date().toISOString(), mode: "PAPER" },
+        configurationJson: configurationJson as Prisma.InputJsonValue,
+        deploymentStateJson: {
+          startedAt: new Date().toISOString(),
+          engine: "VS_PRO_V1",
+          oneTradeOnly: true,
+        },
         updatedById: actorId,
       },
     });
@@ -135,8 +155,8 @@ export class StrategiesService {
     await this.notifications.create({
       organizationId,
       userId: actorId,
-      title: "Strategy started",
-      body: `${updated.name} running on assigned accounts`,
+      title: "Auto trading ON",
+      body: `${updated.name} — 1 trade at a time until close`,
       severity: "SUCCESS",
     });
     return updated;
@@ -244,17 +264,31 @@ export class StrategiesService {
     organizationId: string,
     actorId: string,
     id: string,
-    body: { name?: string; configuration?: Record<string, unknown> },
+    body: {
+      name?: string;
+      configuration?: Record<string, unknown>;
+      assignedAccountIds?: string[];
+      assignedSymbols?: string[];
+    },
     correlationId: string,
   ) {
-    await this.require(organizationId, id);
+    const before = await this.require(organizationId, id);
+    const prevConfig =
+      before.configurationJson && typeof before.configurationJson === "object"
+        ? (before.configurationJson as Record<string, unknown>)
+        : {};
     const updated = await this.prisma.strategy.update({
       where: { id },
       data: {
-        name: body.name,
-        configurationJson: body.configuration as never,
+        name: body.name ?? before.name,
+        configurationJson: (body.configuration
+          ? { ...prevConfig, ...body.configuration }
+          : prevConfig) as Prisma.InputJsonValue,
+        assignedAccountIds: (body.assignedAccountIds ??
+          before.assignedAccountIds) as Prisma.InputJsonValue,
+        assignedSymbols: (body.assignedSymbols ??
+          before.assignedSymbols) as Prisma.InputJsonValue,
         updatedById: actorId,
-        status: StrategyStatus.DRAFT,
       },
     });
     await this.audit.record({

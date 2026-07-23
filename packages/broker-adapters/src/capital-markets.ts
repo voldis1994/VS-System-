@@ -130,6 +130,25 @@ export const CAPITAL_SEARCH_SEEDS = [
 ];
 
 export function resolveCapitalEpic(symbol: string): string {
-  const key = symbol.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
-  return CAPITAL_EPIC_ALIASES[key] ?? symbol.trim();
+  const raw = symbol.trim();
+  if (!raw) return raw;
+  // Preserve Capital numeric / code epics as-is (e.g. 0001, CS.D.EURUSD.CFD.IP)
+  if (/^\d+$/.test(raw) || raw.includes(".")) return raw;
+  const key = raw.toUpperCase().replace(/[^A-Z0-9_]/g, "");
+  return CAPITAL_EPIC_ALIASES[key] ?? raw;
 }
+
+/** Stable display index 0001..N for Capital market lists */
+export function formatMarketCode(index: number): string {
+  return String(index + 1).padStart(4, "0");
+}
+
+export function sortCapitalMarkets(markets: CapitalMarketInfo[]): CapitalMarketInfo[] {
+  return [...markets].sort((a, b) => {
+    const an = /^\d+$/.test(a.epic) ? Number(a.epic) : NaN;
+    const bn = /^\d+$/.test(b.epic) ? Number(b.epic) : NaN;
+    if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+    return a.epic.localeCompare(b.epic);
+  });
+}
+

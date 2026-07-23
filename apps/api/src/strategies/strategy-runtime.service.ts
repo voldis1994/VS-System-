@@ -124,6 +124,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       atrStopMult?: number;
       atrTpMult?: number;
       minAdx?: number;
+      /** Max 1 open position for the whole strategy until it closes */
+      oneTradeOnly?: boolean;
+      /** If true, opposite signal closes only (no flip). Default true with oneTradeOnly */
+      closeOnlyNoFlip?: boolean;
     };
     const cooldownMs = (config.cooldownSeconds ?? 90) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
@@ -131,6 +135,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const atrStopMult = config.atrStopMult ?? 1.6;
     const atrTpMult = config.atrTpMult ?? 2.4;
     const minAdx = config.minAdx ?? 18;
+    const oneTradeOnly = config.oneTradeOnly !== false; // default ON
+    const closeOnlyNoFlip = config.closeOnlyNoFlip ?? oneTradeOnly;
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
@@ -163,11 +169,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           rsi: ind.rsi,
           adx: ind.adx,
           atr: ind.atr,
+          oneTradeOnly,
         },
       });
 
       for (const accountId of accountIds) {
-        const open = await this.prisma.position.findMany({
+        const openOnSymbol = await this.prisma.position.findMany({
           where: {
             organizationId: strategy.organizationId,
             accountId,
@@ -177,8 +184,28 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
+        const openAnywhere = oneTradeOnly
+          ? await this.prisma.position.findMany({
+              where: {
+                organizationId: strategy.organizationId,
+                accountId,
+                strategyId: strategy.id,
+                status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+              },
+            })
+          : openOnSymbol;
+
+        const hasOtherSymbolOpen =
+          oneTradeOnly &&
+          openAnywhere.some((p) => p.symbol !== brokerSymbol);
+
+        // One-trade mode: ignore other symbols while a position is open elsewhere
+        if (hasOtherSymbolOpen) {
+          continue;
+        }
+
         if (signal === "CLOSE") {
-          for (const pos of open) {
+          for (const pos of openOnSymbol) {
             await this.positions.close(
               strategy.organizationId,
               actorId,
@@ -194,19 +221,32 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
         if (signal === "HOLD") continue;
 
-        const opposite = open.filter((p) => p.direction !== signal);
-        for (const pos of opposite) {
-          await this.positions.close(
-            strategy.organizationId,
-            actorId,
-            pos.id,
-            { clientRequestId: newId() },
-            correlationId,
-          );
+        const opposite = openOnSymbol.filter((p) => p.direction !== signal);
+        if (opposite.length > 0) {
+          for (const pos of opposite) {
+            await this.positions.close(
+              strategy.organizationId,
+              actorId,
+              pos.id,
+              { clientRequestId: newId() },
+              correlationId,
+            );
+          }
+          // One trade only: close opposite and wait for flat — do not flip same tick
+          if (closeOnlyNoFlip) {
+            this.lastSignalAt.set(key, Date.now());
+            this.lastFingerprint.set(key, fingerprint);
+            continue;
+          }
         }
 
-        const sameSide = open.filter((p) => p.direction === signal);
+        const sameSide = openOnSymbol.filter((p) => p.direction === signal);
         if (sameSide.length > 0) continue;
+
+        // Still flat? If any strategy position remains, skip new entry
+        if (oneTradeOnly && openAnywhere.length > 0 && opposite.length === 0) {
+          continue;
+        }
 
         const tick = this.market.getTick(brokerSymbol);
         if (!tick) continue;
@@ -284,8 +324,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         await this.notifications.create({
           organizationId: strategy.organizationId,
           userId: actorId === "system" ? null : actorId,
-          title: `Strategy signal: ${signal}`,
-          body: `${strategy.name} → ${brokerSymbol} ${signal} (RSI ${ind.rsi.toFixed(1)} ADX ${ind.adx.toFixed(1)})`,
+          title: `Auto ${signal}`,
+          body: `${strategy.name} → ${brokerSymbol} ${signal} (1 trade only)`,
           severity: "INFO",
         });
       }
@@ -300,6 +340,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         deploymentStateJson: {
           lastTickAt: new Date().toISOString(),
           engine: "VS_PRO_V1",
+          oneTradeOnly,
         },
       },
     });

@@ -7,6 +7,7 @@ import { d, toUtcIso } from "@nexus/shared";
 import {
   CAPITAL_SEARCH_SEEDS,
   resolveCapitalEpic,
+  sortCapitalMarkets,
   type CapitalMarketInfo,
 } from "./capital-markets";
 import type {
@@ -254,14 +255,27 @@ export class CapitalComAdapter implements BrokerAdapter {
 
     const ingest = (markets?: Array<Record<string, unknown>>) => {
       for (const m of markets ?? []) {
-        const epic = String(m.epic ?? "");
+        const instrument =
+          m.instrument && typeof m.instrument === "object"
+            ? (m.instrument as Record<string, unknown>)
+            : undefined;
+        const epic = String(m.epic ?? instrument?.epic ?? "");
         if (!epic) continue;
         const existing = byEpic.get(epic);
         const next: CapitalMarketInfo = {
           epic,
-          name: String(m.instrumentName ?? m.name ?? existing?.name ?? epic),
+          name: String(
+            m.instrumentName ??
+              instrument?.name ??
+              m.name ??
+              existing?.name ??
+              epic,
+          ),
           instrumentType: String(
-            m.instrumentType ?? existing?.instrumentType ?? "CFD",
+            m.instrumentType ??
+              instrument?.type ??
+              existing?.instrumentType ??
+              "CFD",
           ),
           bid: numOrUndef(m.bid) ?? existing?.bid,
           offer: numOrUndef(m.offer) ?? existing?.offer,
@@ -285,7 +299,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       } catch {
         // ignore
       }
-      return [...byEpic.values()].sort((a, b) => a.epic.localeCompare(b.epic));
+      return sortCapitalMarkets([...byEpic.values()]);
     }
 
     // Prefer full catalogue when API allows (no query = all markets)
@@ -296,7 +310,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       );
       if (all.markets && all.markets.length > 0) {
         ingest(all.markets);
-        return [...byEpic.values()].sort((a, b) => a.epic.localeCompare(b.epic));
+        return sortCapitalMarkets([...byEpic.values()]);
       }
     } catch {
       // fall through to seeded discovery
@@ -321,7 +335,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       // optional
     }
 
-    return [...byEpic.values()].sort((a, b) => a.epic.localeCompare(b.epic));
+    return sortCapitalMarkets([...byEpic.values()]);
   }
 
   async getMarketQuote(epic: string): Promise<CapitalMarketInfo | null> {
