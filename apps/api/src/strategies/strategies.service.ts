@@ -1,5 +1,6 @@
 import { Injectable, HttpStatus } from "@nestjs/common";
 import {
+  AccountStrategyRunSchema,
   CreateStrategySchema,
   DomainEventType,
   ErrorCodes,
@@ -156,7 +157,7 @@ export class StrategiesService {
       organizationId,
       userId: actorId,
       title: "Auto trading ON",
-      body: `${updated.name} — 1 trade at a time until close`,
+      body: `${updated.name} — per-account bot (1 trade until close)`,
       severity: "SUCCESS",
     });
     return updated;
@@ -266,6 +267,7 @@ export class StrategiesService {
     id: string,
     body: {
       name?: string;
+      mode?: string;
       configuration?: Record<string, unknown>;
       assignedAccountIds?: string[];
       assignedSymbols?: string[];
@@ -281,6 +283,7 @@ export class StrategiesService {
       where: { id },
       data: {
         name: body.name ?? before.name,
+        mode: (body.mode as never) ?? before.mode,
         configurationJson: (body.configuration
           ? { ...prevConfig, ...body.configuration }
           : prevConfig) as Prisma.InputJsonValue,
@@ -301,6 +304,115 @@ export class StrategiesService {
       correlationId,
     });
     return updated;
+  }
+
+  /**
+   * Per-account strategy + exit: each trading account owns its own RUNNING
+   * strategy instance (mode + exit config), independent of other accounts.
+   */
+  async runForAccount(
+    organizationId: string,
+    actorId: string,
+    raw: unknown,
+    correlationId: string,
+  ) {
+    const input = AccountStrategyRunSchema.parse(raw);
+
+    const account = await this.prisma.tradingAccount.findFirst({
+      where: { id: input.accountId, organizationId },
+    });
+    if (!account) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Trading account not found",
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const all = await this.prisma.strategy.findMany({
+      where: { organizationId, status: { not: "ARCHIVED" } },
+    });
+    const bound = all.filter((s) =>
+      ((s.assignedAccountIds as string[]) ?? []).includes(input.accountId),
+    );
+
+    if (input.action === "stop") {
+      const stopped = [];
+      for (const s of bound) {
+        if (s.status === StrategyStatus.RUNNING || s.status === StrategyStatus.PAUSED) {
+          stopped.push(await this.stop(organizationId, actorId, s.id, correlationId));
+        }
+      }
+      return { action: "stop", accountId: input.accountId, strategies: stopped };
+    }
+
+    // Detach this account from other strategies so one account ≠ multiple bots
+    let strategy = bound[0] ?? null;
+    for (const s of bound) {
+      if (strategy && s.id === strategy.id) continue;
+      const remaining = ((s.assignedAccountIds as string[]) ?? []).filter(
+        (id) => id !== input.accountId,
+      );
+      await this.prisma.strategy.update({
+        where: { id: s.id },
+        data: {
+          assignedAccountIds: remaining as Prisma.InputJsonValue,
+          ...(s.status === StrategyStatus.RUNNING && remaining.length === 0
+            ? { status: StrategyStatus.STOPPED }
+            : {}),
+          updatedById: actorId,
+        },
+      });
+    }
+
+    const displayName = `${account.name} · ${input.mode}`.slice(0, 120);
+    const configuration = {
+      ...input.configuration,
+      oneTradeOnly: true,
+      closeOnlyNoFlip: true,
+      autoAggressive: true,
+    };
+
+    if (!strategy) {
+      strategy = await this.create(
+        organizationId,
+        actorId,
+        {
+          name: displayName,
+          mode: input.mode,
+          configuration,
+          assignedAccountIds: [input.accountId],
+          assignedSymbols: input.assignedSymbols,
+        },
+        correlationId,
+      );
+    } else {
+      strategy = await this.update(
+        organizationId,
+        actorId,
+        strategy.id,
+        {
+          name: displayName,
+          mode: input.mode,
+          configuration,
+          assignedAccountIds: [input.accountId],
+          assignedSymbols: input.assignedSymbols,
+        },
+        correlationId,
+      );
+    }
+
+    if (input.action === "save") {
+      return { action: "save", accountId: input.accountId, strategy };
+    }
+
+    const started = await this.start(
+      organizationId,
+      actorId,
+      strategy.id,
+      correlationId,
+    );
+    return { action: "start", accountId: input.accountId, strategy: started };
   }
 
   private async require(organizationId: string, id: string) {

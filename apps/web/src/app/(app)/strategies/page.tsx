@@ -7,6 +7,7 @@ import { Panel } from "@/components/ui/panel";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useAccounts, useStrategies } from "@/lib/hooks";
+import type { Strategy, TradingAccount } from "@/lib/types";
 import { StrategyMode } from "@nexus/domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -19,7 +20,24 @@ type CapitalMarket = {
   label?: string;
 };
 
-const PRESET_MODES = [
+type ExitVersion = "SCALP" | "SWING" | "RUNNER" | "CUSTOM";
+
+type AccountDraft = {
+  mode: string;
+  marketEpic: string;
+  riskPercent: string;
+  exitVersion: ExitVersion;
+  tpEnabled: boolean;
+  atrTpMult: string;
+  beEnabled: boolean;
+  beActivationPips: string;
+  beOffsetPips: string;
+  trailEnabled: boolean;
+  trailPips: string;
+  trailActPips: string;
+};
+
+const STRATEGY_MODES = [
   StrategyMode.TREND,
   StrategyMode.MOMENTUM,
   StrategyMode.PULLBACK,
@@ -29,10 +47,121 @@ const PRESET_MODES = [
   StrategyMode.REVERSAL,
 ] as const;
 
+const EXIT_PRESETS: Record<
+  Exclude<ExitVersion, "CUSTOM">,
+  Omit<AccountDraft, "mode" | "marketEpic" | "riskPercent" | "exitVersion">
+> = {
+  SCALP: {
+    tpEnabled: true,
+    atrTpMult: "1.2",
+    beEnabled: true,
+    beActivationPips: "5",
+    beOffsetPips: "1",
+    trailEnabled: true,
+    trailPips: "8",
+    trailActPips: "8",
+  },
+  SWING: {
+    tpEnabled: true,
+    atrTpMult: "2.4",
+    beEnabled: true,
+    beActivationPips: "15",
+    beOffsetPips: "2",
+    trailEnabled: false,
+    trailPips: "20",
+    trailActPips: "20",
+  },
+  RUNNER: {
+    tpEnabled: false,
+    atrTpMult: "3.0",
+    beEnabled: true,
+    beActivationPips: "10",
+    beOffsetPips: "1",
+    trailEnabled: true,
+    trailPips: "20",
+    trailActPips: "15",
+  },
+};
+
+function defaultDraft(epic = ""): AccountDraft {
+  return {
+    mode: StrategyMode.SCALPING,
+    marketEpic: epic,
+    riskPercent: "0.5",
+    exitVersion: "SCALP",
+    ...EXIT_PRESETS.SCALP,
+  };
+}
+
+function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
+  const c = (s.configurationJson ?? {}) as Record<string, unknown>;
+  const exitVersion = (typeof c.exitVersion === "string"
+    ? c.exitVersion
+    : "CUSTOM") as ExitVersion;
+  const symbols = (s.assignedSymbols as string[] | undefined) ?? [];
+  return {
+    mode: s.mode,
+    marketEpic: symbols[0] ?? fallbackEpic,
+    riskPercent: String(typeof c.riskPercent === "number" ? c.riskPercent : 0.5),
+    exitVersion: ["SCALP", "SWING", "RUNNER", "CUSTOM"].includes(exitVersion)
+      ? exitVersion
+      : "CUSTOM",
+    tpEnabled: c.takeProfitEnabled !== false,
+    atrTpMult: String(typeof c.atrTpMult === "number" ? c.atrTpMult : 2.4),
+    beEnabled: Boolean(c.breakEvenEnabled),
+    beActivationPips: String(
+      typeof c.breakEvenActivationPips === "number" ? c.breakEvenActivationPips : 10,
+    ),
+    beOffsetPips: String(
+      typeof c.breakEvenOffsetPips === "number" ? c.breakEvenOffsetPips : 1,
+    ),
+    trailEnabled: Boolean(c.trailingEnabled),
+    trailPips: String(
+      typeof c.trailingDistancePips === "number" ? c.trailingDistancePips : 15,
+    ),
+    trailActPips: String(
+      typeof c.trailingActivationPips === "number" ? c.trailingActivationPips : 15,
+    ),
+  };
+}
+
+function buildConfiguration(d: AccountDraft) {
+  return {
+    timeframe: "15m",
+    riskPercent: Number(d.riskPercent) || 0.5,
+    useRiskPercent: false,
+    volume: "0.01",
+    oneTradeOnly: true,
+    closeOnlyNoFlip: true,
+    autoAggressive: true,
+    atrStopMult: 1.6,
+    atrTpMult: Number(d.atrTpMult) || 2.4,
+    takeProfitEnabled: d.tpEnabled,
+    breakEvenEnabled: d.beEnabled,
+    breakEvenActivationPips: Number(d.beActivationPips) || 10,
+    breakEvenOffsetPips: Number(d.beOffsetPips) || 1,
+    trailingEnabled: d.trailEnabled,
+    trailingDistancePips: Number(d.trailPips) || 15,
+    trailingActivationPips: Number(d.trailActPips) || Number(d.trailPips) || 15,
+    exitVersion: d.exitVersion,
+    minAdx: 12,
+    cooldownSeconds: 45,
+  };
+}
+
+function strategyForAccount(
+  strategies: Strategy[] | undefined,
+  accountId: string,
+): Strategy | undefined {
+  return (strategies ?? []).find((s) =>
+    ((s.assignedAccountIds as string[] | undefined) ?? []).includes(accountId),
+  );
+}
+
 export default function StrategiesPage() {
   const token = useAuthStore((s) => s.accessToken);
-  const { data: strategies, isLoading } = useStrategies();
-  const { data: accounts } = useAccounts();
+  const { data: strategies, isLoading: strategiesLoading } = useStrategies();
+  const { data: accounts, isLoading: accountsLoading } = useAccounts();
   const qc = useQueryClient();
 
   const connectedAccounts = useMemo(
@@ -40,25 +169,11 @@ export default function StrategiesPage() {
     [accounts],
   );
 
-  const [selectedStrategyId, setSelectedStrategyId] = useState("");
-  const [accountId, setAccountId] = useState("");
-  const [marketEpic, setMarketEpic] = useState("");
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [marketFilter, setMarketFilter] = useState("");
-  const [riskPercent, setRiskPercent] = useState("0.5");
-  const [busy, setBusy] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-
-  // Exit options — same for every strategy mode (scalping, trend, …)
-  const [tpEnabled, setTpEnabled] = useState(true);
-  const [atrTpMult, setAtrTpMult] = useState("2.4");
-  const [beEnabled, setBeEnabled] = useState(false);
-  const [beActivationPips, setBeActivationPips] = useState("10");
-  const [beOffsetPips, setBeOffsetPips] = useState("1");
-  const [trailEnabled, setTrailEnabled] = useState(false);
-  const [trailPips, setTrailPips] = useState("15");
-  const [trailActPips, setTrailActPips] = useState("15");
+  const [busyAccountId, setBusyAccountId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, AccountDraft>>({});
 
   const filteredMarkets = useMemo(() => {
     const q = marketFilter.trim().toLowerCase();
@@ -72,29 +187,6 @@ export default function StrategiesPage() {
     );
   }, [markets, marketFilter]);
 
-  function buildConfiguration() {
-    return {
-      timeframe: "15m",
-      riskPercent: Number(riskPercent) || 0.5,
-      useRiskPercent: false,
-      volume: "0.01",
-      oneTradeOnly: true,
-      closeOnlyNoFlip: true,
-      autoAggressive: true,
-      atrStopMult: 1.6,
-      atrTpMult: Number(atrTpMult) || 2.4,
-      takeProfitEnabled: tpEnabled,
-      breakEvenEnabled: beEnabled,
-      breakEvenActivationPips: Number(beActivationPips) || 10,
-      breakEvenOffsetPips: Number(beOffsetPips) || 1,
-      trailingEnabled: trailEnabled,
-      trailingDistancePips: Number(trailPips) || 15,
-      trailingActivationPips: Number(trailActPips) || Number(trailPips) || 15,
-      minAdx: 12,
-      cooldownSeconds: 45,
-    };
-  }
-
   async function loadMarkets() {
     if (!token) return;
     try {
@@ -103,7 +195,6 @@ export default function StrategiesPage() {
         { token },
       );
       setMarkets(res.markets ?? []);
-      if (!marketEpic && res.markets?.[0]) setMarketEpic(res.markets[0].epic);
     } catch {
       // connect Capital first
     }
@@ -114,464 +205,405 @@ export default function StrategiesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // Hydrate per-account drafts from existing strategies / defaults
   useEffect(() => {
-    if (!selectedStrategyId && strategies?.[0]) {
-      setSelectedStrategyId(strategies[0].id);
-    }
-  }, [strategies, selectedStrategyId]);
+    const defaultEpic = markets[0]?.epic ?? "";
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const acc of connectedAccounts) {
+        if (next[acc.id]) continue;
+        const bound = strategyForAccount(strategies, acc.id);
+        next[acc.id] = bound
+          ? draftFromStrategy(bound, defaultEpic)
+          : defaultDraft(defaultEpic);
+      }
+      return next;
+    });
+  }, [connectedAccounts, strategies, markets]);
 
-  useEffect(() => {
-    if (!accountId && connectedAccounts[0]) {
-      setAccountId(connectedAccounts[0].id);
-    }
-  }, [connectedAccounts, accountId]);
+  function patchDraft(accountId: string, patch: Partial<AccountDraft>) {
+    setDrafts((prev) => ({
+      ...prev,
+      [accountId]: {
+        ...(prev[accountId] ?? defaultDraft(markets[0]?.epic ?? "")),
+        ...patch,
+      },
+    }));
+  }
 
-  useEffect(() => {
-    const s = (strategies ?? []).find((x) => x.id === selectedStrategyId);
-    if (!s) return;
-    const c = (s.configurationJson ?? {}) as Record<string, unknown>;
-    if (typeof c.takeProfitEnabled === "boolean") setTpEnabled(c.takeProfitEnabled);
-    if (typeof c.atrTpMult === "number") setAtrTpMult(String(c.atrTpMult));
-    if (typeof c.breakEvenEnabled === "boolean") setBeEnabled(c.breakEvenEnabled);
-    if (typeof c.breakEvenActivationPips === "number") {
-      setBeActivationPips(String(c.breakEvenActivationPips));
+  function applyExitVersion(accountId: string, version: ExitVersion) {
+    if (version === "CUSTOM") {
+      patchDraft(accountId, { exitVersion: "CUSTOM" });
+      return;
     }
-    if (typeof c.breakEvenOffsetPips === "number") {
-      setBeOffsetPips(String(c.breakEvenOffsetPips));
-    }
-    if (typeof c.trailingEnabled === "boolean") setTrailEnabled(c.trailingEnabled);
-    if (typeof c.trailingDistancePips === "number") {
-      setTrailPips(String(c.trailingDistancePips));
-    }
-    if (typeof c.trailingActivationPips === "number") {
-      setTrailActPips(String(c.trailingActivationPips));
-    }
-    if (typeof c.riskPercent === "number") setRiskPercent(String(c.riskPercent));
-  }, [selectedStrategyId, strategies]);
+    patchDraft(accountId, { exitVersion: version, ...EXIT_PRESETS[version] });
+  }
 
   async function syncMarkets() {
     if (!token) return;
     setSyncing(true);
     try {
-      const res = await api<{ count: number; markets?: CapitalMarket[] }>(
-        "/capital/markets/sync",
-        { method: "POST", token },
-      );
-      toast.success(`Capital markets: ${res.count} (0001–${String(res.count).padStart(4, "0")})`);
+      const res = await api<{ count: number }>("/capital/markets/sync", {
+        method: "POST",
+        token,
+      });
+      toast.success(`Capital markets: ${res.count}`);
       await loadMarkets();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Sync failed — connect Capital first");
+      toast.error(e instanceof Error ? e.message : "Sync failed");
     } finally {
       setSyncing(false);
     }
   }
 
-  async function ensurePresets() {
-    if (!token || !accountId) return;
-    if ((strategies ?? []).length > 0) return;
-    setBusy(true);
-    try {
-      const configuration = buildConfiguration();
-      for (const mode of PRESET_MODES) {
-        await api("/strategies", {
-          method: "POST",
-          token,
-          body: JSON.stringify({
-            name: `VS ${mode}`,
-            mode,
-            configuration,
-            assignedAccountIds: [accountId],
-            assignedSymbols: [marketEpic || "EURUSD"],
-          }),
-        });
-      }
-      toast.success("Stratēģijas izveidotas — izvēlies un Start");
-      void qc.invalidateQueries({ queryKey: ["strategies"] });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Preset create failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /** One click: bind market+account → Start auto (1 trade only) */
-  async function startAuto() {
-    const strategyId = selectedStrategyId || strategies?.[0]?.id;
-    const acc = accountId || connectedAccounts[0]?.id;
-    const epic = marketEpic || markets[0]?.epic;
-    if (!strategyId) {
-      toast.error("Izveido / izvēlies stratēģiju");
-      return;
-    }
-    if (!acc) {
-      toast.error("Nav CONNECTED konta");
-      return;
-    }
-    if (!epic) {
+  async function runAccount(
+    account: TradingAccount,
+    action: "start" | "stop" | "save",
+  ) {
+    const draft = drafts[account.id] ?? defaultDraft(markets[0]?.epic ?? "");
+    const epic = draft.marketEpic || markets[0]?.epic;
+    if (action !== "stop" && !epic) {
       toast.error("Vispirms Sync Capital markets");
       return;
     }
 
-    setBusy(true);
+    setBusyAccountId(account.id);
     try {
-      for (const s of strategies ?? []) {
-        if (s.status === "RUNNING" && s.id !== strategyId) {
-          await api(`/strategies/${s.id}/stop`, { method: "POST", token: token! });
-        }
-      }
-
-      await api(`/strategies/${strategyId}`, {
-        method: "PATCH",
+      const res = await api<{
+        action: string;
+        strategy?: Strategy;
+      }>("/strategies/for-account", {
+        method: "POST",
         token: token!,
         body: JSON.stringify({
-          configuration: buildConfiguration(),
-          assignedAccountIds: [acc],
-          assignedSymbols: [epic],
+          accountId: account.id,
+          mode: draft.mode,
+          assignedSymbols: epic ? [epic] : ["EURUSD"],
+          configuration: buildConfiguration(draft),
+          action,
         }),
       });
 
-      await api(`/strategies/${strategyId}/start`, {
-        method: "POST",
-        token: token!,
-      });
+      if (action === "start") {
+        const exits = [
+          draft.tpEnabled ? "TP" : null,
+          draft.beEnabled ? "BE" : null,
+          draft.trailEnabled ? "Trail" : null,
+        ]
+          .filter(Boolean)
+          .join("+");
+        toast.success(
+          `${account.name}: ${draft.mode} · exit ${draft.exitVersion} (${exits || "SL"}) ON`,
+          { duration: 7000 },
+        );
+      } else if (action === "stop") {
+        toast.success(`${account.name}: auto STOPPED`);
+      } else {
+        toast.success(`${account.name}: settings saved`);
+      }
 
-      const m = markets.find((x) => x.epic === epic);
-      const exits = [
-        tpEnabled ? "TP" : null,
-        beEnabled ? "BE" : null,
-        trailEnabled ? "Trail" : null,
-      ]
-        .filter(Boolean)
-        .join("+");
-      toast.success(
-        `AUTO ON · ${m?.code ?? "—"} ${epic} · ${exits || "SL only"} — 1 trade until close`,
-        { duration: 8000 },
-      );
+      if (res.strategy) {
+        patchDraft(account.id, draftFromStrategy(res.strategy, epic ?? ""));
+      }
       void qc.invalidateQueries({ queryKey: ["strategies"] });
       void qc.invalidateQueries({ queryKey: ["positions"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Start failed");
+      toast.error(e instanceof Error ? e.message : "Failed");
     } finally {
-      setBusy(false);
+      setBusyAccountId(null);
     }
   }
 
-  async function stopStrategy(id: string) {
-    setBusyId(id);
-    try {
-      await api(`/strategies/${id}/stop`, { method: "POST", token: token! });
-      toast.success("Auto trading STOPPED");
-      void qc.invalidateQueries({ queryKey: ["strategies"] });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Stop failed");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  const selected = (strategies ?? []).find((s) => s.id === selectedStrategyId);
-  const running = (strategies ?? []).filter((s) => s.status === "RUNNING");
+  const runningCount = (strategies ?? []).filter((s) => s.status === "RUNNING").length;
 
   return (
     <div className="space-y-4">
-      <Panel title="Auto trade — 1 klikšķis">
+      <Panel title="Per-account auto trade">
         <p className="mb-3 text-sm text-white/55">
-          Izvēlies stratēģiju + tirgu + izejas (TP / BE / Trail) →{" "}
-          <strong className="text-white">Start</strong>. Vienlaikus tikai{" "}
-          <strong className="text-accent">1 treids</strong> — nākamais pēc aizvēršanas.
+          Katram kontam <strong className="text-white">sava stratēģija</strong> un{" "}
+          <strong className="text-white">sava exit versija</strong> (TP / BE / Trail).
+          Konti strādā neatkarīgi — vari palaist vairākus vienlaikus.
         </p>
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label="1. Stratēģija">
-            <Select
-              value={selectedStrategyId}
-              onChange={(e) => setSelectedStrategyId(e.target.value)}
-            >
-              {(strategies ?? []).length === 0 ? (
-                <option value="">Nav stratēģiju — spied Create presets</option>
-              ) : null}
-              {(strategies ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} · {s.mode} · {s.status}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="2. Konts (CONNECTED)">
-            <Select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              {connectedAccounts.length === 0 ? (
-                <option value="">Nav connected konta</option>
-              ) : null}
-              {connectedAccounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} · {a.provider} · {a.accountType}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label={`3. Tirgus (Capital #0001–#${String(Math.max(markets.length, 1)).padStart(4, "0")})`}>
-            <div className="flex gap-2">
-              <Input
-                value={marketFilter}
-                onChange={(e) => setMarketFilter(e.target.value)}
-                placeholder="Meklē: 0042 / GOLD / EUR"
-                className="font-mono text-xs"
-              />
-              <Button size="sm" variant="outline" loading={syncing} onClick={() => void syncMarkets()}>
-                Sync
-              </Button>
-            </div>
-            <Select
-              className="mt-2"
-              value={marketEpic}
-              onChange={(e) => setMarketEpic(e.target.value)}
-            >
-              {filteredMarkets.length === 0 ? (
-                <option value="">Sync Capital markets…</option>
-              ) : null}
-              {filteredMarkets.map((m) => (
-                <option key={m.epic} value={m.epic}>
-                  {m.label ?? `${m.code ?? "????"} · ${m.epic} — ${m.name}`}
-                </option>
-              ))}
-            </Select>
-            <p className="mt-1 text-[11px] text-white/35">
-              Sarakstā: kods · epic · nosaukums (piem. 0007 · GOLD — Gold)
-            </p>
-          </Field>
-
-          <Field label="Risk % / trade">
-            <Input
-              value={riskPercent}
-              onChange={(e) => setRiskPercent(e.target.value)}
-              className="font-mono"
-            />
-          </Field>
-        </div>
-
-        <div className="mt-4 rounded-md border border-white/[0.08] bg-white/[0.02] p-3">
-          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-white/45">
-            4. Izejas opcijas (visām stratēģijām)
-          </div>
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="space-y-2">
-              <Toggle
-                checked={tpEnabled}
-                onChange={setTpEnabled}
-                label={tpEnabled ? "TP ON" : "TP OFF"}
-              />
-              <Field label="TP ATR×">
-                <Input
-                  value={atrTpMult}
-                  disabled={!tpEnabled}
-                  onChange={(e) => setAtrTpMult(e.target.value)}
-                  className="font-mono"
-                />
-              </Field>
-              <p className="text-[11px] text-white/35">
-                Take profit pie ordera. OFF = tikai SL (+ BE/Trail).
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Toggle
-                checked={beEnabled}
-                onChange={setBeEnabled}
-                label={beEnabled ? "BE ON" : "BE OFF"}
-              />
-              <Field label="BE aktivācija (pips)">
-                <Input
-                  value={beActivationPips}
-                  disabled={!beEnabled}
-                  onChange={(e) => setBeActivationPips(e.target.value)}
-                  className="font-mono"
-                />
-              </Field>
-              <Field label="BE offset (pips)">
-                <Input
-                  value={beOffsetPips}
-                  disabled={!beEnabled}
-                  onChange={(e) => setBeOffsetPips(e.target.value)}
-                  className="font-mono"
-                />
-              </Field>
-              <p className="text-[11px] text-white/35">
-                Pēc X pips peļņas SL → entry + offset.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Toggle
-                checked={trailEnabled}
-                onChange={setTrailEnabled}
-                label={trailEnabled ? "Trail ON" : "Trail OFF"}
-              />
-              <Field label="Trail distance (pips)">
-                <Input
-                  value={trailPips}
-                  disabled={!trailEnabled}
-                  onChange={(e) => setTrailPips(e.target.value)}
-                  className="font-mono"
-                />
-              </Field>
-              <Field label="Trail start (pips)">
-                <Input
-                  value={trailActPips}
-                  disabled={!trailEnabled}
-                  onChange={(e) => setTrailActPips(e.target.value)}
-                  className="font-mono"
-                />
-              </Field>
-              <p className="text-[11px] text-white/35">
-                Auto SL seko cenai pēc start pips.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button variant="success" size="lg" loading={busy} onClick={() => void startAuto()}>
-            START auto trade
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" loading={syncing} onClick={() => void syncMarkets()}>
+            Sync Capital markets
           </Button>
-          {selected?.status === "RUNNING" || running.length > 0 ? (
-            <Button
-              variant="danger"
-              size="lg"
-              loading={!!busyId}
-              onClick={() =>
-                void stopStrategy(selectedStrategyId || running[0]!.id)
-              }
-            >
-              STOP
-            </Button>
-          ) : null}
-          {(strategies ?? []).length === 0 ? (
-            <Button variant="outline" loading={busy} onClick={() => void ensurePresets()}>
-              Create preset strategies
-            </Button>
-          ) : null}
+          <Input
+            value={marketFilter}
+            onChange={(e) => setMarketFilter(e.target.value)}
+            placeholder="Filtrs: GOLD / EUR / 0007"
+            className="max-w-xs font-mono text-xs"
+          />
+          {runningCount > 0 ? (
+            <Badge tone="profit">{runningCount} account bot(s) RUNNING</Badge>
+          ) : (
+            <Badge tone="neutral">Nav RUNNING</Badge>
+          )}
         </div>
-
-        {running.length > 0 ? (
-          <div className="mt-3 rounded-md border border-profit/30 bg-profit/10 px-3 py-2 text-xs text-white/80">
-            RUNNING: {running.map((s) => s.name).join(", ")} — gaida signālu, tad 1 BUY/SELL līdz
-            close.
-          </div>
-        ) : null}
       </Panel>
 
-      <Panel title="Pieejamās stratēģijas">
-        {isLoading ? (
+      {accountsLoading || strategiesLoading ? (
+        <Panel title="Konti">
           <div className="py-8 text-center text-sm text-white/35">Loading…</div>
-        ) : (
-          <div className="space-y-2">
-            {(strategies ?? []).map((s) => {
-              const symbols = (s.assignedSymbols as string[] | undefined) ?? [];
-              const cfg = (s.configurationJson ?? {}) as {
-                takeProfitEnabled?: boolean;
-                breakEvenEnabled?: boolean;
-                trailingEnabled?: boolean;
-              };
-              const deploy = (s.deploymentStateJson ?? {}) as {
-                lastTickAt?: string;
-                signal?: string;
-                skip?: string;
-                error?: string;
-                placed?: boolean;
-                symbol?: string;
-              };
-              return (
-                <div
-                  key={s.id}
-                  className={`flex flex-col gap-2 rounded-md border p-3 md:flex-row md:items-center md:justify-between ${
-                    selectedStrategyId === s.id
-                      ? "border-accent/50 bg-accent/10"
-                      : "border-white/[0.06] bg-white/[0.02]"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    className="text-left"
-                    onClick={() => setSelectedStrategyId(s.id)}
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-white">{s.name}</span>
-                      <Badge tone="accent">{s.mode}</Badge>
-                      <Badge
-                        tone={
-                          s.status === "RUNNING"
-                            ? "profit"
-                            : s.status === "ERROR"
-                              ? "loss"
-                              : "neutral"
-                        }
-                      >
-                        {s.status}
-                      </Badge>
-                      <Badge tone="neutral">1 trade</Badge>
-                      {cfg.takeProfitEnabled !== false ? (
-                        <Badge tone="profit">TP</Badge>
-                      ) : null}
-                      {cfg.breakEvenEnabled ? <Badge tone="accent">BE</Badge> : null}
-                      {cfg.trailingEnabled ? <Badge tone="accent">Trail</Badge> : null}
-                      {deploy.signal ? (
-                        <Badge tone="accent">sig {deploy.signal}</Badge>
-                      ) : null}
-                    </div>
-                    <div className="mt-1 font-mono text-[11px] text-white/40">
-                      {symbols.length ? symbols.join(", ") : "nav tirgus — Sync + Start"}
-                      {deploy.lastTickAt
-                        ? ` · tick ${new Date(deploy.lastTickAt).toLocaleTimeString()}`
-                        : ""}
-                      {deploy.skip ? ` · skip:${deploy.skip}` : ""}
-                      {deploy.error ? ` · err:${deploy.error}` : ""}
-                      {deploy.placed ? " · ORDER SENT" : ""}
-                    </div>
-                  </button>
-                  <div className="flex gap-1.5">
-                    <Button
-                      size="sm"
-                      variant={selectedStrategyId === s.id ? "primary" : "outline"}
-                      onClick={() => setSelectedStrategyId(s.id)}
-                    >
-                      Izvēlēties
-                    </Button>
-                    {s.status === "RUNNING" ? (
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        loading={busyId === s.id}
-                        onClick={() => void stopStrategy(s.id)}
-                      >
-                        Stop
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="success"
-                        loading={busy}
-                        onClick={() => {
-                          setSelectedStrategyId(s.id);
-                          void startAuto();
-                        }}
-                      >
-                        Start
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {(strategies ?? []).length === 0 ? (
-              <div className="py-6 text-center text-sm text-white/35">
-                Nav stratēģiju. Spied <strong>Create preset strategies</strong>.
-              </div>
-            ) : null}
+        </Panel>
+      ) : connectedAccounts.length === 0 ? (
+        <Panel title="Konti">
+          <div className="py-8 text-center text-sm text-white/35">
+            Nav CONNECTED konta — vispirms savieno Accounts lapā.
           </div>
-        )}
-      </Panel>
+        </Panel>
+      ) : (
+        connectedAccounts.map((account) => {
+          const draft = drafts[account.id] ?? defaultDraft(markets[0]?.epic ?? "");
+          const bound = strategyForAccount(strategies, account.id);
+          const running = bound?.status === "RUNNING";
+          const busy = busyAccountId === account.id;
+          const marketOptions =
+            filteredMarkets.length > 0
+              ? filteredMarkets
+              : markets.length > 0
+                ? markets
+                : [];
+
+          return (
+            <Panel
+              key={account.id}
+              title={`${account.name} · ${account.provider} · ${account.accountType}`}
+            >
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <Badge tone={running ? "profit" : "neutral"}>
+                  {running ? "RUNNING" : bound ? bound.status : "IDLE"}
+                </Badge>
+                {bound ? <Badge tone="accent">{bound.mode}</Badge> : null}
+                <Badge tone="neutral">exit {draft.exitVersion}</Badge>
+                {draft.tpEnabled ? <Badge tone="profit">TP</Badge> : null}
+                {draft.beEnabled ? <Badge tone="accent">BE</Badge> : null}
+                {draft.trailEnabled ? <Badge tone="accent">Trail</Badge> : null}
+                <span className="font-mono text-[11px] text-white/40">
+                  eq {Number(account.equity).toFixed(2)} {account.baseCurrency}
+                </span>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                <Field label="Stratēģija (šim kontam)">
+                  <Select
+                    value={draft.mode}
+                    onChange={(e) => patchDraft(account.id, { mode: e.target.value })}
+                  >
+                    {STRATEGY_MODES.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Exit versija">
+                  <Select
+                    value={draft.exitVersion}
+                    onChange={(e) =>
+                      applyExitVersion(account.id, e.target.value as ExitVersion)
+                    }
+                  >
+                    <option value="SCALP">SCALP — TP+BE+Trail (ciešs)</option>
+                    <option value="SWING">SWING — TP+BE</option>
+                    <option value="RUNNER">RUNNER — BE+Trail (bez TP)</option>
+                    <option value="CUSTOM">CUSTOM — manuāli</option>
+                  </Select>
+                </Field>
+
+                <Field label="Tirgus">
+                  <Select
+                    value={draft.marketEpic}
+                    onChange={(e) =>
+                      patchDraft(account.id, { marketEpic: e.target.value })
+                    }
+                  >
+                    {marketOptions.length === 0 ? (
+                      <option value="">Sync markets…</option>
+                    ) : null}
+                    {marketOptions.map((m) => (
+                      <option key={m.epic} value={m.epic}>
+                        {m.label ?? `${m.code ?? "????"} · ${m.epic} — ${m.name}`}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Risk %">
+                  <Input
+                    value={draft.riskPercent}
+                    onChange={(e) =>
+                      patchDraft(account.id, { riskPercent: e.target.value })
+                    }
+                    className="font-mono"
+                  />
+                </Field>
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <div className="space-y-2 rounded-md border border-white/[0.06] p-3">
+                  <Toggle
+                    checked={draft.tpEnabled}
+                    onChange={(v) =>
+                      patchDraft(account.id, {
+                        tpEnabled: v,
+                        exitVersion: "CUSTOM",
+                      })
+                    }
+                    label={draft.tpEnabled ? "TP ON" : "TP OFF"}
+                  />
+                  <Field label="TP ATR×">
+                    <Input
+                      value={draft.atrTpMult}
+                      disabled={!draft.tpEnabled}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          atrTpMult: e.target.value,
+                          exitVersion: "CUSTOM",
+                        })
+                      }
+                      className="font-mono"
+                    />
+                  </Field>
+                </div>
+
+                <div className="space-y-2 rounded-md border border-white/[0.06] p-3">
+                  <Toggle
+                    checked={draft.beEnabled}
+                    onChange={(v) =>
+                      patchDraft(account.id, {
+                        beEnabled: v,
+                        exitVersion: "CUSTOM",
+                      })
+                    }
+                    label={draft.beEnabled ? "BE ON" : "BE OFF"}
+                  />
+                  <Field label="BE aktivācija (pips)">
+                    <Input
+                      value={draft.beActivationPips}
+                      disabled={!draft.beEnabled}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          beActivationPips: e.target.value,
+                          exitVersion: "CUSTOM",
+                        })
+                      }
+                      className="font-mono"
+                    />
+                  </Field>
+                  <Field label="BE offset (pips)">
+                    <Input
+                      value={draft.beOffsetPips}
+                      disabled={!draft.beEnabled}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          beOffsetPips: e.target.value,
+                          exitVersion: "CUSTOM",
+                        })
+                      }
+                      className="font-mono"
+                    />
+                  </Field>
+                </div>
+
+                <div className="space-y-2 rounded-md border border-white/[0.06] p-3">
+                  <Toggle
+                    checked={draft.trailEnabled}
+                    onChange={(v) =>
+                      patchDraft(account.id, {
+                        trailEnabled: v,
+                        exitVersion: "CUSTOM",
+                      })
+                    }
+                    label={draft.trailEnabled ? "Trail ON" : "Trail OFF"}
+                  />
+                  <Field label="Trail distance (pips)">
+                    <Input
+                      value={draft.trailPips}
+                      disabled={!draft.trailEnabled}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          trailPips: e.target.value,
+                          exitVersion: "CUSTOM",
+                        })
+                      }
+                      className="font-mono"
+                    />
+                  </Field>
+                  <Field label="Trail start (pips)">
+                    <Input
+                      value={draft.trailActPips}
+                      disabled={!draft.trailEnabled}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          trailActPips: e.target.value,
+                          exitVersion: "CUSTOM",
+                        })
+                      }
+                      className="font-mono"
+                    />
+                  </Field>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {running ? (
+                  <Button
+                    variant="danger"
+                    loading={busy}
+                    onClick={() => void runAccount(account, "stop")}
+                  >
+                    STOP šo kontu
+                  </Button>
+                ) : (
+                  <Button
+                    variant="success"
+                    loading={busy}
+                    onClick={() => void runAccount(account, "start")}
+                  >
+                    START šo kontu
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  loading={busy}
+                  onClick={() => void runAccount(account, "save")}
+                >
+                  Saglabāt iestatījumus
+                </Button>
+              </div>
+
+              {bound?.deploymentStateJson ? (
+                <div className="mt-2 font-mono text-[11px] text-white/35">
+                  {(() => {
+                    const d = bound.deploymentStateJson as {
+                      lastTickAt?: string;
+                      signal?: string;
+                      skip?: string;
+                      error?: string;
+                      placed?: boolean;
+                      symbol?: string;
+                    };
+                    return [
+                      d.symbol ? `sym ${d.symbol}` : null,
+                      d.signal ? `sig ${d.signal}` : null,
+                      d.skip ? `skip:${d.skip}` : null,
+                      d.error ? `err:${d.error}` : null,
+                      d.placed ? "ORDER SENT" : null,
+                      d.lastTickAt
+                        ? `tick ${new Date(d.lastTickAt).toLocaleTimeString()}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
+                  })()}
+                </div>
+              ) : null}
+            </Panel>
+          );
+        })
+      )}
     </div>
   );
 }

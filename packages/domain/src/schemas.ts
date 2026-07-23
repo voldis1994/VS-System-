@@ -120,7 +120,6 @@ export const ClosePositionSchema = z.object({
   clientRequestId: z.string().uuid(),
 });
 
-/** Exit / protection options shared by all strategy modes (scalping, trend, …). */
 export const StrategyExitConfigSchema = z.object({
   takeProfitEnabled: z.boolean().default(true),
   atrTpMult: z.number().min(0.1).max(20).optional(),
@@ -133,7 +132,20 @@ export const StrategyExitConfigSchema = z.object({
   trailingEnabled: z.boolean().default(false),
   trailingDistancePips: z.number().min(1).max(2000).default(15),
   trailingActivationPips: z.number().min(0).max(2000).optional(),
+  /** Named exit preset: SCALP | SWING | RUNNER | CUSTOM */
+  exitVersion: z.string().max(32).optional(),
 });
+
+export const AccountStrategyRunSchema = z.object({
+  accountId: z.string().uuid(),
+  mode: z.nativeEnum(StrategyMode),
+  configuration: z.record(z.unknown()),
+  assignedSymbols: z.array(z.string()).min(1),
+  action: z.enum(["start", "stop", "save"]).default("start"),
+});
+
+export type StrategyExitConfig = z.infer<typeof StrategyExitConfigSchema>;
+export type AccountStrategyRunInput = z.infer<typeof AccountStrategyRunSchema>;
 
 export const CreateStrategySchema = z.object({
   name: z.string().min(2).max(120),
@@ -142,8 +154,6 @@ export const CreateStrategySchema = z.object({
   assignedAccountIds: z.array(z.string().uuid()).default([]),
   assignedSymbols: z.array(z.string()).default([]),
 });
-
-export type StrategyExitConfig = z.infer<typeof StrategyExitConfigSchema>;
 
 export const InviteUserSchema = z.object({
   email: z.string().email(),

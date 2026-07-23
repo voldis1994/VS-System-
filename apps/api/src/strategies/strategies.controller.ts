@@ -42,6 +42,21 @@ export class StrategiesController {
     );
   }
 
+  /** Per-account strategy + exit (parallel bots on different accounts). */
+  @Post("for-account")
+  @RequirePermissions("strategies:run")
+  forAccount(
+    @Body() body: unknown,
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.strategies.runForAccount(
+      req.user.organizationId,
+      req.user.userId,
+      body,
+      req.correlationId ?? "unknown",
+    );
+  }
+
   @Post(":id/validate")
   @RequirePermissions("strategies:manage")
   validate(
@@ -105,6 +120,7 @@ export class StrategiesController {
     @Body()
     body: {
       name?: string;
+      mode?: string;
       configuration?: Record<string, unknown>;
       assignedAccountIds?: string[];
       assignedSymbols?: string[];
