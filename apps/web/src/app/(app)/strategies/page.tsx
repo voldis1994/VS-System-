@@ -26,6 +26,10 @@ type AccountDraft = {
   mode: string;
   marketEpic: string;
   riskPercent: string;
+  /** FIXED lot size sent to broker (e.g. 0.01) */
+  lotSize: string;
+  /** LOT = fixed volume, RISK = risk% sizing */
+  sizeMode: "LOT" | "RISK";
   exitVersion: ExitVersion;
   tpEnabled: boolean;
   atrTpMult: string;
@@ -47,9 +51,14 @@ const STRATEGY_MODES = [
   StrategyMode.REVERSAL,
 ] as const;
 
+const LOT_PRESETS = ["0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1"] as const;
+
 const EXIT_PRESETS: Record<
   Exclude<ExitVersion, "CUSTOM">,
-  Omit<AccountDraft, "mode" | "marketEpic" | "riskPercent" | "exitVersion">
+  Omit<
+    AccountDraft,
+    "mode" | "marketEpic" | "riskPercent" | "lotSize" | "sizeMode" | "exitVersion"
+  >
 > = {
   SCALP: {
     tpEnabled: true,
@@ -88,6 +97,8 @@ function defaultDraft(epic = ""): AccountDraft {
     mode: StrategyMode.SCALPING,
     marketEpic: epic,
     riskPercent: "0.5",
+    lotSize: "0.01",
+    sizeMode: "LOT",
     exitVersion: "SCALP",
     ...EXIT_PRESETS.SCALP,
   };
@@ -99,10 +110,13 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
     ? c.exitVersion
     : "CUSTOM") as ExitVersion;
   const symbols = (s.assignedSymbols as string[] | undefined) ?? [];
+  const useRisk = Boolean(c.useRiskPercent);
   return {
     mode: s.mode,
     marketEpic: symbols[0] ?? fallbackEpic,
     riskPercent: String(typeof c.riskPercent === "number" ? c.riskPercent : 0.5),
+    lotSize: String(typeof c.volume === "string" && c.volume ? c.volume : "0.01"),
+    sizeMode: useRisk ? "RISK" : "LOT",
     exitVersion: ["SCALP", "SWING", "RUNNER", "CUSTOM"].includes(exitVersion)
       ? exitVersion
       : "CUSTOM",
@@ -126,11 +140,14 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
 }
 
 function buildConfiguration(d: AccountDraft) {
+  const lot = Number(d.lotSize);
+  const volume =
+    Number.isFinite(lot) && lot > 0 ? String(lot) : "0.01";
   return {
     timeframe: "15m",
     riskPercent: Number(d.riskPercent) || 0.5,
-    useRiskPercent: false,
-    volume: "0.01",
+    useRiskPercent: d.sizeMode === "RISK",
+    volume,
     oneTradeOnly: true,
     closeOnlyNoFlip: true,
     autoAggressive: true,
@@ -288,8 +305,12 @@ export default function StrategiesPage() {
         ]
           .filter(Boolean)
           .join("+");
+        const size =
+          draft.sizeMode === "LOT"
+            ? `${draft.lotSize} lot`
+            : `risk ${draft.riskPercent}%`;
         toast.success(
-          `${account.name}: ${draft.mode} · exit ${draft.exitVersion} (${exits || "SL"}) ON`,
+          `${account.name}: ${draft.mode} · ${size} · exit ${draft.exitVersion} (${exits || "SL"}) ON`,
           { duration: 7000 },
         );
       } else if (action === "stop") {
@@ -386,6 +407,11 @@ export default function StrategiesPage() {
                 </Badge>
                 {bound ? <Badge tone="accent">{bound.mode}</Badge> : null}
                 <Badge tone="neutral">exit {draft.exitVersion}</Badge>
+                <Badge tone="accent">
+                  {draft.sizeMode === "LOT"
+                    ? `${draft.lotSize} lot`
+                    : `risk ${draft.riskPercent}%`}
+                </Badge>
                 {draft.tpEnabled ? <Badge tone="profit">TP</Badge> : null}
                 {draft.beEnabled ? <Badge tone="accent">BE</Badge> : null}
                 {draft.trailEnabled ? <Badge tone="accent">Trail</Badge> : null}
@@ -394,7 +420,7 @@ export default function StrategiesPage() {
                 </span>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                 <Field label="Stratēģija (šim kontam)">
                   <Select
                     value={draft.mode}
@@ -440,15 +466,72 @@ export default function StrategiesPage() {
                   </Select>
                 </Field>
 
-                <Field label="Risk %">
-                  <Input
-                    value={draft.riskPercent}
+                <Field label="Izmērs (Lot / Risk %)">
+                  <Select
+                    value={draft.sizeMode}
                     onChange={(e) =>
-                      patchDraft(account.id, { riskPercent: e.target.value })
+                      patchDraft(account.id, {
+                        sizeMode: e.target.value as "LOT" | "RISK",
+                      })
                     }
-                    className="font-mono"
-                  />
+                  >
+                    <option value="LOT">Fixed lot size</option>
+                    <option value="RISK">Risk % no equity</option>
+                  </Select>
                 </Field>
+
+                {draft.sizeMode === "LOT" ? (
+                  <Field label="Lot size">
+                    <div className="flex gap-2">
+                      <Select
+                        value={
+                          LOT_PRESETS.includes(
+                            draft.lotSize as (typeof LOT_PRESETS)[number],
+                          )
+                            ? draft.lotSize
+                            : "custom"
+                        }
+                        onChange={(e) => {
+                          if (e.target.value !== "custom") {
+                            patchDraft(account.id, { lotSize: e.target.value });
+                          }
+                        }}
+                        className="font-mono"
+                      >
+                        {LOT_PRESETS.map((v) => (
+                          <option key={v} value={v}>
+                            {v} lot
+                          </option>
+                        ))}
+                        <option value="custom">Custom…</option>
+                      </Select>
+                      <Input
+                        value={draft.lotSize}
+                        onChange={(e) =>
+                          patchDraft(account.id, { lotSize: e.target.value })
+                        }
+                        placeholder="0.01"
+                        className="font-mono"
+                      />
+                    </div>
+                    <p className="mt-1 text-[11px] text-white/35">
+                      Mazam kontam (~$40) sāc ar 0.01. Capital min lot atkarīgs no instrumenta.
+                    </p>
+                  </Field>
+                ) : (
+                  <Field label="Risk % / trade">
+                    <Input
+                      value={draft.riskPercent}
+                      onChange={(e) =>
+                        patchDraft(account.id, { riskPercent: e.target.value })
+                      }
+                      className="font-mono"
+                    />
+                    <p className="mt-1 text-[11px] text-white/35">
+                      Uz maza equity risk% bieži dod 0 lot — tad labāk Fixed lot.
+                    </p>
+                  </Field>
+                )}
               </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-3">

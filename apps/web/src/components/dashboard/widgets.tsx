@@ -218,6 +218,9 @@ export function StrategyBotsWidget() {
             takeProfitEnabled?: boolean;
             breakEvenEnabled?: boolean;
             trailingEnabled?: boolean;
+            volume?: string;
+            useRiskPercent?: boolean;
+            riskPercent?: number;
           };
           const deploy = (s?.deploymentStateJson ?? {}) as {
             skip?: string;
