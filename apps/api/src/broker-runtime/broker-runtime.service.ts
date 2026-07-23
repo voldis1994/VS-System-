@@ -30,6 +30,7 @@ export class BrokerRuntimeService implements OnModuleInit {
   async connectAccount(account: {
     id: string;
     provider: string;
+    accountType?: string;
     leverage: number;
     balance: Prisma.Decimal | string;
     baseCurrency: string;
@@ -51,13 +52,21 @@ export class BrokerRuntimeService implements OnModuleInit {
     }
 
     const credentials = await this.loadCredentials(account.id);
+    // Account type is source of truth for Capital LIVE vs DEMO API host
+    const resolvedCredentials =
+      account.provider === "CAPITAL" && credentials
+        ? {
+            ...credentials,
+            demo: account.accountType === "LIVE" ? "false" : "true",
+          }
+        : credentials;
     const adapter = createBrokerAdapter(account.provider);
     await adapter.connect({
       accountId: account.id,
       leverage: account.leverage,
       startingBalance: String(account.balance),
       baseCurrency: account.baseCurrency,
-      credentials,
+      credentials: resolvedCredentials,
     });
 
     if (
@@ -155,7 +164,14 @@ export class BrokerRuntimeService implements OnModuleInit {
       return JSON.parse(plain) as Record<string, string>;
     } catch (err) {
       this.log.error(`Failed to decrypt credentials for ${accountId}`, err as Error);
-      throw new Error("Invalid broker credentials");
+      throw new Error(
+        "Could not decrypt stored broker credentials (check ENCRYPTION_KEY). Update API credentials and reconnect.",
+      );
     }
+  }
+
+  /** Drop in-memory adapter so next connect uses fresh credentials/session. */
+  forget(accountId: string): void {
+    this.adapters.delete(accountId);
   }
 }

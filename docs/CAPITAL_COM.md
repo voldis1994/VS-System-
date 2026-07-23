@@ -1,11 +1,29 @@
-## Capital.com LIVE (real money)
+## Capital.com LIVE
 
-1. Capital.com **REAL** kontā (ne Demo) ieslēdz 2FA
-2. Settings → API integrations → Generate key
-3. NEXUS: Verify PIN (augšā)
-4. Accounts → Capital.com → Mode **LIVE**
-5. Atzīmē riska checkbox
-6. Email + API key + password → Connect
-7. Terminal → treids iet uz reālo Capital.com
+### Ja error "api key" / auth failed
 
-CFD risks: lielākā daļa retail kontu zaudē naudu.
+1. **API Password ≠ login parole**  
+   Settings → API integrations → Generate key → tur ievadi **Custom API password**.  
+   NEXUS laukā "API Password" jābūt **šai** parolei (ne Capital.com login parolei).
+
+2. **Mode sakrīt ar key**  
+   - LIVE key (REAL konts) → Mode **LIVE**  
+   - Demo key → Mode **DEMO**  
+   NEXUS tagad vienmēr izmanto konta Mode (LIVE/DEMO), nevis veco credential flag.
+
+3. **Email** = Capital.com login email
+
+4. **API Key** ielīmē bez atstarpēm (NEXUS trim-o)
+
+5. 2FA ieslēgts; key nav expired / paused  
+   Ja neesi pārliecināts — ģenerē **jaunu** key (vecais tiek rādīts tikai 1x).
+
+6. Esošam ERROR kontam: **Fix API key** → Save & reconnect
+
+### Soļi
+
+1. Capital.com REAL → 2FA → jauns API key + custom password  
+2. NEXUS → Verify PIN  
+3. Accounts → Capital.com → LIVE → risk checkbox  
+4. Email + API Key + **API Password** → Connect  
+5. CONNECTED + LIVE ON

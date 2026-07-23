@@ -64,6 +64,22 @@ export class AccountsController {
     );
   }
 
+  @Post(":id/credentials")
+  @RequirePermissions("accounts:manage")
+  updateCredentials(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.accounts.updateCredentials(
+      req.user.organizationId,
+      req.user.userId,
+      id,
+      body,
+      req.correlationId ?? "unknown",
+    );
+  }
+
   @Post(":id/connect")
   @RequirePermissions("accounts:connect")
   connect(

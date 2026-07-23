@@ -67,6 +67,13 @@ export const CreateAccountSchema = z.object({
     .optional(),
 });
 
+export const UpdateAccountCredentialsSchema = z.object({
+  apiKey: z.string().min(8),
+  identifier: z.string().min(3),
+  password: z.string().min(4),
+  demo: z.boolean().optional(),
+});
+
 export const PlaceOrderSchema = z.object({
   clientRequestId: z.string().uuid(),
   accountIds: z.array(z.string().uuid()).min(1),
@@ -131,4 +138,7 @@ export const InviteUserSchema = z.object({
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 export type CreateAccountInput = z.infer<typeof CreateAccountSchema>;
+export type UpdateAccountCredentialsInput = z.infer<
+  typeof UpdateAccountCredentialsSchema
+>;
 export type PlaceOrderInput = z.infer<typeof PlaceOrderSchema>;

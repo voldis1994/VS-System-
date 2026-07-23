@@ -29,6 +29,10 @@ export default function AccountsPage() {
   const tradingPinVerified = useAuthStore((s) => s.tradingPinVerified);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [fixCredsId, setFixCredsId] = useState<string | null>(null);
+  const [fixApiKey, setFixApiKey] = useState("");
+  const [fixIdentifier, setFixIdentifier] = useState("");
+  const [fixPassword, setFixPassword] = useState("");
 
   async function createAccount() {
     if (provider === "CAPITAL" && !demo && !riskAccepted) {
@@ -37,6 +41,10 @@ export default function AccountsPage() {
     }
     if (provider === "CAPITAL" && !demo && !tradingPinVerified) {
       toast.error("Vispirms Verify PIN (augšējā josla)");
+      return;
+    }
+    if (provider === "CAPITAL" && (!apiKey.trim() || !identifier.trim() || !password)) {
+      toast.error("Aizpildi Email, API Key un API Password");
       return;
     }
 
@@ -50,9 +58,9 @@ export default function AccountsPage() {
             leverage: Number(leverage),
             startingBalance: "0",
             credentials: {
-              apiKey,
-              identifier,
-              password,
+              apiKey: apiKey.trim(),
+              identifier: identifier.trim(),
+              password: password.trim(),
               demo,
             },
           }
@@ -77,7 +85,6 @@ export default function AccountsPage() {
         token: token!,
         body: JSON.stringify(parsed.data),
       });
-      toast.success(provider === "CAPITAL" ? "Capital.com account created" : "Paper account created");
       await api(`/accounts/${account.id}/connect`, { method: "POST", token: token! });
       if (provider === "CAPITAL" && !demo) {
         await api(`/accounts/${account.id}/enable-live`, {
@@ -87,12 +94,21 @@ export default function AccountsPage() {
         });
         toast.success("Capital.com LIVE connected — real orders enabled");
       } else {
-        toast.success(demo ? "Capital.com DEMO connected" : "Connected");
+        toast.success(
+          provider === "CAPITAL"
+            ? demo
+              ? "Capital.com DEMO connected"
+              : "Connected"
+            : "Paper account created",
+        );
       }
+      setApiKey("");
+      setPassword("");
       void qc.invalidateQueries({ queryKey: ["accounts"] });
       void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Create failed");
+      const msg = e instanceof Error ? e.message : "Create failed";
+      toast.error(msg, { duration: 12000 });
     } finally {
       setCreating(false);
     }
@@ -106,7 +122,40 @@ export default function AccountsPage() {
       void qc.invalidateQueries({ queryKey: ["accounts"] });
       void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : `${label} failed`);
+      toast.error(e instanceof Error ? e.message : `${label} failed`, {
+        duration: 12000,
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function saveCredentials(id: string) {
+    if (!fixApiKey.trim() || !fixIdentifier.trim() || !fixPassword) {
+      toast.error("Aizpildi Email, API Key un API Password");
+      return;
+    }
+    setBusyId(id);
+    try {
+      await api(`/accounts/${id}/credentials`, {
+        method: "POST",
+        token: token!,
+        body: JSON.stringify({
+          apiKey: fixApiKey.trim(),
+          identifier: fixIdentifier.trim(),
+          password: fixPassword.trim(),
+        }),
+      });
+      toast.success("Credentials updated — connected");
+      setFixCredsId(null);
+      setFixApiKey("");
+      setFixPassword("");
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Credentials update failed", {
+        duration: 12000,
+      });
     } finally {
       setBusyId(null);
     }
@@ -175,8 +224,10 @@ export default function AccountsPage() {
             ) : (
               <>
                 <p className="text-[11px] leading-relaxed text-white/45">
-                  Capital.com → Settings → API integrations → Generate key uz{" "}
-                  <strong className="text-white/80">REAL</strong> konta (ne Demo).
+                  Capital.com → Settings → API integrations → Generate key.
+                  <br />
+                  <strong className="text-accent">API Password ≠ login parole</strong> — tā ir
+                  atsevišķa parole, ko ievadi key ģenerēšanas brīdī.
                 </p>
                 <Field label="Mode">
                   <Select
@@ -205,25 +256,30 @@ export default function AccountsPage() {
                     </span>
                   </label>
                 ) : null}
-                <Field label="Email / login">
+                <Field label="Email / login (Capital.com)">
                   <Input
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
                     placeholder="you@email.com"
+                    autoComplete="username"
                   />
                 </Field>
                 <Field label="API Key">
                   <Input
                     value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
+                    onChange={(e) => setApiKey(e.target.value.trim())}
                     className="font-mono"
+                    placeholder="paste API key"
+                    autoComplete="off"
                   />
                 </Field>
-                <Field label="API Password">
+                <Field label="API Password (custom, NOT login password)">
                   <Input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    placeholder="password created with the API key"
+                    autoComplete="new-password"
                   />
                 </Field>
               </>
@@ -235,7 +291,11 @@ export default function AccountsPage() {
               loading={creating}
               onClick={() => void createAccount()}
             >
-              {provider === "CAPITAL" ? "Connect Capital.com LIVE" : "Create paper account"}
+              {provider === "CAPITAL"
+                ? demo
+                  ? "Connect Capital.com DEMO"
+                  : "Connect Capital.com LIVE"
+                : "Create paper account"}
             </Button>
           </div>
         </Panel>
@@ -248,63 +308,129 @@ export default function AccountsPage() {
               {(accounts ?? []).map((a) => (
                 <div
                   key={a.id}
-                  className="flex flex-col gap-3 rounded-md border border-white/[0.06] bg-white/[0.02] p-3 md:flex-row md:items-center md:justify-between"
+                  className="rounded-md border border-white/[0.06] bg-white/[0.02] p-3"
                 >
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-white">{a.name}</span>
-                      <Badge tone="accent">{a.provider}</Badge>
-                      <Badge tone="neutral">{a.accountType}</Badge>
-                      <Badge tone={a.connectionStatus === "CONNECTED" ? "profit" : "neutral"}>
-                        {a.connectionStatus}
-                      </Badge>
-                      <Badge tone={a.liveTradingEnabled ? "loss" : "neutral"}>
-                        {a.liveTradingEnabled ? "LIVE ON" : "LIVE OFF"}
-                      </Badge>
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-white">{a.name}</span>
+                        <Badge tone="accent">{a.provider}</Badge>
+                        <Badge tone="neutral">{a.accountType}</Badge>
+                        <Badge
+                          tone={
+                            a.connectionStatus === "CONNECTED"
+                              ? "profit"
+                              : a.connectionStatus === "ERROR"
+                                ? "loss"
+                                : "neutral"
+                          }
+                        >
+                          {a.connectionStatus}
+                        </Badge>
+                        <Badge tone={a.liveTradingEnabled ? "loss" : "neutral"}>
+                          {a.liveTradingEnabled ? "LIVE ON" : "LIVE OFF"}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-3 font-mono text-xs text-white/50">
+                        <span>Eq {formatMoney(a.equity, a.baseCurrency)}</span>
+                        <span>Bal {formatMoney(a.balance, a.baseCurrency)}</span>
+                        <span className={pnlClass(a.floatingPnl)}>
+                          Fl {formatPnl(a.floatingPnl)}
+                        </span>
+                        <span>Lev 1:{a.leverage}</span>
+                      </div>
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-3 font-mono text-xs text-white/50">
-                      <span>Eq {formatMoney(a.equity, a.baseCurrency)}</span>
-                      <span>Bal {formatMoney(a.balance, a.baseCurrency)}</span>
-                      <span className={pnlClass(a.floatingPnl)}>Fl {formatPnl(a.floatingPnl)}</span>
-                      <span>Lev 1:{a.leverage}</span>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      size="sm"
-                      loading={busyId === a.id}
-                      onClick={() => void action(a.id, "connect", "Connected")}
-                    >
-                      Connect
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={busyId === a.id}
-                      onClick={() => void action(a.id, "sync", "Synced")}
-                    >
-                      Sync
-                    </Button>
-                    {a.status === "LOCKED" ? (
+                    <div className="flex flex-wrap gap-1.5">
                       <Button
                         size="sm"
-                        variant="outline"
                         loading={busyId === a.id}
-                        onClick={() => void action(a.id, "unlock", "Unlocked")}
+                        onClick={() => void action(a.id, "connect", "Connected")}
                       >
-                        Unlock
+                        Connect
                       </Button>
-                    ) : (
+                      {a.provider === "CAPITAL" ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            setFixCredsId((cur) => (cur === a.id ? null : a.id))
+                          }
+                        >
+                          Fix API key
+                        </Button>
+                      ) : null}
                       <Button
                         size="sm"
-                        variant="danger"
+                        variant="ghost"
                         loading={busyId === a.id}
-                        onClick={() => void action(a.id, "lock", "Locked")}
+                        onClick={() => void action(a.id, "sync", "Synced")}
                       >
-                        Lock
+                        Sync
                       </Button>
-                    )}
+                      {a.status === "LOCKED" ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          loading={busyId === a.id}
+                          onClick={() => void action(a.id, "unlock", "Unlocked")}
+                        >
+                          Unlock
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          loading={busyId === a.id}
+                          onClick={() => void action(a.id, "lock", "Locked")}
+                        >
+                          Lock
+                        </Button>
+                      )}
+                    </div>
                   </div>
+
+                  {fixCredsId === a.id ? (
+                    <div className="mt-3 space-y-2 border-t border-white/[0.06] pt-3">
+                      <p className="text-[11px] text-white/45">
+                        Jauns API key + <strong className="text-accent">custom API password</strong>{" "}
+                        (ne login parole). Mode: {a.accountType}.
+                      </p>
+                      <div className="grid gap-2 md:grid-cols-3">
+                        <Field label="Email">
+                          <Input
+                            value={fixIdentifier}
+                            onChange={(e) => setFixIdentifier(e.target.value)}
+                            placeholder="you@email.com"
+                            autoComplete="username"
+                          />
+                        </Field>
+                        <Field label="API Key">
+                          <Input
+                            value={fixApiKey}
+                            onChange={(e) => setFixApiKey(e.target.value.trim())}
+                            className="font-mono"
+                            autoComplete="off"
+                          />
+                        </Field>
+                        <Field label="API Password">
+                          <Input
+                            type="password"
+                            value={fixPassword}
+                            onChange={(e) => setFixPassword(e.target.value)}
+                            autoComplete="new-password"
+                          />
+                        </Field>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        loading={busyId === a.id}
+                        onClick={() => void saveCredentials(a.id)}
+                      >
+                        Save & reconnect
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               ))}
               {(accounts ?? []).length === 0 ? (

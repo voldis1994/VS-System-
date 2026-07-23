@@ -54,15 +54,15 @@ export class CapitalComAdapter implements BrokerAdapter {
     this.leverage = config.leverage ?? 100;
     this.currency = config.baseCurrency ?? "USD";
     const creds = config.credentials ?? {};
-    this.apiKey = creds.apiKey ?? "";
-    this.identifier = creds.identifier ?? "";
-    this.password = creds.password ?? "";
-    const demo = (creds.demo ?? "true") !== "false";
+    this.apiKey = String(creds.apiKey ?? "").trim();
+    this.identifier = String(creds.identifier ?? "").trim();
+    this.password = String(creds.password ?? "").trim();
+    const demo = this.resolveDemoFlag(creds.demo);
     this.baseUrl = demo ? DEMO_BASE : LIVE_BASE;
 
     if (!this.apiKey || !this.identifier || !this.password) {
       throw new Error(
-        "Capital.com requires apiKey, identifier (email), and password",
+        "Capital.com requires apiKey, identifier (email), and API password",
       );
     }
 
@@ -476,6 +476,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     const res = await fetch(`${this.baseUrl}/api/v1/session`, {
       method: "POST",
       headers: {
+        Accept: "application/json",
         "Content-Type": "application/json",
         "X-CAP-API-KEY": this.apiKey,
       },
@@ -487,15 +488,58 @@ export class CapitalComAdapter implements BrokerAdapter {
     });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`Capital.com session failed (${res.status}): ${text}`);
+      throw new Error(this.formatAuthError(res.status, text));
     }
     const cst = res.headers.get("CST");
     const securityToken = res.headers.get("X-SECURITY-TOKEN");
     if (!cst || !securityToken) {
-      throw new Error("Capital.com session missing CST / X-SECURITY-TOKEN headers");
+      throw new Error(
+        "Capital.com session OK, but CST / X-SECURITY-TOKEN headers missing. Check API key permissions.",
+      );
     }
     this.tokens = { cst, securityToken };
     this.lastHeartbeatAt = toUtcIso();
+  }
+
+  /** Accept boolean or string demo flags from encrypted credential payloads. */
+  private resolveDemoFlag(raw: unknown): boolean {
+    if (raw === undefined || raw === null || raw === "") return true;
+    if (typeof raw === "boolean") return raw;
+    const s = String(raw).toLowerCase().trim();
+    if (s === "false" || s === "0" || s === "live") return false;
+    return true;
+  }
+
+  private formatAuthError(status: number, body: string): string {
+    const env = this.baseUrl.includes("demo-api") ? "DEMO" : "LIVE";
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as {
+        errorCode?: string;
+        message?: string;
+        error?: { message?: string; code?: string };
+      };
+      detail =
+        parsed.errorCode ||
+        parsed.message ||
+        parsed.error?.message ||
+        parsed.error?.code ||
+        body;
+    } catch {
+      // keep raw
+    }
+
+    const tips = [
+      `Environment: ${env} (${this.baseUrl})`,
+      "1) API Password = Custom password created WITH the API key — NOT your Capital.com login password",
+      "2) Identifier = Capital.com email/login",
+      "3) API Key from Settings → API integrations (no spaces)",
+      "4) LIVE key only works in LIVE mode; Demo key only in DEMO",
+      "5) 2FA must be on; key must not be expired/paused",
+      "6) Generate a NEW key if unsure — keys are shown only once",
+    ].join(" | ");
+
+    return `Capital.com auth failed (${status}): ${detail}. ${tips}`;
   }
 
   private async ensureSession(): Promise<void> {

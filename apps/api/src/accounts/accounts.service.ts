@@ -3,6 +3,7 @@ import {
   CreateAccountSchema,
   DomainEventType,
   ErrorCodes,
+  UpdateAccountCredentialsSchema,
 } from "@nexus/domain";
 import { loadEnv } from "@nexus/config";
 import { PrismaService } from "../prisma/prisma.service";
@@ -110,10 +111,14 @@ export class AccountsService {
     if (input.credentials) {
       const payload = encryptSecret(
         JSON.stringify({
-          apiKey: input.credentials.apiKey,
-          identifier: input.credentials.identifier,
-          password: input.credentials.password,
-          demo: String(input.credentials.demo ?? true),
+          apiKey: input.credentials.apiKey.trim(),
+          identifier: input.credentials.identifier.trim(),
+          password: input.credentials.password.trim(),
+          demo: String(
+            input.accountType === "LIVE"
+              ? false
+              : (input.credentials.demo ?? true),
+          ),
         }),
         this.env.ENCRYPTION_KEY,
       );
@@ -442,6 +447,76 @@ export class AccountsService {
     });
 
     return updated;
+  }
+
+  async updateCredentials(
+    organizationId: string,
+    actorId: string,
+    id: string,
+    body: unknown,
+    correlationId: string,
+  ) {
+    const account = await this.get(organizationId, id);
+    if (account.provider !== "CAPITAL") {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Credentials update is only for Capital.com accounts",
+      );
+    }
+    const parsed = UpdateAccountCredentialsSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        parsed.error.issues[0]?.message ?? "Invalid credentials",
+      );
+    }
+
+    const demo =
+      account.accountType === "LIVE" ? false : (parsed.data.demo ?? true);
+
+    const payload = encryptSecret(
+      JSON.stringify({
+        apiKey: parsed.data.apiKey.trim(),
+        identifier: parsed.data.identifier.trim(),
+        password: parsed.data.password.trim(),
+        demo: String(demo),
+      }),
+      this.env.ENCRYPTION_KEY,
+    );
+
+    await this.brokers.disconnect(id).catch(() => undefined);
+    this.brokers.forget(id);
+
+    await this.prisma.brokerCredential.upsert({
+      where: { accountId: id },
+      create: {
+        accountId: id,
+        encryptedPayload: payload,
+        keyVersion: 1,
+      },
+      update: {
+        encryptedPayload: payload,
+        keyVersion: 1,
+      },
+    });
+
+    await this.prisma.tradingAccount.update({
+      where: { id },
+      data: { connectionStatus: "DISCONNECTED" },
+    });
+
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "ACCOUNT_CREDENTIALS_UPDATED",
+      resourceType: "TradingAccount",
+      resourceId: id,
+      after: { provider: account.provider, identifier: parsed.data.identifier.trim() },
+      correlationId,
+    });
+
+    // Reconnect immediately with new credentials
+    return this.connect(organizationId, actorId, id, correlationId);
   }
 
   async update(
