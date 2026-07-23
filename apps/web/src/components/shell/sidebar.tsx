@@ -1,0 +1,74 @@
+"use client";
+
+import { cn } from "@/lib/utils";
+import {
+  Activity,
+  Bell,
+  BookOpen,
+  Bot,
+  Copy,
+  FileBarChart2,
+  LayoutDashboard,
+  LineChart,
+  ScrollText,
+  Settings,
+  ShieldAlert,
+  Wallet,
+} from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const NAV = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/accounts", label: "Accounts", icon: Wallet },
+  { href: "/strategies", label: "Strategies", icon: Bot },
+  { href: "/copier", label: "Trade Copier", icon: Copy },
+  { href: "/terminal", label: "Market Analysis", icon: LineChart },
+  { href: "/automation", label: "Automation", icon: Activity },
+  { href: "/risk", label: "Risk Manager", icon: ShieldAlert },
+  { href: "/reports", label: "Reports", icon: FileBarChart2 },
+  { href: "/alerts", label: "Alerts", icon: Bell },
+  { href: "/journal", label: "Journal", icon: BookOpen },
+  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/audit", label: "Audit", icon: ScrollText },
+] as const;
+
+export function Sidebar() {
+  const pathname = usePathname();
+
+  return (
+    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-white/[0.06] bg-navy-950/90">
+      <div className="border-b border-white/[0.06] px-4 py-4">
+        <div className="font-sans text-lg font-bold tracking-tight text-white">
+          NEXUS <span className="text-accent">PRO</span>
+        </div>
+        <div className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-white/35">
+          Trading Platform
+        </div>
+      </div>
+      <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
+        {NAV.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href || pathname.startsWith(`${href}/`);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={cn(
+                "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
+                active
+                  ? "bg-accent-muted text-white"
+                  : "text-white/55 hover:bg-white/[0.04] hover:text-white",
+              )}
+            >
+              <Icon className={cn("h-4 w-4", active ? "text-accent-soft" : "text-white/40")} />
+              {label}
+            </Link>
+          );
+        })}
+      </nav>
+      <div className="border-t border-white/[0.06] p-3 text-[10px] text-white/30">
+        Paper mode default · Live gated
+      </div>
+    </aside>
+  );
+}
