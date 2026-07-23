@@ -160,33 +160,77 @@ export class CapitalComAdapter implements BrokerAdapter {
 
   async getAccountState(): Promise<BrokerAccountState> {
     await this.ensureSession();
-    const session = await this.request<{
-      accountInfo?: {
-        balance: number;
-        deposit: number;
-        profitLoss: number;
-        available: number;
-      };
-      currencyIsoCode?: string;
-    }>("GET", "/api/v1/session");
-    const info = session.accountInfo ?? {
-      balance: 0,
-      deposit: 0,
-      profitLoss: 0,
-      available: 0,
-    };
-    this.currency = session.currencyIsoCode ?? this.currency;
-    const used = Math.max(0, info.balance - info.available);
-    const marginLevel = used > 0 ? (info.balance / used) * 100 : 0;
+
+    // GET /session often has no accountInfo — balance lives on GET /accounts
+    const accountsRes = await this.request<{
+      accounts?: Array<{
+        accountId: string;
+        preferred?: boolean;
+        currency?: string;
+        balance?: {
+          balance?: number;
+          deposit?: number;
+          profitLoss?: number;
+          available?: number;
+        };
+      }>;
+    }>("GET", "/api/v1/accounts");
+
+    const list = accountsRes.accounts ?? [];
+    const selected =
+      list.find((a) => a.accountId === this.externalAccountId) ??
+      list.find((a) => a.preferred) ??
+      list[0];
+
+    let bal = selected?.balance;
+    let currency = selected?.currency ?? this.currency;
+
+    // Fallback: POST session body shape sometimes mirrored on GET /session
+    if (!bal || (bal.balance == null && bal.deposit == null)) {
+      try {
+        const session = await this.request<{
+          accountInfo?: {
+            balance?: number;
+            deposit?: number;
+            profitLoss?: number;
+            available?: number;
+          };
+          currencyIsoCode?: string;
+          currentAccountId?: string;
+        }>("GET", "/api/v1/session");
+        if (session.accountInfo) {
+          bal = session.accountInfo;
+        }
+        currency = session.currencyIsoCode ?? currency;
+        if (session.currentAccountId) {
+          this.externalAccountId = session.currentAccountId;
+        }
+      } catch {
+        // keep accounts data
+      }
+    }
+
+    if (selected?.accountId) {
+      this.externalAccountId = selected.accountId;
+    }
+    this.currency = currency || this.currency;
+
+    const equity = Number(bal?.balance ?? 0);
+    const deposit = Number(bal?.deposit ?? equity);
+    const available = Number(bal?.available ?? equity);
+    const profitLoss = Number(bal?.profitLoss ?? 0);
+    const used = Math.max(0, equity - available);
+    const marginLevel = used > 0 ? (equity / used) * 100 : 0;
+
     return {
-      balance: String(info.deposit ?? info.balance),
-      equity: String(info.balance),
-      freeMargin: String(info.available),
+      balance: String(deposit),
+      equity: String(equity),
+      freeMargin: String(available),
       usedMargin: String(used),
       marginLevel: marginLevel.toFixed(4),
       leverage: this.leverage,
       currency: this.currency,
-      floatingPnl: String(info.profitLoss),
+      floatingPnl: String(profitLoss),
     };
   }
 
