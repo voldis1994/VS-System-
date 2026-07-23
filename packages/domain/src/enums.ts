@@ -1,0 +1,160 @@
+export enum Role {
+  OWNER = "OWNER",
+  ADMIN = "ADMIN",
+  TRADER = "TRADER",
+  RISK_MANAGER = "RISK_MANAGER",
+  ANALYST = "ANALYST",
+  VIEWER = "VIEWER",
+}
+
+export enum OrganizationStatus {
+  ACTIVE = "ACTIVE",
+  SUSPENDED = "SUSPENDED",
+  DELETED = "DELETED",
+}
+
+export enum UserStatus {
+  ACTIVE = "ACTIVE",
+  DISABLED = "DISABLED",
+  PENDING = "PENDING",
+}
+
+export enum AccountStatus {
+  ACTIVE = "ACTIVE",
+  LOCKED = "LOCKED",
+  DISCONNECTED = "DISCONNECTED",
+  ARCHIVED = "ARCHIVED",
+}
+
+export enum ConnectionStatus {
+  CONNECTED = "CONNECTED",
+  DISCONNECTED = "DISCONNECTED",
+  CONNECTING = "CONNECTING",
+  ERROR = "ERROR",
+}
+
+export enum AccountType {
+  PAPER = "PAPER",
+  DEMO = "DEMO",
+  LIVE = "LIVE",
+  PROP = "PROP",
+}
+
+export enum PermissionMode {
+  FULL = "FULL",
+  READ_ONLY = "READ_ONLY",
+  CLOSE_ONLY = "CLOSE_ONLY",
+}
+
+export enum OrderType {
+  MARKET = "MARKET",
+  LIMIT = "LIMIT",
+  STOP = "STOP",
+  STOP_LIMIT = "STOP_LIMIT",
+}
+
+export enum OrderDirection {
+  BUY = "BUY",
+  SELL = "SELL",
+}
+
+export enum OrderStatus {
+  DRAFT = "DRAFT",
+  VALIDATING = "VALIDATING",
+  REJECTED = "REJECTED",
+  QUEUED = "QUEUED",
+  SENT = "SENT",
+  ACCEPTED = "ACCEPTED",
+  PARTIALLY_FILLED = "PARTIALLY_FILLED",
+  FILLED = "FILLED",
+  CANCEL_REQUESTED = "CANCEL_REQUESTED",
+  CANCELLED = "CANCELLED",
+  MODIFY_REQUESTED = "MODIFY_REQUESTED",
+  EXPIRED = "EXPIRED",
+  FAILED = "FAILED",
+}
+
+export enum OrderSource {
+  MANUAL = "MANUAL",
+  STRATEGY = "STRATEGY",
+  COPIER = "COPIER",
+  AUTOMATION = "AUTOMATION",
+  SYSTEM = "SYSTEM",
+}
+
+export enum PositionStatus {
+  OPEN = "OPEN",
+  CLOSING = "CLOSING",
+  PARTIALLY_CLOSED = "PARTIALLY_CLOSED",
+  CLOSED = "CLOSED",
+}
+
+export enum StrategyMode {
+  TREND = "TREND",
+  RANGE = "RANGE",
+  BREAKOUT = "BREAKOUT",
+  SCALPING = "SCALPING",
+  MOMENTUM = "MOMENTUM",
+  MEAN_REVERSION = "MEAN_REVERSION",
+  PULLBACK = "PULLBACK",
+  REVERSAL = "REVERSAL",
+  GRID = "GRID",
+  DCA = "DCA",
+  NEWS = "NEWS",
+  SESSION = "SESSION",
+  ARBITRAGE_SIM = "ARBITRAGE_SIM",
+  MARKET_MAKING_SIM = "MARKET_MAKING_SIM",
+  CUSTOM = "CUSTOM",
+}
+
+export enum StrategyStatus {
+  DRAFT = "DRAFT",
+  VALIDATING = "VALIDATING",
+  VALID = "VALID",
+  INVALID = "INVALID",
+  DEPLOYING = "DEPLOYING",
+  RUNNING = "RUNNING",
+  PAUSED = "PAUSED",
+  STOPPING = "STOPPING",
+  STOPPED = "STOPPED",
+  ERROR = "ERROR",
+  ARCHIVED = "ARCHIVED",
+}
+
+export enum TradingMode {
+  PAPER = "PAPER",
+  LIVE = "LIVE",
+}
+
+export enum AssetClass {
+  FOREX = "FOREX",
+  METALS = "METALS",
+  CRYPTO = "CRYPTO",
+  INDICES = "INDICES",
+  STOCKS = "STOCKS",
+  COMMODITIES = "COMMODITIES",
+}
+
+export enum Provider {
+  PAPER = "PAPER",
+  MT4 = "MT4",
+  MT5 = "MT5",
+  CTRADER = "CTRADER",
+  BINANCE = "BINANCE",
+  BYBIT = "BYBIT",
+}
+
+export enum ExecutionPolicy {
+  ALL_OR_NONE = "ALL_OR_NONE",
+  BEST_EFFORT = "BEST_EFFORT",
+  SEQUENTIAL = "SEQUENTIAL",
+  PARALLEL = "PARALLEL",
+}
+
+export enum VolumeMode {
+  FIXED_LOT = "FIXED_LOT",
+  RISK_PERCENT = "RISK_PERCENT",
+  BALANCE_RATIO = "BALANCE_RATIO",
+  EQUITY_RATIO = "EQUITY_RATIO",
+  MULTIPLIER = "MULTIPLIER",
+}

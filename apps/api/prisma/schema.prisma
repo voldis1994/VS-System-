@@ -1,0 +1,652 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  TRADER
+  RISK_MANAGER
+  ANALYST
+  VIEWER
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+  PENDING
+}
+
+enum AccountStatus {
+  ACTIVE
+  LOCKED
+  DISCONNECTED
+  ARCHIVED
+}
+
+enum ConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  CONNECTING
+  ERROR
+}
+
+enum AccountType {
+  PAPER
+  DEMO
+  LIVE
+  PROP
+}
+
+enum PermissionMode {
+  FULL
+  READ_ONLY
+  CLOSE_ONLY
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP
+  STOP_LIMIT
+}
+
+enum OrderDirection {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  DRAFT
+  VALIDATING
+  REJECTED
+  QUEUED
+  SENT
+  ACCEPTED
+  PARTIALLY_FILLED
+  FILLED
+  CANCEL_REQUESTED
+  CANCELLED
+  MODIFY_REQUESTED
+  EXPIRED
+  FAILED
+}
+
+enum OrderSource {
+  MANUAL
+  STRATEGY
+  COPIER
+  AUTOMATION
+  SYSTEM
+}
+
+enum PositionStatus {
+  OPEN
+  CLOSING
+  PARTIALLY_CLOSED
+  CLOSED
+}
+
+enum StrategyMode {
+  TREND
+  RANGE
+  BREAKOUT
+  SCALPING
+  MOMENTUM
+  MEAN_REVERSION
+  PULLBACK
+  REVERSAL
+  GRID
+  DCA
+  NEWS
+  SESSION
+  ARBITRAGE_SIM
+  MARKET_MAKING_SIM
+  CUSTOM
+}
+
+enum StrategyStatus {
+  DRAFT
+  VALIDATING
+  VALID
+  INVALID
+  DEPLOYING
+  RUNNING
+  PAUSED
+  STOPPING
+  STOPPED
+  ERROR
+  ARCHIVED
+}
+
+enum Provider {
+  PAPER
+  MT4
+  MT5
+  CTRADER
+  BINANCE
+  BYBIT
+}
+
+model Organization {
+  id              String             @id @default(uuid())
+  name            String
+  slug            String             @unique
+  status          OrganizationStatus @default(ACTIVE)
+  defaultCurrency String             @default("USD")
+  timezone        String             @default("UTC")
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  memberships     Membership[]
+  accounts        TradingAccount[]
+  symbols         Symbol[]
+  orders          Order[]
+  positions       Position[]
+  strategies      Strategy[]
+  riskProfiles    RiskProfile[]
+  copiers         CopierConfiguration[]
+  automations     Automation[]
+  alerts          Alert[]
+  auditLogs       AuditLog[]
+  domainEvents    DomainEventRecord[]
+  notifications   Notification[]
+  sessions        Session[]
+  journalEntries  JournalEntry[]
+  reports         ReportJob[]
+}
+
+model User {
+  id                       String     @id @default(uuid())
+  email                    String     @unique
+  passwordHash             String
+  firstName                String
+  lastName                 String
+  status                   UserStatus @default(ACTIVE)
+  twoFactorEnabled         Boolean    @default(false)
+  twoFactorSecretEncrypted String?
+  tradingPinHash           String
+  lastLoginAt              DateTime?
+  failedLoginAttempts      Int        @default(0)
+  lockedUntil              DateTime?
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @updatedAt
+
+  memberships    Membership[]
+  sessions       Session[]
+  auditLogs      AuditLog[]
+  notifications  Notification[]
+  journalEntries JournalEntry[]
+}
+
+model Membership {
+  id              String   @id @default(uuid())
+  organizationId  String
+  userId          String
+  role            Role
+  permissionsJson Json     @default("[]")
+  createdAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Session {
+  id               String    @id @default(uuid())
+  userId           String
+  organizationId   String
+  refreshTokenHash String
+  ipAddress        String?
+  userAgent        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user         User         @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([userId])
+  @@index([organizationId])
+}
+
+model TradingAccount {
+  id                String           @id @default(uuid())
+  organizationId    String
+  name              String
+  provider          Provider         @default(PAPER)
+  platform          String           @default("PAPER")
+  accountType       AccountType      @default(PAPER)
+  externalAccountId String?
+  serverName        String?
+  baseCurrency      String           @default("USD")
+  balance           Decimal          @db.Decimal(24, 8)
+  equity            Decimal          @db.Decimal(24, 8)
+  freeMargin        Decimal          @db.Decimal(24, 8)
+  usedMargin        Decimal          @db.Decimal(24, 8) @default(0)
+  marginLevel       Decimal          @db.Decimal(24, 8) @default(0)
+  leverage          Int              @default(100)
+  status            AccountStatus    @default(ACTIVE)
+  connectionStatus  ConnectionStatus @default(DISCONNECTED)
+  permissionMode    PermissionMode   @default(FULL)
+  isMaster          Boolean          @default(false)
+  liveTradingEnabled Boolean         @default(false)
+  dayStartEquity    Decimal          @db.Decimal(24, 8)
+  realizedPnlToday  Decimal          @db.Decimal(24, 8) @default(0)
+  peakEquity        Decimal          @db.Decimal(24, 8)
+  groupId           String?
+  riskProfileId     String?
+  brokerStateJson   Json?
+  archivedAt        DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  group        AccountGroup?     @relation(fields: [groupId], references: [id])
+  riskProfile  RiskProfile?      @relation(fields: [riskProfileId], references: [id])
+  credential   BrokerCredential?
+  snapshots    AccountSnapshot[]
+  orders       Order[]
+  positions    Position[]
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model BrokerCredential {
+  id               String   @id @default(uuid())
+  accountId        String   @unique
+  encryptedPayload String
+  keyVersion       Int      @default(1)
+  lastValidatedAt  DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  account TradingAccount @relation(fields: [accountId], references: [id])
+}
+
+model AccountSnapshot {
+  id           String   @id @default(uuid())
+  accountId    String
+  balance      Decimal  @db.Decimal(24, 8)
+  equity       Decimal  @db.Decimal(24, 8)
+  margin       Decimal  @db.Decimal(24, 8)
+  freeMargin   Decimal  @db.Decimal(24, 8)
+  floatingPnl  Decimal  @db.Decimal(24, 8)
+  drawdown     Decimal  @db.Decimal(24, 8)
+  timestamp    DateTime @default(now())
+
+  account TradingAccount @relation(fields: [accountId], references: [id])
+
+  @@index([accountId, timestamp])
+}
+
+model AccountGroup {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  color          String   @default("#7C3AED")
+  filtersJson    Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  accounts TradingAccount[]
+}
+
+model Symbol {
+  id               String   @id @default(uuid())
+  organizationId   String
+  provider         Provider @default(PAPER)
+  canonicalSymbol  String
+  brokerSymbol     String
+  assetClass       String
+  baseAsset        String
+  quoteAsset       String
+  pricePrecision   Int
+  volumePrecision  Int
+  minVolume        Decimal  @db.Decimal(24, 8)
+  maxVolume        Decimal  @db.Decimal(24, 8)
+  volumeStep       Decimal  @db.Decimal(24, 8)
+  tickSize         Decimal  @db.Decimal(24, 8)
+  tickValue        Decimal  @db.Decimal(24, 8)
+  contractSize     Decimal  @db.Decimal(24, 8)
+  minStopDistance  Decimal  @db.Decimal(24, 8)
+  tradingHoursJson Json
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, provider, brokerSymbol])
+  @@index([organizationId, canonicalSymbol])
+}
+
+model Order {
+  id                 String         @id @default(uuid())
+  organizationId     String
+  accountId          String
+  brokerOrderId      String?
+  clientRequestId    String
+  symbol             String
+  type               OrderType
+  direction          OrderDirection
+  requestedVolume    Decimal        @db.Decimal(24, 8)
+  filledVolume       Decimal        @db.Decimal(24, 8) @default(0)
+  requestedPrice     Decimal?       @db.Decimal(24, 8)
+  averageFillPrice   Decimal?       @db.Decimal(24, 8)
+  stopLoss           Decimal?       @db.Decimal(24, 8)
+  takeProfit         Decimal?       @db.Decimal(24, 8)
+  takeProfitsJson    Json?
+  trailingEnabled    Boolean        @default(false)
+  trailingDistance   Decimal?       @db.Decimal(24, 8)
+  breakEvenEnabled   Boolean        @default(false)
+  breakEvenActivation Decimal?      @db.Decimal(24, 8)
+  breakEvenOffset    Decimal?       @db.Decimal(24, 8)
+  status             OrderStatus
+  source             OrderSource    @default(MANUAL)
+  strategyId         String?
+  copierParentId     String?
+  automationId       String?
+  batchId            String?
+  rejectionCode      String?
+  rejectionMessage   String?
+  comment            String?
+  tagsJson           Json?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  account      TradingAccount @relation(fields: [accountId], references: [id])
+  positions    Position[]
+
+  @@unique([organizationId, clientRequestId, accountId])
+  @@index([organizationId, status])
+  @@index([accountId])
+}
+
+model Position {
+  id                   String          @id @default(uuid())
+  organizationId       String
+  accountId            String
+  orderId              String?
+  brokerPositionId     String?
+  symbol               String
+  direction            OrderDirection
+  volume               Decimal         @db.Decimal(24, 8)
+  averageEntry         Decimal         @db.Decimal(24, 8)
+  currentPrice         Decimal         @db.Decimal(24, 8)
+  stopLoss             Decimal?        @db.Decimal(24, 8)
+  takeProfit           Decimal?        @db.Decimal(24, 8)
+  unrealizedPnl        Decimal         @db.Decimal(24, 8) @default(0)
+  realizedPnl          Decimal         @db.Decimal(24, 8) @default(0)
+  commission           Decimal         @db.Decimal(24, 8) @default(0)
+  swap                 Decimal         @db.Decimal(24, 8) @default(0)
+  status               PositionStatus  @default(OPEN)
+  source               OrderSource     @default(MANUAL)
+  strategyId           String?
+  trailingEnabled      Boolean         @default(false)
+  trailingDistance     Decimal?        @db.Decimal(24, 8)
+  breakEvenEnabled     Boolean         @default(false)
+  breakEvenActivation  Decimal?        @db.Decimal(24, 8)
+  breakEvenOffset      Decimal?        @db.Decimal(24, 8)
+  breakEvenActivatedAt DateTime?
+  trailingActivatedAt  DateTime?
+  openedAt             DateTime        @default(now())
+  closedAt             DateTime?
+  updatedAt            DateTime        @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  account      TradingAccount @relation(fields: [accountId], references: [id])
+  order        Order?         @relation(fields: [orderId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([accountId, status])
+}
+
+model Strategy {
+  id                  String         @id @default(uuid())
+  organizationId      String
+  name                String
+  mode                StrategyMode
+  status              StrategyStatus @default(DRAFT)
+  version             Int            @default(1)
+  configurationJson   Json
+  validationStateJson Json?
+  deploymentStateJson Json?
+  assignedAccountIds  Json           @default("[]")
+  assignedSymbols     Json           @default("[]")
+  scheduleJson        Json?
+  createdById         String?
+  updatedById         String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, status])
+}
+
+model RiskProfile {
+  id                   String   @id @default(uuid())
+  organizationId       String
+  name                 String
+  scope                String   @default("ACCOUNT")
+  accountId            String?
+  groupId              String?
+  riskModel            String   @default("EQUITY_PERCENT")
+  limitsJson           Json
+  protectionRulesJson  Json
+  priority             Int      @default(100)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  accounts     TradingAccount[]
+
+  @@index([organizationId])
+}
+
+model CopierConfiguration {
+  id                 String   @id @default(uuid())
+  organizationId     String
+  name               String
+  masterAccountId    String
+  followersJson      Json
+  mappingJson        Json     @default("{}")
+  copyRulesJson      Json
+  executionRulesJson Json
+  riskLimitsJson     Json
+  status             String   @default("STOPPED")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+}
+
+model Automation {
+  id               String    @id @default(uuid())
+  organizationId   String
+  name             String
+  triggerJson      Json
+  conditionTreeJson Json
+  actionListJson   Json
+  cooldownSeconds  Int       @default(0)
+  scheduleJson     Json?
+  priority         Int       @default(100)
+  retryPolicyJson  Json?
+  failurePolicy    String    @default("NOTIFY")
+  enabled          Boolean   @default(false)
+  lastRunAt        DateTime?
+  nextEligibleAt   DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, enabled])
+}
+
+model Alert {
+  id              String    @id @default(uuid())
+  organizationId  String
+  name            String
+  type            String
+  scope           String
+  operator        String
+  threshold       String
+  cooldownSeconds Int       @default(300)
+  channelsJson    Json
+  enabled         Boolean   @default(true)
+  severity        String    @default("INFO")
+  lastTriggeredAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, enabled])
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  actorId        String?
+  action         String
+  resourceType   String
+  resourceId     String?
+  beforeJson     Json?
+  afterJson      Json?
+  sourceIp       String?
+  userAgent      String?
+  correlationId  String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  actor        User?        @relation(fields: [actorId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([correlationId])
+}
+
+model DomainEventRecord {
+  id             String   @id @default(uuid())
+  eventId        String   @unique
+  eventType      String
+  aggregateId    String
+  organizationId String
+  actorId        String?
+  timestamp      DateTime
+  correlationId  String
+  causationId    String?
+  payloadJson    Json
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, eventType, timestamp])
+  @@index([aggregateId])
+}
+
+model Notification {
+  id             String    @id @default(uuid())
+  organizationId String
+  userId         String?
+  title          String
+  body           String
+  severity       String    @default("INFO")
+  channel        String    @default("IN_APP")
+  readAt         DateTime?
+  metaJson       Json?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, userId, createdAt])
+}
+
+model JournalEntry {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  positionId     String?
+  setup          String?
+  thesis         String?
+  emotion        String?
+  executionScore Int?
+  mistake        String?
+  lesson         String?
+  tagsJson       Json?
+  rating         Int?
+  status         String   @default("DRAFT")
+  customFieldsJson Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, userId])
+}
+
+model ReportJob {
+  id             String    @id @default(uuid())
+  organizationId String
+  type           String
+  status         String    @default("QUEUED")
+  paramsJson     Json
+  resultPath     String?
+  errorMessage   String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, status])
+}
+
+model MarketTick {
+  id        String   @id @default(uuid())
+  symbol    String
+  bid       Decimal  @db.Decimal(24, 8)
+  ask       Decimal  @db.Decimal(24, 8)
+  mid       Decimal  @db.Decimal(24, 8)
+  spread    Decimal  @db.Decimal(24, 8)
+  timestamp DateTime @default(now())
+
+  @@index([symbol, timestamp])
+}
+
+model Candle {
+  id        String   @id @default(uuid())
+  symbol    String
+  timeframe String
+  open      Decimal  @db.Decimal(24, 8)
+  high      Decimal  @db.Decimal(24, 8)
+  low       Decimal  @db.Decimal(24, 8)
+  close     Decimal  @db.Decimal(24, 8)
+  volume    Decimal  @db.Decimal(24, 8) @default(0)
+  openTime  DateTime
+  closeTime DateTime
+
+  @@unique([symbol, timeframe, openTime])
+  @@index([symbol, timeframe, openTime])
+}

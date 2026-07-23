@@ -1,0 +1,29 @@
+{
+  "name": "nexus-pro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NEXUS PRO — multi-account trading management platform",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "dev:api": "turbo run dev --filter=@nexus/api",
+    "dev:web": "turbo run dev --filter=@nexus/web",
+    "dev:worker": "turbo run dev --filter=@nexus/worker",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @nexus/api prisma:generate",
+    "db:migrate": "pnpm --filter @nexus/api prisma:migrate",
+    "db:seed": "pnpm --filter @nexus/api prisma:seed",
+    "db:studio": "pnpm --filter @nexus/api prisma:studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

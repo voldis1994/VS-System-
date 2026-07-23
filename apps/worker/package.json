@@ -1,0 +1,25 @@
+{
+  "name": "@nexus/worker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@nexus/broker-adapters": "workspace:*",
+    "@nexus/config": "workspace:*",
+    "@nexus/domain": "workspace:*",
+    "@nexus/shared": "workspace:*",
+    "@prisma/client": "^6.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
