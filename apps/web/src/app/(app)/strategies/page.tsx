@@ -145,7 +145,7 @@ function buildConfiguration(d: AccountDraft) {
     trailingActivationPips: Number(d.trailActPips) || Number(d.trailPips) || 15,
     exitVersion: d.exitVersion,
     minAdx: 12,
-    cooldownSeconds: 45,
+    cooldownSeconds: 15,
   };
 }
 
@@ -549,13 +549,22 @@ export default function StrategiesPage() {
 
               <div className="mt-4 flex flex-wrap gap-2">
                 {running ? (
-                  <Button
-                    variant="danger"
-                    loading={busy}
-                    onClick={() => void runAccount(account, "stop")}
-                  >
-                    STOP šo kontu
-                  </Button>
+                  <>
+                    <Button
+                      variant="danger"
+                      loading={busy}
+                      onClick={() => void runAccount(account, "stop")}
+                    >
+                      STOP šo kontu
+                    </Button>
+                    <Button
+                      variant="success"
+                      loading={busy}
+                      onClick={() => void runAccount(account, "start")}
+                    >
+                      RESTART (reset + BE/Trail)
+                    </Button>
+                  </>
                 ) : (
                   <Button
                     variant="success"
@@ -575,28 +584,63 @@ export default function StrategiesPage() {
               </div>
 
               {bound?.deploymentStateJson ? (
-                <div className="mt-2 font-mono text-[11px] text-white/35">
+                <div className="mt-3 space-y-1">
                   {(() => {
                     const d = bound.deploymentStateJson as {
                       lastTickAt?: string;
                       signal?: string;
                       skip?: string;
+                      reason?: string;
                       error?: string;
                       placed?: boolean;
                       symbol?: string;
+                      openTrades?: number;
+                      cooldownSec?: number;
                     };
-                    return [
-                      d.symbol ? `sym ${d.symbol}` : null,
-                      d.signal ? `sig ${d.signal}` : null,
-                      d.skip ? `skip:${d.skip}` : null,
-                      d.error ? `err:${d.error}` : null,
-                      d.placed ? "ORDER SENT" : null,
-                      d.lastTickAt
-                        ? `tick ${new Date(d.lastTickAt).toLocaleTimeString()}`
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ");
+                    const skipHint =
+                      d.skip === "waiting_open_close"
+                        ? `Bot gaida: kontā jau ir ${d.openTrades ?? 1} atvērts treids. Jauns orderis tikai pēc close (vai aizver pozīciju Trade lapā).`
+                        : d.skip === "cooldown"
+                          ? `Cooldown ${d.cooldownSec ?? "…"}s — pēc tam mēģinās vēlreiz.`
+                          : d.skip === "same_signal"
+                            ? "Tas pats signāls jau apstrādāts — gaida jaunu signālu / close."
+                            : d.skip === "not_enough_candles"
+                              ? "Vēl nav pietiekami market data — uzgaidi vai Sync."
+                              : d.error
+                                ? `Order kļūda: ${d.error}`
+                                : d.placed
+                                  ? "Order nosūtīts."
+                                  : null;
+                    return (
+                      <>
+                        {skipHint ? (
+                          <div
+                            className={`rounded-md border px-3 py-2 text-xs ${
+                              d.skip === "waiting_open_close" || d.error
+                                ? "border-loss/40 bg-loss/10 text-white/85"
+                                : "border-white/10 bg-white/[0.03] text-white/70"
+                            }`}
+                          >
+                            {skipHint}
+                          </div>
+                        ) : null}
+                        <div className="font-mono text-[11px] text-white/35">
+                          {[
+                            d.symbol ? `sym ${d.symbol}` : null,
+                            d.signal ? `sig ${d.signal}` : null,
+                            d.skip ? `skip:${d.skip}` : null,
+                            d.reason ? `reason:${d.reason}` : null,
+                            d.error ? `err:${d.error}` : null,
+                            d.placed ? "ORDER SENT" : null,
+                            d.lastTickAt
+                              ? `tick ${new Date(d.lastTickAt).toLocaleTimeString()}`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </div>
+                      </>
+                    );
                   })()}
                 </div>
               ) : null}

@@ -61,6 +61,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: NotificationsService,
   ) {}
 
+  /** Clear cooldown / fingerprint so START can fire immediately. */
+  resetSignals(strategyId: string) {
+    for (const key of [...this.lastSignalAt.keys()]) {
+      if (key.startsWith(`${strategyId}:`)) {
+        this.lastSignalAt.delete(key);
+        this.lastFingerprint.delete(key);
+      }
+    }
+  }
+
   onModuleInit() {
     this.timer = setInterval(() => void this.tickAll(), 5000);
     this.log.log("VS System strategy runtime started (professional engine, 5s tick)");
@@ -163,7 +173,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       /** Use RISK_PERCENT sizing (often fails on tiny LIVE equity) */
       useRiskPercent?: boolean;
     };
-    const cooldownMs = (config.cooldownSeconds ?? 45) * 1000;
+    const cooldownMs = (config.cooldownSeconds ?? 15) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
     const atrStopMult = config.atrStopMult ?? 1.6;
@@ -212,13 +222,47 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
       const key = `${strategy.id}:${brokerSymbol}`;
+
+      // If account already has an open trade, explain that clearly (don't hide behind cooldown)
+      if (oneTradeOnly && signal !== "CLOSE" && signal !== "HOLD") {
+        let blockedByOpen = false;
+        let openCount = 0;
+        for (const accountId of accountIds) {
+          const openCountForAcc = await this.prisma.position.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+            },
+          });
+          if (openCountForAcc > 0) {
+            blockedByOpen = true;
+            openCount = openCountForAcc;
+            break;
+          }
+        }
+        if (blockedByOpen) {
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            signal,
+            skip: "waiting_open_close",
+            reason: "one_trade_only",
+            openTrades: openCount,
+          };
+          continue;
+        }
+      }
+
       const lastAt = this.lastSignalAt.get(key) ?? 0;
-      if (Date.now() - lastAt < cooldownMs) {
+      const cooldownLeftMs = cooldownMs - (Date.now() - lastAt);
+      if (cooldownLeftMs > 0) {
         lastStatus = {
           ...lastStatus,
           symbol: brokerSymbol,
           signal,
           skip: "cooldown",
+          cooldownSec: Math.ceil(cooldownLeftMs / 1000),
         };
         continue;
       }
@@ -257,34 +301,35 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
+      let acted = false;
+
       for (const accountId of accountIds) {
-        const openOnSymbol = await this.prisma.position.findMany({
+        // Account-wide open positions (not only this strategyId) — avoid double entries
+        const openOnAccount = await this.prisma.position.findMany({
           where: {
             organizationId: strategy.organizationId,
             accountId,
-            symbol: brokerSymbol,
-            strategyId: strategy.id,
             status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
           },
         });
-
-        const openAnywhere = oneTradeOnly
-          ? await this.prisma.position.findMany({
-              where: {
-                organizationId: strategy.organizationId,
-                accountId,
-                strategyId: strategy.id,
-                status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
-              },
-            })
-          : openOnSymbol;
+        const openOnSymbol = openOnAccount.filter(
+          (p) => p.symbol === brokerSymbol || p.symbol === symbol,
+        );
+        const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
 
         const hasOtherSymbolOpen =
           oneTradeOnly &&
-          openAnywhere.some((p) => p.symbol !== brokerSymbol);
+          openAnywhere.some(
+            (p) => p.symbol !== brokerSymbol && p.symbol !== symbol,
+          );
 
         if (hasOtherSymbolOpen) {
-          lastStatus = { ...lastStatus, skip: "other_symbol_open" };
+          lastStatus = {
+            ...lastStatus,
+            skip: "waiting_open_close",
+            reason: "other_symbol_open",
+            openTrades: openAnywhere.length,
+          };
           continue;
         }
 
@@ -297,9 +342,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               { clientRequestId: newId() },
               correlationId,
             );
+            acted = true;
           }
-          this.lastSignalAt.set(key, Date.now());
-          this.lastFingerprint.set(key, fingerprint);
           continue;
         }
 
@@ -315,18 +359,38 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               { clientRequestId: newId() },
               correlationId,
             );
+            acted = true;
           }
           if (closeOnlyNoFlip) {
-            this.lastSignalAt.set(key, Date.now());
-            this.lastFingerprint.set(key, fingerprint);
+            lastStatus = {
+              ...lastStatus,
+              skip: "closed_opposite_no_flip",
+              openTrades: openAnywhere.length,
+            };
             continue;
           }
         }
 
         const sameSide = openOnSymbol.filter((p) => p.direction === signal);
-        if (sameSide.length > 0) continue;
+        if (sameSide.length > 0) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "waiting_open_close",
+            reason: "same_side_open",
+            openTrades: openAnywhere.length,
+            positionId: sameSide[0]?.id,
+          };
+          continue;
+        }
 
         if (oneTradeOnly && openAnywhere.length > 0 && opposite.length === 0) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "waiting_open_close",
+            reason: "one_trade_only",
+            openTrades: openAnywhere.length,
+            positionId: openAnywhere[0]?.id,
+          };
           continue;
         }
 
@@ -442,11 +506,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               body: `${strategy.name} → ${brokerSymbol} ${signal} @ ${entry}`,
               severity: "SUCCESS",
             });
+            acted = true;
             lastStatus = {
               ...lastStatus,
               placed: true,
               direction: signal,
               entry,
+              skip: undefined,
+              reason: undefined,
             };
           } else {
             const msg = child?.message ?? "order not accepted";
@@ -474,8 +541,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      this.lastSignalAt.set(key, Date.now());
-      this.lastFingerprint.set(key, fingerprint);
+      // Only cooldown after a real action — waiting on open trade must not block forever
+      if (acted) {
+        this.lastSignalAt.set(key, Date.now());
+        this.lastFingerprint.set(key, fingerprint);
+      }
     }
 
     await this.prisma.strategy.update({

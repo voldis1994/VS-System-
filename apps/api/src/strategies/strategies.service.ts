@@ -12,6 +12,7 @@ import { EventBusService } from "../events/event-bus.service";
 import { AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { AppError } from "../common/errors/app-error";
+import { StrategyRuntimeService } from "./strategy-runtime.service";
 
 @Injectable()
 export class StrategiesService {
@@ -20,6 +21,7 @@ export class StrategiesService {
     private readonly events: EventBusService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly runtime: StrategyRuntimeService,
   ) {}
 
   list(organizationId: string) {
@@ -137,6 +139,19 @@ export class StrategiesService {
         updatedById: actorId,
       },
     });
+
+    this.runtime.resetSignals(id);
+
+    const accountIds = (updated.assignedAccountIds as string[]) ?? [];
+    for (const accountId of accountIds) {
+      await this.applyExitFlagsToOpenPositions(
+        organizationId,
+        accountId,
+        configurationJson,
+        updated.id,
+      );
+    }
+
     await this.events.publish({
       eventType: DomainEventType.StrategyStarted,
       aggregateId: id,
@@ -403,6 +418,13 @@ export class StrategiesService {
     }
 
     if (input.action === "save") {
+      this.runtime.resetSignals(strategy.id);
+      await this.applyExitFlagsToOpenPositions(
+        organizationId,
+        input.accountId,
+        configuration,
+        strategy.id,
+      );
       return { action: "save", accountId: input.accountId, strategy };
     }
 
@@ -415,6 +437,50 @@ export class StrategiesService {
     return { action: "start", accountId: input.accountId, strategy: started };
   }
 
+  /** Push BE/Trail flags from strategy config onto already-open account positions. */
+  private async applyExitFlagsToOpenPositions(
+    organizationId: string,
+    accountId: string,
+    config: Record<string, unknown>,
+    strategyId: string,
+  ) {
+    const open = await this.prisma.position.findMany({
+      where: {
+        organizationId,
+        accountId,
+        status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+      },
+    });
+    if (open.length === 0) return;
+
+    const beEnabled = Boolean(config.breakEvenEnabled);
+    const trailEnabled = Boolean(config.trailingEnabled);
+    const beActPips = Number(config.breakEvenActivationPips ?? 10);
+    const beOffPips = Number(config.breakEvenOffsetPips ?? 1);
+    const trailPips = Number(config.trailingDistancePips ?? 15);
+
+    for (const pos of open) {
+      const pip = exitPipSize(pos.symbol);
+      await this.prisma.position.update({
+        where: { id: pos.id },
+        data: {
+          strategyId: pos.strategyId ?? strategyId,
+          breakEvenEnabled: beEnabled,
+          breakEvenActivation: beEnabled
+            ? (pip * Math.max(beActPips, 0.01)).toFixed(8)
+            : null,
+          breakEvenOffset: beEnabled
+            ? (pip * Math.max(beOffPips, 0)).toFixed(8)
+            : null,
+          trailingEnabled: trailEnabled,
+          trailingDistance: trailEnabled
+            ? (pip * Math.max(trailPips, 0.01)).toFixed(8)
+            : null,
+        },
+      });
+    }
+  }
+
   private async require(organizationId: string, id: string) {
     const strategy = await this.prisma.strategy.findFirst({
       where: { id, organizationId },
@@ -424,6 +490,18 @@ export class StrategiesService {
     }
     return strategy;
   }
+}
+
+function exitPipSize(symbol: string): number {
+  const s = symbol.toUpperCase();
+  if (/^[A-Z]{6}$/.test(s)) {
+    return s.includes("JPY") ? 0.01 : 0.0001;
+  }
+  if (s === "GOLD" || s === "SILVER" || s.includes("GOLD") || s.includes("XAU")) {
+    return 0.1;
+  }
+  if (s.includes("BITCOIN") || s.includes("ETH") || s.includes("BTC")) return 1;
+  return 0.1;
 }
 
 function ema(values: number[], period: number): number {
