@@ -143,7 +143,7 @@ export function Topbar() {
               )}
             </div>
 
-            <div className="relative">
+            <div className="relative z-[60]">
               <Button
                 variant="ghost"
                 size="sm"
@@ -158,22 +158,26 @@ export function Topbar() {
                 ) : null}
               </Button>
               {showNotes ? (
-                <div className="absolute right-0 top-10 z-40 w-80 rounded-md border border-white/10 bg-navy-900 p-2 shadow-xl">
-                  <div className="mb-1 px-2 text-[10px] uppercase tracking-wider text-white/40">
+                <div className="absolute right-0 top-10 z-[70] w-96 max-w-[90vw] rounded-md border border-white/15 bg-navy-950 p-3 shadow-2xl ring-1 ring-black/40">
+                  <div className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/70">
                     Notifications
                   </div>
-                  <div className="max-h-64 space-y-1 overflow-y-auto">
-                    {(notifications ?? []).slice(0, 12).map((n) => (
+                  <div className="max-h-80 space-y-1.5 overflow-y-auto">
+                    {(notifications ?? []).slice(0, 20).map((n) => (
                       <div
                         key={n.id}
-                        className="rounded border border-white/[0.05] bg-white/[0.02] px-2 py-1.5"
+                        className="rounded-md border border-white/10 bg-navy-900 px-3 py-2"
                       >
-                        <div className="text-xs font-medium text-white">{n.title}</div>
-                        <div className="text-[11px] text-white/45">{n.body}</div>
+                        <div className="text-sm font-semibold text-white">{n.title}</div>
+                        <div className="mt-0.5 text-xs leading-relaxed text-white/80">
+                          {n.body}
+                        </div>
                       </div>
                     ))}
                     {(notifications ?? []).length === 0 ? (
-                      <div className="px-2 py-4 text-center text-xs text-white/35">No notifications</div>
+                      <div className="px-2 py-4 text-center text-xs text-white/50">
+                        No notifications
+                      </div>
                     ) : null}
                   </div>
                 </div>
@@ -186,7 +190,7 @@ export function Topbar() {
           </div>
         </div>
 
-        <div className="flex gap-0 overflow-x-auto border-t border-white/[0.04] bg-navy-900/40 px-2 py-1.5">
+        <div className="relative z-0 flex gap-0 overflow-x-auto border-t border-white/[0.04] bg-navy-900/40 px-2 py-1.5">
           {(ticks ?? []).map((t) => {
             const mid = Number(t.mid);
             return (
