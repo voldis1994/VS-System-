@@ -90,9 +90,10 @@ export default function SettingsPage() {
 
       <Panel title="Trading Mode Policy">
         <p className="text-sm text-white/55">
-          NEXUS PRO defaults to <span className="text-white">Paper Trading</span>. Live mode can be
-          requested only after PIN verification and remains blocked with an explicit warning until
-          broker live credentials and org policy allow it.
+          Paper accounts are always safe. <span className="text-white">Capital.com LIVE</span>{" "}
+          orders require: Verify PIN → Accounts → Capital.com Mode LIVE → Connect (LIVE ON) →
+          topbar toggle to <span className="text-white">LIVE</span>. Orders on LIVE accounts go
+          to real Capital.com money.
         </p>
       </Panel>
 
