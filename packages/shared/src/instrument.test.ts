@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { instrumentPipSize } from "./instrument";
+import {
+  formatInstrumentPrice,
+  instrumentPipSize,
+  minProtectiveDistance,
+} from "./instrument";
 
 describe("instrumentPipSize", () => {
   it("resolves Capital forex epics", () => {
@@ -16,5 +20,17 @@ describe("instrumentPipSize", () => {
   it("resolves plain pairs", () => {
     expect(instrumentPipSize("EURUSD")).toBe(0.0001);
     expect(instrumentPipSize("GBPJPY")).toBe(0.01);
+  });
+});
+
+describe("minProtectiveDistance", () => {
+  it("floors GOLD distances for Capital min-stop", () => {
+    expect(minProtectiveDistance("GOLD", 2300)).toBeGreaterThanOrEqual(1.2);
+  });
+});
+
+describe("formatInstrumentPrice", () => {
+  it("formats GOLD to 2dp", () => {
+    expect(formatInstrumentPrice("GOLD", 2345.678)).toBe("2345.68");
   });
 });
