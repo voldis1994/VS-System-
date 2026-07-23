@@ -22,10 +22,36 @@ export class AccountsService {
   ) {}
 
   async list(organizationId: string) {
-    return this.prisma.tradingAccount.findMany({
+    const accounts = await this.prisma.tradingAccount.findMany({
       where: { organizationId, archivedAt: null },
       orderBy: { createdAt: "asc" },
     });
+    // Refresh equity from live broker adapters when connected
+    const refreshed = [];
+    for (const account of accounts) {
+      const adapter = this.brokers.get(account.id);
+      if (adapter && account.connectionStatus === "CONNECTED") {
+        try {
+          const state = await adapter.getAccountState();
+          const updated = await this.prisma.tradingAccount.update({
+            where: { id: account.id },
+            data: {
+              balance: state.balance,
+              equity: state.equity,
+              freeMargin: state.freeMargin,
+              usedMargin: state.usedMargin,
+              marginLevel: state.marginLevel,
+            },
+          });
+          refreshed.push({ ...updated, floatingPnl: state.floatingPnl });
+          continue;
+        } catch {
+          // fall through
+        }
+      }
+      refreshed.push(account);
+    }
+    return refreshed;
   }
 
   async get(organizationId: string, id: string) {

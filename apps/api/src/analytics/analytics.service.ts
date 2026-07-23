@@ -50,8 +50,27 @@ export class AnalyticsService {
 
     return {
       totalEquity: totalEquity.toFixed(2),
+      equity: totalEquity.toFixed(2),
+      balance: accounts
+        .reduce((acc, a) => acc.plus(d(String(a.balance))), d(0))
+        .toFixed(2),
+      floatingPnl: openPositions
+        .reduce((acc, p) => acc.plus(d(String(p.unrealizedPnl))), d(0))
+        .toFixed(2),
+      realizedPnlToday: accounts
+        .reduce((acc, a) => acc.plus(d(String(a.realizedPnlToday))), d(0))
+        .toFixed(2),
       dailyPnl: dailyPnl.toFixed(2),
       openPositions: openPositions.length,
+      openOrders: await this.prisma.order.count({
+        where: {
+          organizationId,
+          status: { in: ["QUEUED", "SENT", "ACCEPTED", "PARTIALLY_FILLED"] },
+        },
+      }),
+      accountsConnected: accounts.filter((a) => a.connectionStatus === "CONNECTED")
+        .length,
+      accountsTotal: accounts.length,
       winRate: Number((winRate * 100).toFixed(2)),
       profitFactor: Number(profitFactor.toFixed(2)),
       grossProfit: grossProfit.toFixed(2),

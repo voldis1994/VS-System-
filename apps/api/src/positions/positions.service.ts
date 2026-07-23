@@ -59,7 +59,13 @@ export class PositionsService {
       },
       orderBy: { openedAt: "desc" },
       include: { account: { select: { id: true, name: true, provider: true } } },
-    });
+    }).then((rows) =>
+      rows.map((p) => ({
+        ...p,
+        openPrice: String(p.averageEntry),
+        averageEntry: String(p.averageEntry),
+      })),
+    );
   }
 
   async get(organizationId: string, id: string) {

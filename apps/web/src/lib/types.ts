@@ -91,6 +91,7 @@ export type Strategy = {
   status: string;
   configurationJson?: Record<string, unknown>;
   configuration?: Record<string, unknown>;
+  deploymentStateJson?: { lastTickAt?: string; mode?: string; startedAt?: string };
   assignedAccountIds?: string[];
   assignedSymbols?: string[];
   createdAt?: string;
