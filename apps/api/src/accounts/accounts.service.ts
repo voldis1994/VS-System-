@@ -67,7 +67,7 @@ export class AccountsService {
 
   async get(organizationId: string, id: string) {
     const account = await this.prisma.tradingAccount.findFirst({
-      where: { id, organizationId },
+      where: { id, organizationId, archivedAt: null },
     });
     if (!account) {
       throw new AppError(ErrorCodes.ACCOUNT_NOT_FOUND, "Account not found", HttpStatus.NOT_FOUND);
@@ -517,6 +517,78 @@ export class AccountsService {
 
     // Reconnect immediately with new credentials
     return this.connect(organizationId, actorId, id, correlationId);
+  }
+
+  async archive(
+    organizationId: string,
+    actorId: string,
+    id: string,
+    correlationId: string,
+  ) {
+    const account = await this.get(organizationId, id);
+    await this.brokers.disconnect(id).catch(() => undefined);
+    this.brokers.forget(id);
+
+    const updated = await this.prisma.tradingAccount.update({
+      where: { id },
+      data: {
+        archivedAt: new Date(),
+        connectionStatus: "DISCONNECTED",
+        liveTradingEnabled: false,
+        status: "ARCHIVED",
+      },
+    });
+
+    await this.events.publish({
+      eventType: DomainEventType.AccountArchived,
+      aggregateId: id,
+      organizationId,
+      actorId,
+      correlationId,
+      payload: { name: account.name, provider: account.provider },
+    });
+
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "ACCOUNT_ARCHIVED",
+      resourceType: "TradingAccount",
+      resourceId: id,
+      before: account,
+      after: updated,
+      correlationId,
+    });
+
+    await this.notifications.create({
+      organizationId,
+      userId: actorId,
+      title: "Account removed",
+      body: `${account.name} archived`,
+      severity: "INFO",
+    });
+
+    return updated;
+  }
+
+  async archiveErrorAccounts(
+    organizationId: string,
+    actorId: string,
+    correlationId: string,
+  ) {
+    const errored = await this.prisma.tradingAccount.findMany({
+      where: {
+        organizationId,
+        archivedAt: null,
+        connectionStatus: "ERROR",
+      },
+    });
+    const results = [];
+    for (const account of errored) {
+      results.push(
+        await this.archive(organizationId, actorId, account.id, correlationId),
+      );
+    }
+    return { archived: results.length, accounts: results };
   }
 
   async update(

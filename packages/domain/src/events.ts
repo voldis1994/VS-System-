@@ -7,6 +7,7 @@ export const DomainEventType = {
   AccountDisconnected: "AccountDisconnected",
   AccountLocked: "AccountLocked",
   AccountUnlocked: "AccountUnlocked",
+  AccountArchived: "AccountArchived",
 
   MarketTickReceived: "MarketTickReceived",
   MarketCandleClosed: "MarketCandleClosed",

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -42,10 +43,34 @@ export class AccountsController {
     );
   }
 
+  @Post("archive-errors")
+  @RequirePermissions("accounts:manage")
+  archiveErrors(@Req() req: Request & { user: AuthUser; correlationId?: string }) {
+    return this.accounts.archiveErrorAccounts(
+      req.user.organizationId,
+      req.user.userId,
+      req.correlationId ?? "unknown",
+    );
+  }
+
   @Get(":id")
   @RequirePermissions("accounts:read")
   get(@Param("id") id: string, @Req() req: Request & { user: AuthUser }) {
     return this.accounts.get(req.user.organizationId, id);
+  }
+
+  @Delete(":id")
+  @RequirePermissions("accounts:manage")
+  archive(
+    @Param("id") id: string,
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.accounts.archive(
+      req.user.organizationId,
+      req.user.userId,
+      id,
+      req.correlationId ?? "unknown",
+    );
   }
 
   @Patch(":id")

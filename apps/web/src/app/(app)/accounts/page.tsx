@@ -161,7 +161,39 @@ export default function AccountsPage() {
     }
   }
 
+  async function removeAccount(id: string) {
+    setBusyId(id);
+    try {
+      await api(`/accounts/${id}`, { method: "DELETE", token: token! });
+      toast.success("Account removed");
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function removeAllErrors() {
+    setCreating(true);
+    try {
+      const res = await api<{ archived: number }>("/accounts/archive-errors", {
+        method: "POST",
+        token: token!,
+      });
+      toast.success(`Removed ${res.archived} ERROR account(s)`);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Cleanup failed");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   const totalEquity = (accounts ?? []).reduce((s, a) => s + Number(a.equity || 0), 0);
+  const errorCount = (accounts ?? []).filter((a) => a.connectionStatus === "ERROR").length;
 
   return (
     <div className="space-y-4">
@@ -301,6 +333,21 @@ export default function AccountsPage() {
         </Panel>
 
         <Panel title="Trading Accounts" className="lg:col-span-2">
+          {errorCount > 0 ? (
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-[11px] text-white/45">
+                {errorCount} ERROR account(s) — vecie neveiksmīgie mēģinājumi
+              </p>
+              <Button
+                size="sm"
+                variant="danger"
+                loading={creating}
+                onClick={() => void removeAllErrors()}
+              >
+                Delete all ERROR
+              </Button>
+            </div>
+          ) : null}
           {isLoading ? (
             <div className="py-8 text-center text-sm text-white/35">Loading…</div>
           ) : (
@@ -341,13 +388,15 @@ export default function AccountsPage() {
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      <Button
-                        size="sm"
-                        loading={busyId === a.id}
-                        onClick={() => void action(a.id, "connect", "Connected")}
-                      >
-                        Connect
-                      </Button>
+                      {a.connectionStatus !== "CONNECTED" ? (
+                        <Button
+                          size="sm"
+                          loading={busyId === a.id}
+                          onClick={() => void action(a.id, "connect", "Connected")}
+                        >
+                          Connect
+                        </Button>
+                      ) : null}
                       {a.provider === "CAPITAL" ? (
                         <Button
                           size="sm"
@@ -379,13 +428,21 @@ export default function AccountsPage() {
                       ) : (
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="ghost"
                           loading={busyId === a.id}
                           onClick={() => void action(a.id, "lock", "Locked")}
                         >
                           Lock
                         </Button>
                       )}
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        loading={busyId === a.id}
+                        onClick={() => void removeAccount(a.id)}
+                      >
+                        Delete
+                      </Button>
                     </div>
                   </div>
 
