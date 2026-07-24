@@ -300,7 +300,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // Soft confluence: prefer when HTF agrees; still allow micro if score not opposing hard
+      // Soft HTF score for display only — direction is 100% from 1m×5 (no htf_conflict block)
       const scored = this.evaluatePro(
         strategy.mode as StrategyMode,
         ind,
@@ -308,28 +308,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         Math.max(minScore - 12, 36),
         sessionFilter,
       );
-      // Micro already filtered HOLD above — full Signal type for downstream CLOSE checks
       let signal: Signal = "BUY";
       if (micro.signal === "SELL") signal = "SELL";
-      // Block only if HTF is strongly opposite
-      if (
-        (signal === "BUY" && scored.bias === "bear" && scored.score >= minScore) ||
-        (signal === "SELL" && scored.bias === "bull" && scored.score >= minScore)
-      ) {
-        lastStatus = {
-          ...lastStatus,
-          signal: "HOLD",
-          skip: "htf_conflict",
-          score: scored.score,
-          bias: scored.bias,
-          candleSource,
-        };
-        continue;
-      }
 
       lastStatus = {
         ...lastStatus,
         score: Math.max(scored.score, 55),
+        htfBias: scored.bias,
         gate: micro.gate,
         bias: signal === "BUY" ? "bull" : "bear",
         candleSource,

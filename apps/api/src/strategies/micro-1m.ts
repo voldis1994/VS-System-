@@ -1,10 +1,11 @@
 export type CandleLike = { open: unknown; high?: unknown; low?: unknown; close: unknown };
 
 /**
- * BUY/SELL from the last 5 × 1m candles:
- * — ≥3 green + net close up → BUY
- * — ≥3 red + net close down → SELL
- * — otherwise HOLD (micro flat)
+ * BUY/SELL from the last 5 × 1m candles (symmetric):
+ * — ≥3 green → BUY (net not required if clear majority)
+ * — ≥3 red → SELL
+ * — if both sides somehow tie on count, net close breaks the tie
+ * — otherwise HOLD
  */
 export function evaluateMicro1mFive(candles: CandleLike[]): {
   signal: "BUY" | "SELL" | "HOLD";
@@ -41,7 +42,17 @@ export function evaluateMicro1mFive(candles: CandleLike[]): {
       ? ((last - first) / first) * 100
       : 0;
 
-  if (bull >= 3 && last > first) {
+  // Clear majority → trade that side (SELL equal footing with BUY)
+  if (bear >= 3 && bear > bull) {
+    return {
+      signal: "SELL",
+      bullCount: bull,
+      bearCount: bear,
+      netPct,
+      gate: "micro_1m5_sell",
+    };
+  }
+  if (bull >= 3 && bull > bear) {
     return {
       signal: "BUY",
       bullCount: bull,
@@ -50,14 +61,26 @@ export function evaluateMicro1mFive(candles: CandleLike[]): {
       gate: "micro_1m5_buy",
     };
   }
-  if (bear >= 3 && last < first) {
-    return {
-      signal: "SELL",
-      bullCount: bull,
-      bearCount: bear,
-      netPct,
-      gate: "micro_1m5_sell",
-    };
+  // Tie on candle color — use net close
+  if (bull === bear && bull >= 2) {
+    if (netPct < 0) {
+      return {
+        signal: "SELL",
+        bullCount: bull,
+        bearCount: bear,
+        netPct,
+        gate: "micro_1m5_sell",
+      };
+    }
+    if (netPct > 0) {
+      return {
+        signal: "BUY",
+        bullCount: bull,
+        bearCount: bear,
+        netPct,
+        gate: "micro_1m5_buy",
+      };
+    }
   }
   return {
     signal: "HOLD",
