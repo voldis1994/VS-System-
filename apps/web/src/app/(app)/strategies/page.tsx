@@ -563,7 +563,8 @@ export default function StrategiesPage() {
                     />
                   </Field>
                   <p className="text-[11px] text-zinc-500">
-                    BUY/SELL nosaka pēdējās 5×1m sveces. TP ATR× piem. 0.8–1.2 =
+                    Virzienu nosaka stratēģijas mode (TREND/SCALP/…) uz TF
+                    svecēm; 1m×5 tikai apstiprina entry. TP ATR× piem. 0.8–1.2 =
                     tuvāks mērķis.
                   </p>
                 </div>

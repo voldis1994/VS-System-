@@ -241,40 +241,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       takeProfitEnabled,
       breakEvenEnabled,
       trailingEnabled,
-      engine: "VS_MICRO_1M5",
+      engine: "VS_PRO_V2",
       minScore,
+      microConfirm: true,
     };
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
       const timeframe = config.timeframe ?? "15m";
 
-      // Direction from last 5 × 1m candles (user rule)
-      const m1 = await this.market.getCandles(brokerSymbol, "1m", 30);
-      const m1Source = this.market.getCandleSource(brokerSymbol, "1m");
-      const micro = evaluateMicro1mFive(m1);
-      lastStatus = {
-        ...lastStatus,
-        symbol: brokerSymbol,
-        micro: micro.signal,
-        microBull: micro.bullCount,
-        microBear: micro.bearCount,
-        microNetPct: Number(micro.netPct.toFixed(4)),
-        candleSource1m: m1Source,
-        gate: micro.gate,
-      };
-      if (micro.signal === "HOLD") {
-        lastStatus = {
-          ...lastStatus,
-          signal: "HOLD",
-          skip: "micro_flat",
-          score: 0,
-          bias: "flat",
-        };
-        continue;
-      }
-
-      // Higher TF candles for ATR / SL / TP sizing only
+      // Strategy TF candles → mode (TREND/SCALP/…) decides BUY/SELL
       const candles = await this.market.getCandles(
         brokerSymbol,
         timeframe,
@@ -284,6 +260,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       if (candles.length < 55) {
         lastStatus = {
           ...lastStatus,
+          symbol: brokerSymbol,
           skip: "not_enough_candles",
           candles: candles.length,
           candleSource,
@@ -294,31 +271,105 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       if (!ind || ind.atr <= 0) {
         lastStatus = {
           ...lastStatus,
+          symbol: brokerSymbol,
           skip: "indicators_failed",
           candleSource,
         };
         continue;
       }
 
-      // Soft HTF score for display only — direction is 100% from 1m×5 (no htf_conflict block)
       const scored = this.evaluatePro(
         strategy.mode as StrategyMode,
         ind,
         minAdx,
-        Math.max(minScore - 12, 36),
+        minScore,
         sessionFilter,
       );
-      let signal: Signal = "BUY";
-      if (micro.signal === "SELL") signal = "SELL";
+
+      // 1m×5 only confirms timing — does NOT replace strategy mode
+      const m1 = await this.market.getCandles(brokerSymbol, "1m", 30);
+      const m1Source = this.market.getCandleSource(brokerSymbol, "1m");
+      const micro = evaluateMicro1mFive(m1);
 
       lastStatus = {
         ...lastStatus,
-        score: Math.max(scored.score, 55),
-        htfBias: scored.bias,
-        gate: micro.gate,
-        bias: signal === "BUY" ? "bull" : "bear",
+        symbol: brokerSymbol,
+        mode: strategy.mode,
+        timeframe,
+        score: scored.score,
+        gate: scored.gate,
+        bias: scored.bias,
         candleSource,
+        micro: micro.signal,
+        microBull: micro.bullCount,
+        microBear: micro.bearCount,
+        microNetPct: Number(micro.netPct.toFixed(4)),
+        candleSource1m: m1Source,
+        strategySignal: scored.signal,
+      };
+
+      if (scored.signal === "HOLD") {
+        lastStatus = {
+          ...lastStatus,
+          signal: "HOLD",
+          skip: "quality_wait",
+        };
+        continue;
+      }
+
+      // Exhaust / soft close from strategy — close open, no micro needed
+      if (scored.signal === "CLOSE") {
+        lastStatus = { ...lastStatus, signal: "CLOSE", gate: scored.gate };
+        for (const accountId of accountIds) {
+          const openOnSymbol = await this.prisma.position.findMany({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+              OR: [{ symbol: brokerSymbol }, { symbol }],
+            },
+          });
+          for (const pos of openOnSymbol) {
+            await this.positions.close(
+              strategy.organizationId,
+              actorId,
+              pos.id,
+              { clientRequestId: newId() },
+              correlationId,
+            );
+          }
+        }
+        continue;
+      }
+
+      // Micro confirm: strategy BUY needs 1m not bearish; SELL needs 1m not bullish
+      // Flat 1m → wait for timing; opposite 1m → conflict (no entry)
+      if (micro.signal === "HOLD") {
+        lastStatus = {
+          ...lastStatus,
+          signal: scored.signal,
+          skip: "micro_timing",
+          reason: "wait_1m5_confirm",
+        };
+        continue;
+      }
+      if (micro.signal !== scored.signal) {
+        lastStatus = {
+          ...lastStatus,
+          signal: scored.signal,
+          skip: "micro_conflict",
+          reason: `strategy_${scored.signal}_micro_${micro.signal}`,
+          gate: "micro_conflict",
+        };
+        continue;
+      }
+
+      const signal: Signal = scored.signal;
+      lastStatus = {
+        ...lastStatus,
         signal,
+        gate: scored.gate,
+        microGate: micro.gate,
       };
 
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
@@ -695,7 +746,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       data: {
         deploymentStateJson: {
           lastTickAt: new Date().toISOString(),
-          engine: "VS_MICRO_1M5",
+          engine: "VS_PRO_V2",
           oneTradeOnly,
           ...lastStatus,
         },

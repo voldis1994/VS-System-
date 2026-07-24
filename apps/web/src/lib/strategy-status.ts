@@ -27,14 +27,23 @@ export type DeploymentState = {
 
 export function deploymentHint(d: DeploymentState): string | null {
   if (d.candleSource1m === "sim" || d.candleSource === "sim") {
-    return "1m sveces ir SIM — SELL/BUY var būt mākslīgi. Capital CONNECTED + restart.";
+    return "Sveces ir SIM — signāli var būt mākslīgi. Capital CONNECTED + restart.";
+  }
+  if (d.skip === "quality_wait" || d.gate === "score_low") {
+    return `Stratēģija gaida setup — score ${d.score ?? 0}/48+ (${d.gate ?? "…"}).`;
+  }
+  if (d.skip === "micro_timing") {
+    return `Stratēģija ${d.signal ?? "…"} — gaida 1m×5 apstiprinājumu (tagad flat 🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
+  }
+  if (d.skip === "micro_conflict" || d.gate === "micro_conflict") {
+    return `Konflikt: stratēģija ${d.signal ?? "?"} vs 1m ${d.micro ?? "?"} — neieiet pret micro.`;
   }
   if (d.skip === "micro_flat" || d.gate === "micro_flat") {
-    return `1m×5 flat (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}) — gaida ≥3 vienā krāsā.`;
+    return `1m×5 flat (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
   }
   if (d.gate === "micro_1m5_buy" || d.gate === "micro_1m5_sell") {
     const side = d.gate === "micro_1m5_buy" ? "BUY" : "SELL";
-    return `1m×5 → ${side} (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
+    return `1m×5 apstiprina ${side} (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
   }
   if (d.skip === "live_trading_off") {
     return "LIVE trading OFF — Accounts lapā ieslēdz LIVE ON.";
@@ -53,9 +62,6 @@ export function deploymentHint(d: DeploymentState): string | null {
   }
   if (d.skip === "same_signal") {
     return "Tas pats signāls jau apstrādāts — gaida jaunu / flat.";
-  }
-  if (d.skip === "quality_wait" || d.gate === "score_low") {
-    return `Gaida setup — score ${d.score ?? 0}/48+.`;
   }
   if (d.gate === "session_off" || d.skip === "session_off") {
     return "Ārpus London/NY sesijas.";
@@ -99,6 +105,8 @@ export function deploymentTone(
   if (
     d.skip === "quality_wait" ||
     d.gate === "score_low" ||
+    d.skip === "micro_timing" ||
+    d.skip === "micro_conflict" ||
     d.skip === "cooldown" ||
     d.signal === "HOLD"
   ) {
