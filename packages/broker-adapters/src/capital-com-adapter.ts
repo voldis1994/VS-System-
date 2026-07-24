@@ -698,7 +698,14 @@ export class CapitalComAdapter implements BrokerAdapter {
       direction: request.direction,
       size: Number(request.volume),
     };
-    if (request.stopLoss) body.stopLevel = Number(request.stopLoss);
+    // Native Capital trailing follows BUY↑ and SELL↓ — prefer over static stopLevel
+    const trailDist = request.stopDistance != null ? Number(request.stopDistance) : NaN;
+    if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
+      body.trailingStop = true;
+      body.stopDistance = trailDist;
+    } else if (request.stopLoss) {
+      body.stopLevel = Number(request.stopLoss);
+    }
     if (request.takeProfit) body.profitLevel = Number(request.takeProfit);
 
     const res = await this.request<{ dealReference: string }>(
@@ -789,8 +796,16 @@ export class CapitalComAdapter implements BrokerAdapter {
   async modifyPosition(request: BrokerModifyPositionRequest): Promise<BrokerPosition> {
     await this.ensureSession();
     const body: Record<string, unknown> = {};
-    if (request.stopLoss !== undefined && request.stopLoss !== null) {
+    const trailDist =
+      request.stopDistance != null ? Number(request.stopDistance) : NaN;
+    if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
+      // Native trail — do not also send stopLevel (Capital rejects the combo)
+      body.trailingStop = true;
+      body.stopDistance = trailDist;
+    } else if (request.stopLoss !== undefined && request.stopLoss !== null) {
       body.stopLevel = Number(request.stopLoss);
+      // Switching back to fixed SL clears broker trailing
+      body.trailingStop = false;
     }
     if (request.takeProfit !== undefined && request.takeProfit !== null) {
       body.profitLevel = Number(request.takeProfit);

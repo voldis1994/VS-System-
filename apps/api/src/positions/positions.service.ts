@@ -194,8 +194,16 @@ export class PositionsService {
 
     const brokerPos = await adapter.modifyPosition({
       brokerPositionId: position.brokerPositionId,
-      stopLoss: input.stopLoss === undefined ? undefined : input.stopLoss,
+      stopLoss:
+        input.trailingStop === true
+          ? undefined
+          : input.stopLoss === undefined
+            ? undefined
+            : input.stopLoss,
       takeProfit: input.takeProfit === undefined ? undefined : input.takeProfit,
+      trailingStop: input.trailingStop === true ? true : undefined,
+      stopDistance:
+        input.trailingStop === true ? input.stopDistance : undefined,
     });
 
     const nextSl =
@@ -619,6 +627,67 @@ export class PositionsService {
 
           if (!armed) continue;
 
+          const account = await this.prisma.tradingAccount.findFirst({
+            where: { id: position.accountId },
+            select: { provider: true },
+          });
+          const capitalNative = account?.provider === "CAPITAL";
+
+          // Capital native trailing follows BUY↑ / SELL↓ — arm once, don't fight with stopLevel
+          if (capitalNative) {
+            if (!fresh.trailingActivatedAt) {
+              let nativeOk = false;
+              try {
+                await this.modifySlTp(
+                  position.organizationId,
+                  "system",
+                  position.id,
+                  {
+                    trailingStop: true,
+                    stopDistance: distance,
+                    takeProfit:
+                      fresh.takeProfit != null
+                        ? String(fresh.takeProfit)
+                        : undefined,
+                  },
+                  correlationId,
+                  { silent: false },
+                );
+                await this.prisma.position.update({
+                  where: { id: position.id },
+                  data: {
+                    trailingEnabled: true,
+                    trailingDistance: distance,
+                    trailingActivatedAt: new Date(),
+                    currentPrice: mark,
+                  },
+                });
+                await this.events.publish({
+                  eventType: DomainEventType.TrailingStopActivated,
+                  aggregateId: position.id,
+                  organizationId: position.organizationId,
+                  actorId: "system",
+                  correlationId,
+                  payload: { stopLoss: "native", distance, direction: dir },
+                });
+                await this.notifications.create({
+                  organizationId: position.organizationId,
+                  userId: null,
+                  title: "Trailing ON",
+                  body: `${position.symbol} ${dir} Capital trail · dist ${distance}`,
+                  severity: "SUCCESS",
+                });
+                nativeOk = true;
+              } catch {
+                // fall through to software trail below
+              }
+              if (nativeOk) continue;
+            } else {
+              // Already on Capital native trail — don't overwrite with stopLevel
+              continue;
+            }
+          }
+
           const candidate = trailingStopCandidate(
             dir,
             String(mark),
@@ -654,13 +723,13 @@ export class PositionsService {
               organizationId: position.organizationId,
               actorId: "system",
               correlationId,
-              payload: { stopLoss: candidate, distance },
+              payload: { stopLoss: candidate, distance, direction: dir },
             });
             await this.notifications.create({
               organizationId: position.organizationId,
               userId: null,
               title: "Trailing ON",
-              body: `${position.symbol} trail SL → ${candidate}`,
+              body: `${position.symbol} ${dir} trail SL → ${candidate}`,
               severity: "SUCCESS",
             });
           } else {
@@ -670,7 +739,7 @@ export class PositionsService {
               organizationId: position.organizationId,
               actorId: "system",
               correlationId,
-              payload: { stopLoss: candidate, distance },
+              payload: { stopLoss: candidate, distance, direction: dir },
             });
           }
         }

@@ -77,6 +77,11 @@ export function trailingStopCandidate(
     direction === "BUY" ? price.minus(distance) : price.plus(distance);
   if (!existingSl) return candidate.toFixed(8);
   const existing = d(existingSl);
+  // Wrong-side SL (e.g. BUY-style below on a SELL) must be replaced — otherwise
+  // DecimalMin/Max keeps the stuck level and trail never "changes direction".
+  const wrongSide =
+    direction === "BUY" ? existing.gte(price) : existing.lte(price);
+  if (wrongSide) return candidate.toFixed(8);
   if (direction === "BUY") {
     return DecimalMax(existing, candidate).toFixed(8);
   }

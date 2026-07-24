@@ -308,6 +308,10 @@ export class OrdersService {
       price: input.entryPrice,
       stopLoss: input.stopLoss,
       takeProfit: input.takeProfit,
+      trailingStop: Boolean(input.trailingEnabled),
+      stopDistance: input.trailingEnabled
+        ? input.trailingDistance
+        : undefined,
       comment: input.comment,
     });
 

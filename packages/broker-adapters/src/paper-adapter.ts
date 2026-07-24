@@ -326,7 +326,18 @@ export class PaperBrokerAdapter implements BrokerAdapter {
   async modifyPosition(request: BrokerModifyPositionRequest): Promise<BrokerPosition> {
     const position = this.requirePosition(request.brokerPositionId);
     const symbol = this.requireSymbol(position.symbol);
-    if (request.stopLoss !== undefined) {
+    const trailDist =
+      request.stopDistance != null ? Number(request.stopDistance) : NaN;
+    if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
+      const mark = d(position.currentPrice);
+      const dist = d(String(trailDist));
+      const sl =
+        position.direction === OrderDirection.BUY
+          ? mark.minus(dist)
+          : mark.plus(dist);
+      this.validateStopSide(position.direction, sl, mark, symbol);
+      position.stopLoss = sl.toFixed(symbol.pricePrecision ?? 5);
+    } else if (request.stopLoss !== undefined) {
       if (request.stopLoss !== null) {
         this.validateStopSide(position.direction, d(request.stopLoss), d(position.currentPrice), symbol);
       }
@@ -454,6 +465,18 @@ export class PaperBrokerAdapter implements BrokerAdapter {
 
     if (request.stopLoss) {
       this.validateStopSide(request.direction, d(request.stopLoss), roundedFill, symbol);
+    } else if (
+      request.trailingStop &&
+      request.stopDistance &&
+      Number(request.stopDistance) > 0
+    ) {
+      const dist = d(request.stopDistance);
+      const sl =
+        request.direction === OrderDirection.BUY
+          ? roundedFill.minus(dist)
+          : roundedFill.plus(dist);
+      request = { ...request, stopLoss: sl.toFixed(symbol.pricePrecision) };
+      this.validateStopSide(request.direction, sl, roundedFill, symbol);
     }
     if (request.takeProfit) {
       this.validateTpSide(request.direction, d(request.takeProfit), roundedFill, symbol);

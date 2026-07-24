@@ -518,15 +518,21 @@ export class StrategiesService {
           takeProfit = null;
         }
 
-        if (stopLoss || takeProfit !== undefined) {
+        if (stopLoss || takeProfit !== undefined || trailEnabled) {
           await this.positions.modifySlTp(
             organizationId,
             "system",
             pos.id,
-            {
-              stopLoss: stopLoss ?? undefined,
-              takeProfit,
-            },
+            trailEnabled
+              ? {
+                  trailingStop: true,
+                  stopDistance: trail.toFixed(8),
+                  takeProfit: tpEnabled ? takeProfit : null,
+                }
+              : {
+                  stopLoss: stopLoss ?? undefined,
+                  takeProfit,
+                },
             `apply-exit-${strategyId}`,
             { silent: true },
           );

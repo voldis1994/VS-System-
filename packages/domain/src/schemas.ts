@@ -109,6 +109,9 @@ export const PlaceOrderSchema = z.object({
 export const ModifySlTpSchema = z.object({
   stopLoss: z.string().regex(/^\d+(\.\d{1,8})?$/).nullable().optional(),
   takeProfit: z.string().regex(/^\d+(\.\d{1,8})?$/).nullable().optional(),
+  /** Capital native trailing (follows BUY and SELL) */
+  trailingStop: z.boolean().optional(),
+  stopDistance: z.string().regex(/^\d+(\.\d{1,8})?$/).optional(),
 });
 
 export const PartialCloseSchema = z.object({

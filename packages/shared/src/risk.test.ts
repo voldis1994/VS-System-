@@ -33,8 +33,30 @@ describe("risk formulas", () => {
   it("trailing only moves in profit direction", () => {
     const buy = trailingStopCandidate("BUY", "1.11000", "0.00100", "1.10500");
     expect(buy).toBe("1.10900000");
-    const noBack = trailingStopCandidate("BUY", "1.10800", "0.00100", "1.10900");
+    // Price still above SL — do not loosen
+    const noBack = trailingStopCandidate("BUY", "1.10950", "0.00100", "1.10900");
     expect(noBack).toBe("1.10900000");
+  });
+
+  it("SELL trailing moves SL down with price (never up)", () => {
+    const sell = trailingStopCandidate("SELL", "1.09000", "0.00100", "1.09500");
+    expect(sell).toBe("1.09100000");
+    // Price still below SL — do not loosen
+    const noBack = trailingStopCandidate("SELL", "1.09050", "0.00100", "1.09100");
+    expect(noBack).toBe("1.09100000");
+  });
+
+  it("replaces wrong-side SL so trail can flip direction", () => {
+    // SELL position but SL was stuck below price (BUY-style)
+    const fixed = trailingStopCandidate("SELL", "2340.00", "1.50", "2330.00");
+    expect(Number(fixed)).toBeGreaterThan(2340);
+    // BUY position but SL stuck above price
+    const fixedBuy = trailingStopCandidate("BUY", "2340.00", "1.50", "2350.00");
+    expect(Number(fixedBuy)).toBeLessThan(2340);
+  });
+
+  it("SELL break-even places SL below entry", () => {
+    expect(breakEvenStop("SELL", "1.10000", "0.00010")).toBe("1.09990000");
   });
 
   it("blocks orders on daily loss breach", () => {

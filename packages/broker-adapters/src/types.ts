@@ -113,6 +113,10 @@ export interface BrokerOrderRequest {
   price?: string;
   stopLoss?: string;
   takeProfit?: string;
+  /** Capital native trailing — broker moves SL for BUY and SELL */
+  trailingStop?: boolean;
+  /** Absolute price distance for Capital stopDistance / trailingStop */
+  stopDistance?: string;
   comment?: string;
 }
 
@@ -139,6 +143,9 @@ export interface BrokerModifyPositionRequest {
   brokerPositionId: string;
   stopLoss?: string | null;
   takeProfit?: string | null;
+  /** Enable Capital native trailing (auto follows both directions) */
+  trailingStop?: boolean;
+  stopDistance?: string;
 }
 
 export interface BrokerClosePositionRequest {

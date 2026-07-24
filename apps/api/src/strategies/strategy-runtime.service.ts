@@ -655,25 +655,62 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 trailingDistance: trailingEnabled ? trailDist.toFixed(8) : null,
               },
             });
-            // Re-attach SL/TP on Capital after fill (place sometimes drops levels)
+            // Re-attach protections — use Capital native trail so SL follows both directions
             try {
-              await this.positions.modifySlTp(
-                strategy.organizationId,
-                actorId,
-                child.position.id,
-                {
-                  stopLoss,
-                  takeProfit: takeProfit ?? null,
-                },
-                correlationId,
-                { silent: true },
-              );
+              if (trailingEnabled) {
+                await this.positions.modifySlTp(
+                  strategy.organizationId,
+                  actorId,
+                  child.position.id,
+                  {
+                    trailingStop: true,
+                    stopDistance: trailDist.toFixed(8),
+                    takeProfit: takeProfit ?? null,
+                  },
+                  correlationId,
+                  { silent: true },
+                );
+                await this.prisma.position.update({
+                  where: { id: child.position.id },
+                  data: { trailingActivatedAt: new Date() },
+                });
+              } else {
+                await this.positions.modifySlTp(
+                  strategy.organizationId,
+                  actorId,
+                  child.position.id,
+                  {
+                    stopLoss,
+                    takeProfit: takeProfit ?? null,
+                  },
+                  correlationId,
+                  { silent: true },
+                );
+              }
             } catch (attachErr) {
               this.log.warn(
                 `Post-fill SL/TP attach failed: ${
                   attachErr instanceof Error ? attachErr.message : attachErr
                 }`,
               );
+              // Fallback: static SL if native trail rejected
+              if (trailingEnabled) {
+                try {
+                  await this.positions.modifySlTp(
+                    strategy.organizationId,
+                    actorId,
+                    child.position.id,
+                    {
+                      stopLoss,
+                      takeProfit: takeProfit ?? null,
+                    },
+                    correlationId,
+                    { silent: true },
+                  );
+                } catch {
+                  /* already warned */
+                }
+              }
               await this.notifications.create({
                 organizationId: strategy.organizationId,
                 userId: actorId === "system" ? null : actorId,
