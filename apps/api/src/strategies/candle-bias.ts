@@ -87,3 +87,83 @@ export function directionAllowedAgainstCandles(
   }
   return { ok: true };
 }
+
+/**
+ * If strategy BUY is blocked by candles → try SELL (and vice versa).
+ * Do not sit idle on one blocked setup when the opposite side is allowed.
+ */
+export function resolveEntryWithCandleFlip(
+  strategySignal: "BUY" | "SELL",
+  tfBias: CandleBias,
+  microBias: CandleBias,
+): {
+  signal: "BUY" | "SELL" | null;
+  flipped: boolean;
+  from?: "BUY" | "SELL";
+  skip?: string;
+  reason?: string;
+} {
+  const passes = (sig: "BUY" | "SELL") => {
+    const tf = directionAllowedAgainstCandles(sig, tfBias);
+    if (!tf.ok) return tf;
+    if (microBias !== "flat") {
+      const m1 = directionAllowedAgainstCandles(sig, microBias);
+      if (!m1.ok) return m1;
+    }
+    return { ok: true as const };
+  };
+
+  let signal: "BUY" | "SELL" = strategySignal;
+  let flipped = false;
+  let check = passes(signal);
+
+  if (!check.ok) {
+    const opposite: "BUY" | "SELL" = signal === "BUY" ? "SELL" : "BUY";
+    const oppCheck = passes(opposite);
+    if (oppCheck.ok) {
+      // Opposite allowed — take it instead of waiting
+      return {
+        signal: opposite,
+        flipped: true,
+        from: strategySignal,
+        reason: `flipped_${strategySignal}_to_${opposite}`,
+      };
+    }
+    return {
+      signal: null,
+      flipped: false,
+      skip: check.skip,
+      reason: `${check.reason}; opposite also blocked`,
+    };
+  }
+
+  // Original side OK — if 1m flat, still wait for timing unless TF bias already agrees
+  if (microBias === "flat") {
+    const agrees =
+      (signal === "BUY" && tfBias === "bull") ||
+      (signal === "SELL" && tfBias === "bear");
+    if (!agrees) {
+      // Try opposite if TF clearly favors it
+      const opposite: "BUY" | "SELL" = signal === "BUY" ? "SELL" : "BUY";
+      const oppAgrees =
+        (opposite === "BUY" && tfBias === "bull") ||
+        (opposite === "SELL" && tfBias === "bear");
+      if (oppAgrees && passes(opposite).ok) {
+        return {
+          signal: opposite,
+          flipped: true,
+          from: strategySignal,
+          reason: `flipped_flat1m_tf_${tfBias}`,
+        };
+      }
+      return {
+        signal: null,
+        flipped,
+        skip: "micro_timing",
+        reason: "wait_1m5_or_tf_bias",
+      };
+    }
+  }
+
+  return { signal, flipped, from: flipped ? strategySignal : undefined };
+}

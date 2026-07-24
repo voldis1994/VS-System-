@@ -563,9 +563,9 @@ export default function StrategiesPage() {
                     />
                   </Field>
                   <p className="text-[11px] text-zinc-500">
-                    Filtrs visām stratēģijām: BUY neder pret bearish svecēm, SELL
-                    neder pret bullish (TF + 1m×5). TP ATR× piem. 0.8–1.2 = tuvāks
-                    mērķis.
+                    Filtrs: BUY neder pret bearish, SELL neder pret bullish — bet
+                    ja viena puse bloķēta, mēģina pretējo (nevis tikai gaida). TP
+                    ATR× piem. 0.8–1.2 = tuvāks mērķis.
                   </p>
                 </div>
 

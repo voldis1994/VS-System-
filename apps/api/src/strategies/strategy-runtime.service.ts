@@ -17,8 +17,8 @@ import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { evaluateMicro1mFive } from "./micro-1m";
 import {
-  directionAllowedAgainstCandles,
   evaluateCandleBiasFive,
+  resolveEntryWithCandleFlip,
 } from "./candle-bias";
 
 type Signal = "BUY" | "SELL" | "CLOSE" | "HOLD";
@@ -352,54 +352,40 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // OBLIGATORY for all strategies:
-      // BUY invalid vs bearish candles; SELL invalid vs bullish candles (TF + 1m)
-      const tfFilter = directionAllowedAgainstCandles(scored.signal, tfBias.bias);
-      if (!tfFilter.ok) {
-        lastStatus = {
-          ...lastStatus,
-          signal: scored.signal,
-          skip: tfFilter.skip,
-          reason: tfFilter.reason,
-          gate: tfFilter.skip,
-        };
-        continue;
-      }
-
+      // OBLIGATORY candle filter — but if BUY blocked → try SELL (and vice versa)
       const microBias =
         micro.signal === "BUY"
           ? ("bull" as const)
           : micro.signal === "SELL"
             ? ("bear" as const)
             : ("flat" as const);
-      if (microBias === "flat") {
+
+      const resolved = resolveEntryWithCandleFlip(
+        scored.signal,
+        tfBias.bias,
+        microBias,
+      );
+      if (!resolved.signal) {
         lastStatus = {
           ...lastStatus,
           signal: scored.signal,
-          skip: "micro_timing",
-          reason: "wait_1m5_not_against",
-        };
-        continue;
-      }
-      const m1Filter = directionAllowedAgainstCandles(scored.signal, microBias);
-      if (!m1Filter.ok) {
-        lastStatus = {
-          ...lastStatus,
-          signal: scored.signal,
-          skip: m1Filter.skip,
-          reason: `${m1Filter.reason} (1m)`,
-          gate: m1Filter.skip,
+          skip: resolved.skip ?? "candle_filter",
+          reason: resolved.reason,
+          gate: resolved.skip ?? "candle_filter",
         };
         continue;
       }
 
-      const signal: Signal = scored.signal;
+      const signal: Signal = resolved.signal;
       lastStatus = {
         ...lastStatus,
         signal,
         gate: scored.gate,
         microGate: micro.gate,
         tfGate: tfBias.gate,
+        flipped: resolved.flipped,
+        flippedFrom: resolved.from,
+        reason: resolved.flipped ? resolved.reason : undefined,
       };
 
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
