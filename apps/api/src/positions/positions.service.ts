@@ -498,13 +498,8 @@ export class PositionsService {
   async autoManageProtections(
     priceBySymbol: Map<string, number>,
     correlationId: string,
-    opts?: { skipReconcile?: boolean },
+    _opts?: { skipReconcile?: boolean },
   ) {
-    // Reconcile is folded into the live snapshot below unless caller already did it
-    if (!opts?.skipReconcile) {
-      // no-op placeholder — live fetch below closes ghosts
-    }
-
     const open = await this.prisma.position.findMany({
       where: {
         status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
@@ -512,7 +507,7 @@ export class PositionsService {
       },
     });
 
-    // Refresh marks from connected brokers (fixes BE/Trail never arming on stale ticks)
+    // One getOpenPositions per account — also marks ghosts CLOSED
     const byAccount = new Map<string, typeof open>();
     for (const p of open) {
       const list = byAccount.get(p.accountId) ?? [];
