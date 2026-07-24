@@ -10,6 +10,7 @@ import {
   sortCapitalMarkets,
   type CapitalMarketInfo,
 } from "./capital-markets";
+import { parseCapitalStreamQuote } from "./capital-stream";
 import type {
   BrokerAccountEvent,
   BrokerAccountState,
@@ -52,6 +53,14 @@ export class CapitalComAdapter implements BrokerAdapter {
   /** Last successful Capital HTTP activity (session stays warm ~10 min). */
   private lastActivityAt = 0;
   private positionsCache: { at: number; data: BrokerPosition[] } | null = null;
+  /** Capital streaming WS (real-time quotes, max 40 epics). */
+  private streamWs: WebSocket | null = null;
+  private streamPingTimer?: ReturnType<typeof setInterval>;
+  private streamEpics = new Set<string>();
+  private streamCorr = 0;
+  private streamConnecting: Promise<void> | null = null;
+  private quoteHandler: ((quote: CapitalMarketInfo) => void) | null = null;
+  private lastStreamQuoteAt = 0;
   private accountId = "";
   private leverage = 100;
   private currency = "USD";
@@ -134,6 +143,7 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async disconnect(): Promise<void> {
+    this.stopMarketStream();
     try {
       if (this.tokens) {
         await this.request("DELETE", "/api/v1/session");
@@ -836,18 +846,16 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async *subscribeTicks(symbols: string[]): AsyncIterable<BrokerTick> {
-    await this.ensureSession();
+    // Prefer last stream marks; fall back to one-shot REST
     for (const symbol of symbols) {
       try {
-        const res = await this.request<{
-          snapshot?: { bid?: number; offer?: number };
-          instrument?: { epic?: string };
-        }>("GET", `/api/v1/markets/${encodeURIComponent(symbol)}`);
-        const bid = res.snapshot?.bid ?? 0;
-        const ask = res.snapshot?.offer ?? 0;
+        const q = await this.getMarketQuote(symbol);
+        if (!q || (q.bid == null && q.offer == null)) continue;
+        const bid = Number(q.bid ?? q.offer);
+        const ask = Number(q.offer ?? q.bid);
         const mid = (bid + ask) / 2;
         yield {
-          symbol,
+          symbol: q.epic,
           bid: String(bid),
           ask: String(ask),
           mid: String(mid),
@@ -858,6 +866,161 @@ export class CapitalComAdapter implements BrokerAdapter {
         // skip
       }
     }
+  }
+
+  /** True if WS is open and received a quote recently. */
+  isMarketStreamHealthy(maxAgeMs = 30_000): boolean {
+    return (
+      !!this.streamWs &&
+      this.streamWs.readyState === WebSocket.OPEN &&
+      this.lastStreamQuoteAt > 0 &&
+      Date.now() - this.lastStreamQuoteAt < maxAgeMs
+    );
+  }
+
+  /**
+   * Ensure Capital streaming WS is up and subscribed to epics (max 40).
+   * Quotes are pushed to onQuote; REST remains fallback when stream is down.
+   */
+  async ensureMarketStream(
+    epics: string[],
+    onQuote: (quote: CapitalMarketInfo) => void,
+  ): Promise<"streaming" | "fallback"> {
+    this.quoteHandler = onQuote;
+    const wanted = [
+      ...new Set(epics.map((e) => resolveCapitalEpic(e)).filter(Boolean)),
+    ].slice(0, 40);
+    try {
+      await this.ensureSession();
+    } catch {
+      return "fallback";
+    }
+    if (!this.tokens) return "fallback";
+
+    try {
+      if (!this.streamWs || this.streamWs.readyState !== WebSocket.OPEN) {
+        await this.connectMarketStream();
+      }
+    } catch {
+      return "fallback";
+    }
+    if (!this.streamWs || this.streamWs.readyState !== WebSocket.OPEN) {
+      return "fallback";
+    }
+
+    const toAdd = wanted.filter((e) => !this.streamEpics.has(e));
+    const toRemove = [...this.streamEpics].filter((e) => !wanted.includes(e));
+    if (toRemove.length > 0) {
+      this.sendStreamMessage("marketData.unsubscribe", { epics: toRemove });
+      for (const e of toRemove) this.streamEpics.delete(e);
+    }
+    if (toAdd.length > 0) {
+      this.sendStreamMessage("marketData.subscribe", { epics: toAdd });
+      for (const e of toAdd) this.streamEpics.add(e);
+    } else if (wanted.length > 0 && this.streamEpics.size === 0) {
+      this.sendStreamMessage("marketData.subscribe", { epics: wanted });
+      for (const e of wanted) this.streamEpics.add(e);
+    }
+    return "streaming";
+  }
+
+  stopMarketStream(): void {
+    if (this.streamPingTimer) {
+      clearInterval(this.streamPingTimer);
+      this.streamPingTimer = undefined;
+    }
+    if (this.streamWs) {
+      try {
+        this.streamWs.close();
+      } catch {
+        // ignore
+      }
+      this.streamWs = null;
+    }
+    this.streamEpics.clear();
+    this.streamConnecting = null;
+    this.lastStreamQuoteAt = 0;
+  }
+
+  private streamEndpoint(): string {
+    return this.baseUrl.includes("demo-api")
+      ? "wss://demo-streaming-capital.backend-capital.com/connect"
+      : "wss://api-streaming-capital.backend-capital.com/connect";
+  }
+
+  private async connectMarketStream(): Promise<void> {
+    if (this.streamConnecting) return this.streamConnecting;
+    this.streamConnecting = new Promise<void>((resolve, reject) => {
+      try {
+        const ws = new WebSocket(this.streamEndpoint());
+        const timer = setTimeout(() => {
+          try {
+            ws.close();
+          } catch {
+            // ignore
+          }
+          reject(new Error("Capital stream connect timeout"));
+        }, 8_000);
+
+        ws.addEventListener("open", () => {
+          clearTimeout(timer);
+          this.streamWs = ws;
+          this.streamEpics.clear();
+          if (this.streamPingTimer) clearInterval(this.streamPingTimer);
+          // Keep-alive: Capital requires ping at least every 10 minutes
+          this.streamPingTimer = setInterval(() => {
+            this.sendStreamMessage("ping");
+          }, 4 * 60_000);
+          resolve();
+        });
+
+        ws.addEventListener("message", (ev) => {
+          this.handleStreamMessage(String(ev.data));
+        });
+
+        ws.addEventListener("close", () => {
+          clearTimeout(timer);
+          if (this.streamWs === ws) this.streamWs = null;
+          this.streamEpics.clear();
+          this.streamConnecting = null;
+        });
+
+        ws.addEventListener("error", () => {
+          clearTimeout(timer);
+          reject(new Error("Capital stream socket error"));
+        });
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    }).finally(() => {
+      this.streamConnecting = null;
+    });
+    return this.streamConnecting;
+  }
+
+  private sendStreamMessage(
+    destination: string,
+    payload?: Record<string, unknown>,
+  ): void {
+    if (!this.streamWs || this.streamWs.readyState !== WebSocket.OPEN) return;
+    if (!this.tokens) return;
+    this.streamCorr += 1;
+    const msg: Record<string, unknown> = {
+      destination,
+      correlationId: String(this.streamCorr),
+      cst: this.tokens.cst,
+      securityToken: this.tokens.securityToken,
+    };
+    if (payload) msg.payload = payload;
+    this.streamWs.send(JSON.stringify(msg));
+  }
+
+  private handleStreamMessage(raw: string): void {
+    const quote = parseCapitalStreamQuote(raw);
+    if (!quote) return;
+    this.lastStreamQuoteAt = Date.now();
+    this.lastActivityAt = Date.now();
+    this.quoteHandler?.(quote);
   }
 
   async *subscribeAccountEvents(): AsyncIterable<BrokerAccountEvent> {

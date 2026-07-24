@@ -3,3 +3,4 @@ export * from "./paper-adapter";
 export * from "./mock-adapters";
 export * from "./capital-com-adapter";
 export * from "./capital-markets";
+export * from "./capital-stream";

@@ -33,6 +33,12 @@ export class MarketDataController {
     return this.market.listTicks();
   }
 
+  @Get("market-data/feed")
+  @RequirePermissions("accounts:read")
+  feed() {
+    return this.market.getFeedStatus();
+  }
+
   @Get("market-data/:symbol/candles")
   @RequirePermissions("accounts:read")
   candles(

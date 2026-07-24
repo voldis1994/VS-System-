@@ -64,6 +64,19 @@ export function useTicks() {
   });
 }
 
+export function useMarketFeed() {
+  const token = useToken();
+  return useQuery({
+    queryKey: ["market-feed"],
+    queryFn: () =>
+      api<{ mode: string; liveSymbols: number }>("/market-data/feed", {
+        token: token!,
+      }),
+    enabled: !!token,
+    refetchInterval: 5000,
+  });
+}
+
 export function useAnalytics() {
   const token = useToken();
   return useQuery({

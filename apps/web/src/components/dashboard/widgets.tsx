@@ -5,6 +5,7 @@ import { Panel, Stat } from "@/components/ui/panel";
 import {
   useAccounts,
   useAnalytics,
+  useMarketFeed,
   useNotifications,
   useOrders,
   usePositions,
@@ -122,7 +123,15 @@ export function CommandHero() {
 
 export function MarketRivulet() {
   const { data: ticks } = useTicks();
+  const { data: feed } = useMarketFeed();
   const row = [...(ticks ?? []), ...(ticks ?? [])];
+  const mode = feed?.mode ?? "off";
+  const modeLabel =
+    mode === "streaming"
+      ? "Capital WS"
+      : mode === "fallback"
+        ? "REST fallback"
+        : "Sim";
 
   if (!ticks?.length) {
     return (
@@ -138,7 +147,21 @@ export function MarketRivulet() {
         <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-white/70">
           Market rivulet
         </h2>
-        <LiveDot />
+        <div className="flex items-center gap-2">
+          <span
+            className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${
+              mode === "streaming"
+                ? "border-signal/40 text-signal"
+                : mode === "fallback"
+                  ? "border-accent/40 text-accent-soft"
+                  : "border-white/15 text-white/40"
+            }`}
+          >
+            {modeLabel}
+            {typeof feed?.liveSymbols === "number" ? ` · ${feed.liveSymbols}` : ""}
+          </span>
+          <LiveDot />
+        </div>
       </div>
       <div className="relative overflow-hidden py-3">
         <div className="vs-rivulet flex w-max gap-3 px-3">

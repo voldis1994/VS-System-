@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import {
   CapitalComAdapter,
   formatMarketCode,
@@ -24,13 +24,18 @@ const SEED_PRICES: Record<string, { bid: string; ask: string }> = {
 };
 
 @Injectable()
-export class MarketDataService implements OnModuleInit {
+export class MarketDataService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(MarketDataService.name);
-  private readonly prices = new Map<string, { bid: string; ask: string; name?: string }>();
+  private readonly prices = new Map<
+    string,
+    { bid: string; ask: string; name?: string; liveAt?: number }
+  >();
   private capitalMarketsCache: CapitalMarketInfo[] = [];
   private capitalMarketsCachedAt = 0;
   private timer?: NodeJS.Timeout;
   private capitalPriceTimer?: NodeJS.Timeout;
+  private streamWatchTimer?: NodeJS.Timeout;
+  private streamMode: "streaming" | "fallback" | "off" = "off";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -42,7 +47,18 @@ export class MarketDataService implements OnModuleInit {
       this.prices.set(s, p);
     }
     this.timer = setInterval(() => void this.tickSimulation(), 1000);
-    this.capitalPriceTimer = setInterval(() => void this.refreshCapitalPrices(), 8000);
+    // REST fallback / seed — less frequent when WS is healthy
+    this.capitalPriceTimer = setInterval(() => void this.refreshCapitalPrices(), 20_000);
+    // Keep Capital streaming subscription in sync with open/running symbols
+    this.streamWatchTimer = setInterval(() => void this.syncCapitalStream(), 5_000);
+    void this.syncCapitalStream();
+  }
+
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+    if (this.capitalPriceTimer) clearInterval(this.capitalPriceTimer);
+    if (this.streamWatchTimer) clearInterval(this.streamWatchTimer);
+    void this.getCapitalAdapter().then((a) => a?.stopMarketStream());
   }
 
   getTick(symbol: string) {
@@ -73,7 +89,18 @@ export class MarketDataService implements OnModuleInit {
             .map((m) => m.epic)
         : [...this.prices.keys()];
     const uniq = [...new Set(keys)];
-    return uniq.map((s) => this.getTick(s)).filter(Boolean);
+    const ticks = uniq.map((s) => this.getTick(s)).filter(Boolean);
+    return ticks;
+  }
+
+  /** Capital feed mode for UI badge. */
+  getFeedStatus() {
+    return {
+      mode: this.streamMode,
+      liveSymbols: [...this.prices.entries()].filter(
+        ([, p]) => p.liveAt && Date.now() - p.liveAt < 15_000,
+      ).length,
+    };
   }
 
   async getCandles(symbol: string, timeframe = "1h", limit = 200) {
@@ -228,15 +255,67 @@ export class MarketDataService implements OnModuleInit {
     return saved;
   }
 
-  private upsertPriceFromMarket(m: CapitalMarketInfo) {
+  private upsertPriceFromMarket(m: CapitalMarketInfo, live = false) {
     if (m.bid == null && m.offer == null) return;
     const bid = m.bid ?? m.offer!;
     const offer = m.offer ?? m.bid!;
+    const prev = this.prices.get(m.epic);
     this.prices.set(m.epic, {
       bid: String(bid),
       ask: String(offer),
-      name: m.name,
+      name: m.name ?? prev?.name,
+      liveAt: live ? Date.now() : prev?.liveAt,
     });
+  }
+
+  private async watchEpics(): Promise<string[]> {
+    const fromDb = await this.prisma.position.findMany({
+      where: { status: { in: ["OPEN", "PARTIALLY_CLOSED"] } },
+      select: { symbol: true },
+      take: 20,
+    });
+    const strategies = await this.prisma.strategy.findMany({
+      where: { status: "RUNNING" },
+      select: { assignedSymbols: true },
+      take: 20,
+    });
+    const fromStrategies: string[] = [];
+    for (const s of strategies) {
+      for (const sym of (s.assignedSymbols as string[]) ?? []) {
+        fromStrategies.push(resolveCapitalEpic(sym));
+      }
+    }
+    return [
+      ...new Set([
+        ...fromDb.map((p) => resolveCapitalEpic(p.symbol)),
+        ...fromStrategies,
+        ...[...this.prices.keys()].slice(0, 8),
+      ]),
+    ].slice(0, 40);
+  }
+
+  private async syncCapitalStream() {
+    const adapter = await this.getCapitalAdapter();
+    if (!adapter || typeof adapter.ensureMarketStream !== "function") {
+      this.streamMode = "off";
+      return;
+    }
+    const watch = await this.watchEpics();
+    if (watch.length === 0) return;
+    try {
+      const mode = await adapter.ensureMarketStream(watch, (q) => {
+        this.upsertPriceFromMarket(q, true);
+      });
+      if (mode !== this.streamMode) {
+        this.log.log(`Capital price feed: ${mode}`);
+      }
+      this.streamMode = mode;
+    } catch (err) {
+      this.streamMode = "fallback";
+      this.log.warn(
+        `Capital stream sync failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   private async getCapitalAdapter(
@@ -273,48 +352,35 @@ export class MarketDataService implements OnModuleInit {
   }
 
   private async refreshCapitalPrices() {
-    // Prefer live trading symbols over dumping 40 market-nav epics into REST
-    const fromDb = await this.prisma.position.findMany({
-      where: { status: { in: ["OPEN", "PARTIALLY_CLOSED"] } },
-      select: { symbol: true },
-      take: 20,
-    });
-    const strategies = await this.prisma.strategy.findMany({
-      where: { status: "RUNNING" },
-      select: { assignedSymbols: true },
-      take: 20,
-    });
-    const fromStrategies: string[] = [];
-    for (const s of strategies) {
-      for (const sym of (s.assignedSymbols as string[]) ?? []) {
-        fromStrategies.push(resolveCapitalEpic(sym));
-      }
-    }
-    const watch = [
-      ...new Set([
-        ...fromDb.map((p) => resolveCapitalEpic(p.symbol)),
-        ...fromStrategies,
-        ...[...this.prices.keys()].slice(0, 8),
-      ]),
-    ].slice(0, 12);
-    if (watch.length === 0) return;
     const adapter = await this.getCapitalAdapter();
+    // Skip REST spam while streaming is healthy
+    if (
+      adapter &&
+      typeof adapter.isMarketStreamHealthy === "function" &&
+      adapter.isMarketStreamHealthy(25_000)
+    ) {
+      this.streamMode = "streaming";
+      return;
+    }
+
+    const watch = await this.watchEpics();
+    if (watch.length === 0) return;
     if (!adapter) return;
     try {
       if (typeof adapter.getMarketQuotes === "function") {
-        const quotes = await adapter.getMarketQuotes(watch);
+        const quotes = await adapter.getMarketQuotes(watch.slice(0, 12));
         for (const q of quotes) {
-          if (q) this.upsertPriceFromMarket(q);
+          if (q) this.upsertPriceFromMarket(q, true);
         }
         return;
       }
     } catch {
       // fall through to sequential
     }
-    for (const epic of watch) {
+    for (const epic of watch.slice(0, 12)) {
       try {
         const q = await adapter.getMarketQuote(epic);
-        if (q) this.upsertPriceFromMarket(q);
+        if (q) this.upsertPriceFromMarket(q, true);
       } catch {
         // ignore per-symbol
       }
@@ -322,10 +388,12 @@ export class MarketDataService implements OnModuleInit {
   }
 
   private async tickSimulation() {
-    // Only simulate when Capital live quotes are unavailable for a symbol
+    // Only simulate when no recent Capital live quote for a symbol
+    const now = Date.now();
     for (const [symbol, p] of this.prices.entries()) {
+      if (p.liveAt && now - p.liveAt < 15_000) continue;
       const fromCapital = this.capitalMarketsCache.find((m) => m.epic === symbol);
-      if (fromCapital?.bid != null) continue;
+      if (fromCapital?.bid != null && this.streamMode === "streaming") continue;
       const mid = d(p.bid).plus(d(p.ask)).div(2);
       const noise = mid.mul((Math.random() - 0.5) * 0.0004);
       const spread = d(p.ask).minus(d(p.bid));
@@ -337,6 +405,7 @@ export class MarketDataService implements OnModuleInit {
         bid: roundToPrecision(bid, precision).toFixed(precision),
         ask: roundToPrecision(ask, precision).toFixed(precision),
         name: p.name,
+        liveAt: p.liveAt,
       });
     }
   }
