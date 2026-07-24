@@ -177,12 +177,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       autoAggressive?: boolean;
       /** Use RISK_PERCENT sizing (often fails on tiny LIVE equity) */
       useRiskPercent?: boolean;
-      /** Min confluence score 0-100 (default 62 — micro-selective) */
+      /** Min confluence score 0-100 (default 48 — balanced for live entries) */
       minScore?: number;
-      /** Prefer London/NY session hours (UTC) */
+      /** Prefer London/NY session hours (UTC) — opt-in */
       sessionFilter?: boolean;
     };
-    const cooldownMs = (config.cooldownSeconds ?? 45) * 1000;
+    const cooldownMs = (config.cooldownSeconds ?? 30) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
     const atrStopMult = config.atrStopMult ?? 1.0;
@@ -190,9 +190,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const takeProfitEnabled = config.takeProfitEnabled !== false;
     const breakEvenEnabled = Boolean(config.breakEvenEnabled);
     const trailingEnabled = Boolean(config.trailingEnabled);
-    const minAdx = config.minAdx ?? 18;
-    const minScore = config.minScore ?? 62;
-    const sessionFilter = config.sessionFilter !== false;
+    // Loosen prior VS_PRO_V2 presets that blocked all entries (62/18)
+    let minAdx = config.minAdx ?? 14;
+    if (minAdx >= 18) minAdx = 14;
+    let minScore = config.minScore ?? 48;
+    if (minScore >= 60) minScore = 48;
+    const sessionFilter = config.sessionFilter === true;
     const oneTradeOnly = config.oneTradeOnly !== false; // default ON
     const closeOnlyNoFlip = config.closeOnlyNoFlip ?? oneTradeOnly;
     // Default OFF — aggressive EMA fallback was deadly on micro accounts
@@ -236,14 +239,25 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         sessionFilter,
       );
       let signal = scored.signal;
-      // Optional aggressive path — OFF by default for micro accounts
+      // Mild fallback: if mode is strict HOLD but structure is clear, retry with lower bar
+      if (signal === "HOLD" && scored.score >= 40 && scored.bias !== "flat") {
+        scored = this.evaluatePro(
+          StrategyMode.SCALPING,
+          ind,
+          Math.max(minAdx - 2, 12),
+          Math.max(minScore - 6, 42),
+          false,
+        );
+        signal = scored.signal;
+      }
+      // Optional aggressive path — still OFF by default
       if (signal === "HOLD" && autoAggressive) {
         scored = this.evaluatePro(
           StrategyMode.SCALPING,
           ind,
-          Math.max(minAdx - 4, 14),
-          Math.max(minScore - 8, 55),
-          sessionFilter,
+          Math.max(minAdx - 4, 10),
+          Math.max(minScore - 10, 38),
+          false,
         );
         signal = scored.signal;
       }
@@ -674,19 +688,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat" };
     }
 
-    // Dead market / explosive spike — skip
+    // Dead market / explosive spike — skip (wider band so normal markets trade)
     const atrRatio = i.atrSlow > 0 ? i.atr / i.atrSlow : 1;
-    if (atrRatio < 0.55) {
+    if (atrRatio < 0.4) {
       return { signal: "HOLD", score: 0, gate: "atr_dead", bias: "flat" };
     }
-    if (atrRatio > 2.4) {
+    if (atrRatio > 3.2) {
       return { signal: "HOLD", score: 0, gate: "atr_spike", bias: "flat" };
     }
 
     const bullStack = i.ema9 > i.ema21 && i.ema21 > i.ema55;
     const bearStack = i.ema9 < i.ema21 && i.ema21 < i.ema55;
-    const bullTrend = bullStack && i.ema55 >= i.ema200 * 0.999;
-    const bearTrend = bearStack && i.ema55 <= i.ema200 * 1.001;
+    const bullTrend = bullStack && i.ema55 >= i.ema200 * 0.998;
+    const bearTrend = bearStack && i.ema55 <= i.ema200 * 1.002;
     const emaRising = i.ema9 > i.ema9Prev && i.ema21 >= i.ema21Prev;
     const emaFalling = i.ema9 < i.ema9Prev && i.ema21 <= i.ema21Prev;
     const macdUp = i.macdHist > 0 && i.macdHist >= i.macdHistPrev;
@@ -696,7 +710,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const stochUp = i.stochK > i.stochD && i.stochK >= i.stochKPrev;
     const stochDown = i.stochK < i.stochD && i.stochK <= i.stochKPrev;
     const trending = i.adx >= minAdx;
-    const rangeBound = i.adx < Math.max(minAdx - 4, 12);
+    const rangeBound = i.adx < Math.max(minAdx - 2, 10);
 
     // Soft close when momentum exhausts against open thesis
     if (i.rsi > 78 && bearStack) {
@@ -717,19 +731,21 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       sell += pts;
     };
 
-    // Shared structure score
-    if (trending && bullTrend) addBuy(18);
-    if (trending && bearTrend) addSell(18);
+    // Shared structure score (balanced — enough to clear ~48 bar)
+    if (trending && bullTrend) addBuy(20);
+    if (trending && bearTrend) addSell(20);
+    if (bullStack) addBuy(8);
+    if (bearStack) addSell(8);
     if (diBull) addBuy(10);
     if (diBear) addSell(10);
     if (macdUp) addBuy(12);
     if (macdDown) addSell(12);
-    if (emaRising) addBuy(8);
-    if (emaFalling) addSell(8);
-    if (stochUp && i.stochK < 80) addBuy(8);
-    if (stochDown && i.stochK > 20) addSell(8);
-    if (i.rsi >= 48 && i.rsi <= 68) addBuy(8);
-    if (i.rsi <= 52 && i.rsi >= 32) addSell(8);
+    if (emaRising) addBuy(10);
+    if (emaFalling) addSell(10);
+    if (stochUp && i.stochK < 85) addBuy(8);
+    if (stochDown && i.stochK > 15) addSell(8);
+    if (i.rsi >= 45 && i.rsi <= 70) addBuy(8);
+    if (i.rsi <= 55 && i.rsi >= 30) addSell(8);
     if (i.price >= i.ema21) addBuy(6);
     if (i.price <= i.ema21) addSell(6);
 
@@ -800,34 +816,30 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         break;
       }
       case StrategyMode.SCALPING: {
-        // Scalp still needs structure — not bare EMA cross
-        if (i.adx < Math.max(minAdx - 2, 16)) {
-          return { signal: "HOLD", score: 0, gate: "scalp_chop", bias: "flat" };
+        // Scalp needs some structure, but not institutional ADX
+        if (i.adx < Math.max(minAdx - 4, 10)) {
+          return { signal: "HOLD", score: Math.max(buy, sell), gate: "scalp_chop", bias: "flat" };
         }
         if (
-          bullStack &&
-          emaRising &&
+          (bullStack || emaRising) &&
           macdUp &&
-          stochUp &&
-          diBull &&
-          i.rsi > 50 &&
-          i.rsi < 68 &&
-          i.price >= i.ema9
+          (stochUp || diBull) &&
+          i.rsi > 48 &&
+          i.rsi < 72 &&
+          i.price >= i.ema21
         ) {
-          addBuy(20);
+          addBuy(18);
           gate = "scalp_long";
         }
         if (
-          bearStack &&
-          emaFalling &&
+          (bearStack || emaFalling) &&
           macdDown &&
-          stochDown &&
-          diBear &&
-          i.rsi < 50 &&
-          i.rsi > 32 &&
-          i.price <= i.ema9
+          (stochDown || diBear) &&
+          i.rsi < 52 &&
+          i.rsi > 28 &&
+          i.price <= i.ema21
         ) {
-          addSell(20);
+          addSell(18);
           gate = "scalp_short";
         }
         break;
@@ -870,19 +882,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Penalize late chase
-    if (i.rsi > 70) buy -= 12;
-    if (i.rsi < 30) sell -= 12;
-    if (i.stochK > 85) buy -= 8;
-    if (i.stochK < 15) sell -= 8;
+    // Light penalty for late chase (don't zero out good setups)
+    if (i.rsi > 74) buy -= 8;
+    if (i.rsi < 26) sell -= 8;
+    if (i.stochK > 90) buy -= 5;
+    if (i.stochK < 10) sell -= 5;
 
     buy = Math.max(0, Math.min(100, buy));
     sell = Math.max(0, Math.min(100, sell));
 
-    if (buy >= minScore && buy > sell + 6) {
+    if (buy >= minScore && buy >= sell + 3) {
       return { signal: "BUY", score: buy, gate, bias: "bull" };
     }
-    if (sell >= minScore && sell > buy + 6) {
+    if (sell >= minScore && sell >= buy + 3) {
       return { signal: "SELL", score: sell, gate, bias: "bear" };
     }
     return {

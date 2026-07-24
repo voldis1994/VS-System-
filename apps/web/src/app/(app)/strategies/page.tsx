@@ -151,8 +151,8 @@ function buildConfiguration(d: AccountDraft) {
     oneTradeOnly: true,
     closeOnlyNoFlip: true,
     autoAggressive: false,
-    sessionFilter: true,
-    minScore: 62,
+    sessionFilter: false,
+    minScore: 48,
     atrStopMult: 1.0,
     atrTpMult: Number(d.atrTpMult) || 2.2,
     takeProfitEnabled: d.tpEnabled,
@@ -163,8 +163,8 @@ function buildConfiguration(d: AccountDraft) {
     trailingDistancePips: Number(d.trailPips) || 15,
     trailingActivationPips: Number(d.trailActPips) || Number(d.trailPips) || 15,
     exitVersion: d.exitVersion,
-    minAdx: 18,
-    cooldownSeconds: 45,
+    minAdx: 14,
+    cooldownSeconds: 30,
   };
 }
 
@@ -706,7 +706,7 @@ export default function StrategiesPage() {
                           : d.skip === "same_signal"
                             ? "Tas pats signāls jau apstrādāts — gaida jaunu signālu / close."
                             : d.skip === "quality_wait" || d.gate === "score_low"
-                              ? `VS_PRO_V2 gaida kvalitāti (score ${d.score ?? 0}/62+) — mazāk treidu, mazāk micro minusu.`
+                              ? `VS_PRO_V2 gaida setup (score ${d.score ?? 0}/48+) — drīz mēģinās.`
                               : d.gate === "session_off" || d.skip === "session_off"
                                 ? "Ārpus London/NY sesijas — gaida likvidāku laiku."
                                 : d.gate === "atr_dead" ||
