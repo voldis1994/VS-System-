@@ -11,6 +11,13 @@ import {
   useStrategies,
   useTicks,
 } from "@/lib/hooks";
+import {
+  deploymentHint,
+  deploymentTone,
+  scorePercent,
+  tickAgeLabel,
+  type DeploymentState,
+} from "@/lib/strategy-status";
 import { formatMoney, formatPnl, pnlClass } from "@/lib/utils";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -170,6 +177,7 @@ function strategyForAccount(
 export function StrategyConstellation() {
   const { data: accounts } = useAccounts();
   const { data: strategies } = useStrategies();
+  const { data: positions } = usePositions();
   const list = accounts ?? [];
 
   return (
@@ -192,13 +200,29 @@ export function StrategyConstellation() {
             breakEvenEnabled?: boolean;
             trailingEnabled?: boolean;
             takeProfitEnabled?: boolean;
+            minScore?: number;
           };
-          const deploy = (s?.deploymentStateJson ?? {}) as {
-            skip?: string;
-            signal?: string;
-            symbol?: string;
-          };
+          const deploy = (s?.deploymentStateJson ?? {}) as DeploymentState;
           const running = s?.status === "RUNNING";
+          const hint = deploymentHint(deploy);
+          const tone = deploymentTone(deploy);
+          const bar = cfg.minScore && cfg.minScore > 0 ? cfg.minScore : 48;
+          const scorePct = scorePercent(deploy.score, bar);
+          const age = tickAgeLabel(deploy.lastTickAt);
+          const openOnAcc = (positions ?? []).filter(
+            (p) =>
+              p.accountId === a.id &&
+              ["OPEN", "PARTIALLY_CLOSED", "CLOSING"].includes(p.status),
+          ).length;
+
+          const toneClass =
+            tone === "ok"
+              ? "border-signal/35 bg-signal/10 text-signal"
+              : tone === "warn"
+                ? "border-loss/40 bg-loss/10 text-white/85"
+                : tone === "wait"
+                  ? "border-accent/30 bg-accent/10 text-accent-soft"
+                  : "border-white/10 bg-white/[0.03] text-white/55";
 
           return (
             <motion.div
@@ -231,15 +255,69 @@ export function StrategyConstellation() {
                 {cfg.takeProfitEnabled !== false && s ? <Badge tone="profit">TP</Badge> : null}
                 {cfg.breakEvenEnabled ? <Badge tone="accent">BE</Badge> : null}
                 {cfg.trailingEnabled ? <Badge tone="accent">Trail</Badge> : null}
+                {openOnAcc > 0 ? <Badge tone="warn">{openOnAcc} open</Badge> : null}
               </div>
+
+              {running && s ? (
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-mono text-white/50">
+                      {[
+                        deploy.symbol ?? "—",
+                        deploy.signal ?? "…",
+                        deploy.bias && deploy.bias !== "flat"
+                          ? `bias ${deploy.bias}`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                    <span className="font-mono text-white/35">
+                      {age ? `tick ${age}` : "nav tick"}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 flex justify-between font-mono text-[10px] text-white/40">
+                      <span>
+                        score {deploy.score ?? "—"}/{bar}+
+                      </span>
+                      <span>{scorePct}%</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          scorePct >= 100 ? "bg-signal" : "bg-accent"
+                        }`}
+                        style={{ width: `${scorePct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {hint ? (
+                    <div
+                      className={`rounded-md border px-2.5 py-2 text-[11px] leading-snug ${toneClass}`}
+                    >
+                      {hint}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[11px] text-white/45">
+                      Bot skenē — vēl nav skaidra statusa.
+                    </div>
+                  )}
+                </div>
+              ) : null}
 
               <div className="mt-3 flex items-end justify-between">
                 <div className="font-mono text-sm tabular-nums text-white">
                   {formatMoney(a.equity, a.baseCurrency)}
                 </div>
-                <div className="font-mono text-[10px] text-white/35">
-                  {[deploy.symbol, deploy.signal, deploy.skip].filter(Boolean).join(" · ") || "—"}
-                </div>
+                <Link
+                  href="/strategies"
+                  className="text-[10px] uppercase tracking-wider text-accent/80 hover:text-accent"
+                >
+                  Manage →
+                </Link>
               </div>
             </motion.div>
           );

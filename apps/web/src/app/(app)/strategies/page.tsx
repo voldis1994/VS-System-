@@ -12,6 +12,7 @@ import { StrategyMode } from "@nexus/domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { deploymentHint, type DeploymentState } from "@/lib/strategy-status";
 
 type CapitalMarket = {
   epic: string;
@@ -691,43 +692,8 @@ export default function StrategiesPage() {
               {bound?.deploymentStateJson ? (
                 <div className="mt-3 space-y-1">
                   {(() => {
-                    const d = bound.deploymentStateJson as {
-                      lastTickAt?: string;
-                      signal?: string;
-                      skip?: string;
-                      reason?: string;
-                      error?: string;
-                      placed?: boolean;
-                      symbol?: string;
-                      openTrades?: number;
-                      cooldownSec?: number;
-                      score?: number;
-                      gate?: string;
-                      engine?: string;
-                    };
-                    const skipHint =
-                      d.skip === "waiting_open_close"
-                        ? `Bot gaida: kontā DB rāda ${d.openTrades ?? 1} atvērtu treidu. Ja Capital jau aizvēra (SL), restartē / Sync — ghost pozīcijas tagad tiek auto-tīrītas.`
-                        : d.skip === "cooldown"
-                          ? `Cooldown ${d.cooldownSec ?? "…"}s — pēc tam mēģinās vēlreiz.`
-                          : d.skip === "same_signal"
-                            ? "Tas pats signāls jau apstrādāts — pēc close/flat atkal varēs to pašu virzienu."
-                            : d.skip === "quality_wait" || d.gate === "score_low"
-                              ? `VS_PRO_V2 gaida setup (score ${d.score ?? 0}/48+) — drīz mēģinās.`
-                              : d.gate === "session_off" || d.skip === "session_off"
-                                ? "Ārpus London/NY sesijas — gaida likvidāku laiku."
-                                : d.gate === "atr_dead" ||
-                                    d.gate === "atr_spike" ||
-                                    d.skip === "atr_dead" ||
-                                    d.skip === "atr_spike"
-                                  ? `Volatilitāte nav piemērota — skip.`
-                                  : d.skip === "not_enough_candles"
-                                    ? "Vēl nav pietiekami market data — uzgaidi vai Sync."
-                                    : d.error
-                                      ? `Order kļūda: ${d.error}`
-                                      : d.placed
-                                        ? "Order nosūtīts."
-                                        : null;
+                    const d = bound.deploymentStateJson as DeploymentState;
+                    const skipHint = deploymentHint(d);
                     return (
                       <>
                         {skipHint ? (

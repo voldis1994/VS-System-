@@ -91,7 +91,24 @@ export type Strategy = {
   status: string;
   configurationJson?: Record<string, unknown>;
   configuration?: Record<string, unknown>;
-  deploymentStateJson?: { lastTickAt?: string; mode?: string; startedAt?: string };
+  deploymentStateJson?: {
+    lastTickAt?: string;
+    mode?: string;
+    startedAt?: string;
+    signal?: string;
+    skip?: string;
+    reason?: string;
+    error?: string;
+    placed?: boolean;
+    symbol?: string;
+    openTrades?: number;
+    cooldownSec?: number;
+    score?: number;
+    gate?: string;
+    engine?: string;
+    bias?: string;
+    direction?: string;
+  };
   assignedAccountIds?: string[];
   assignedSymbols?: string[];
   createdAt?: string;
