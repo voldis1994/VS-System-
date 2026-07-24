@@ -19,7 +19,9 @@ describe("acceptance formulas", () => {
 
   it("trailing never moves against position", () => {
     expect(trailingStopCandidate("BUY", "1.09000", "0.001", "1.08800")).toBe("1.08900000");
-    expect(trailingStopCandidate("BUY", "1.08850", "0.001", "1.08900")).toBe("1.08900000");
+    // Keep tighter SL while price still above it
+    expect(trailingStopCandidate("BUY", "1.08950", "0.001", "1.08900")).toBe("1.08900000");
+    expect(trailingStopCandidate("SELL", "1.09000", "0.001", "1.09500")).toBe("1.09100000");
   });
 
   it("daily loss hard block", () => {
