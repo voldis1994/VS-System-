@@ -15,6 +15,7 @@ import { PositionsService } from "../positions/positions.service";
 import { MarketDataService } from "../market-data/market-data.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { evaluateMicro1mFive } from "./micro-1m";
 
 type Signal = "BUY" | "SELL" | "CLOSE" | "HOLD";
 
@@ -229,21 +230,51 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (minScore >= 60) minScore = 48;
     const sessionFilter = config.sessionFilter === true;
     const oneTradeOnly = config.oneTradeOnly !== false; // default ON
-    const closeOnlyNoFlip = config.closeOnlyNoFlip ?? oneTradeOnly;
+    // Allow BUY↔SELL flip by default (close opposite then open new)
+    const closeOnlyNoFlip = config.closeOnlyNoFlip === true;
     // Default OFF — aggressive EMA fallback was deadly on micro accounts
-    const autoAggressive = config.autoAggressive === true;
+    const _autoAggressive = config.autoAggressive === true;
+    void _autoAggressive;
     let lastStatus: Record<string, unknown> = {
       oneTradeOnly,
+      closeOnlyNoFlip,
       takeProfitEnabled,
       breakEvenEnabled,
       trailingEnabled,
-      engine: "VS_PRO_V2",
+      engine: "VS_MICRO_1M5",
       minScore,
     };
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
       const timeframe = config.timeframe ?? "15m";
+
+      // Direction from last 5 × 1m candles (user rule)
+      const m1 = await this.market.getCandles(brokerSymbol, "1m", 30);
+      const m1Source = this.market.getCandleSource(brokerSymbol, "1m");
+      const micro = evaluateMicro1mFive(m1);
+      lastStatus = {
+        ...lastStatus,
+        symbol: brokerSymbol,
+        micro: micro.signal,
+        microBull: micro.bullCount,
+        microBear: micro.bearCount,
+        microNetPct: Number(micro.netPct.toFixed(4)),
+        candleSource1m: m1Source,
+        gate: micro.gate,
+      };
+      if (micro.signal === "HOLD") {
+        lastStatus = {
+          ...lastStatus,
+          signal: "HOLD",
+          skip: "micro_flat",
+          score: 0,
+          bias: "flat",
+        };
+        continue;
+      }
+
+      // Higher TF candles for ATR / SL / TP sizing only
       const candles = await this.market.getCandles(
         brokerSymbol,
         timeframe,
@@ -253,7 +284,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       if (candles.length < 55) {
         lastStatus = {
           ...lastStatus,
-          symbol: brokerSymbol,
           skip: "not_enough_candles",
           candles: candles.length,
           candleSource,
@@ -264,70 +294,53 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       if (!ind || ind.atr <= 0) {
         lastStatus = {
           ...lastStatus,
-          symbol: brokerSymbol,
           skip: "indicators_failed",
           candleSource,
         };
         continue;
       }
 
-      let scored = this.evaluatePro(
+      // Soft confluence: prefer when HTF agrees; still allow micro if score not opposing hard
+      const scored = this.evaluatePro(
         strategy.mode as StrategyMode,
         ind,
         minAdx,
-        minScore,
+        Math.max(minScore - 12, 36),
         sessionFilter,
       );
-      let signal = scored.signal;
-      // Mild fallback: if mode is strict HOLD but structure is clear, retry with lower bar
-      if (signal === "HOLD" && scored.score >= 40 && scored.bias !== "flat") {
-        scored = this.evaluatePro(
-          StrategyMode.SCALPING,
-          ind,
-          Math.max(minAdx - 2, 12),
-          Math.max(minScore - 6, 42),
-          false,
-        );
-        signal = scored.signal;
-      }
-      // Optional aggressive path — still OFF by default
-      if (signal === "HOLD" && autoAggressive) {
-        scored = this.evaluatePro(
-          StrategyMode.SCALPING,
-          ind,
-          Math.max(minAdx - 4, 10),
-          Math.max(minScore - 10, 38),
-          false,
-        );
-        signal = scored.signal;
+      // Micro already filtered HOLD above — full Signal type for downstream CLOSE checks
+      let signal: Signal = "BUY";
+      if (micro.signal === "SELL") signal = "SELL";
+      // Block only if HTF is strongly opposite
+      if (
+        (signal === "BUY" && scored.bias === "bear" && scored.score >= minScore) ||
+        (signal === "SELL" && scored.bias === "bull" && scored.score >= minScore)
+      ) {
+        lastStatus = {
+          ...lastStatus,
+          signal: "HOLD",
+          skip: "htf_conflict",
+          score: scored.score,
+          bias: scored.bias,
+          candleSource,
+        };
+        continue;
       }
 
       lastStatus = {
         ...lastStatus,
-        score: scored.score,
-        gate: scored.gate,
-        bias: scored.bias,
+        score: Math.max(scored.score, 55),
+        gate: micro.gate,
+        bias: signal === "BUY" ? "bull" : "bear",
         candleSource,
+        signal,
       };
-
-      if (signal === "HOLD") {
-        lastStatus = {
-          ...lastStatus,
-          symbol: brokerSymbol,
-          signal: "HOLD",
-          skip:
-            scored.gate === "score_low"
-              ? "quality_wait"
-              : scored.gate ?? "hold",
-        };
-        continue;
-      }
 
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
       const key = `${strategy.id}:${brokerSymbol}`;
 
       // If account already has an open trade, explain that clearly (don't hide behind cooldown)
-      if (oneTradeOnly && signal !== "CLOSE") {
+      if (oneTradeOnly) {
         let blockedByOpen = false;
         let openCount = 0;
         for (const accountId of accountIds) {
@@ -358,7 +371,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Flat after SL/close — allow same-direction re-entry (fingerprint used to block forever)
-      if (signal !== "CLOSE") {
+      {
         let anyOpen = false;
         for (const accountId of accountIds) {
           const c = await this.prisma.position.count({
@@ -391,7 +404,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         };
         continue;
       }
-      if (this.lastFingerprint.get(key) === fingerprint && signal !== "CLOSE") {
+      if (this.lastFingerprint.get(key) === fingerprint) {
         lastStatus = {
           ...lastStatus,
           symbol: brokerSymbol,
@@ -455,20 +468,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             reason: "other_symbol_open",
             openTrades: openAnywhere.length,
           };
-          continue;
-        }
-
-        if (signal === "CLOSE") {
-          for (const pos of openOnSymbol) {
-            await this.positions.close(
-              strategy.organizationId,
-              actorId,
-              pos.id,
-              { clientRequestId: newId() },
-              correlationId,
-            );
-            acted = true;
-          }
           continue;
         }
 
@@ -538,15 +537,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             : Math.max(ind.atr * atrStopMult, entry * 0.00065);
         // Initial SL ~35% closer, but never tighter than Capital min-stop floor
         stopDist = Math.max(stopDist * 0.65, minDist);
+        // TP follows user ATR× / pips — allow closer TP (no minDist / 1.5R force)
         let tpDist =
           config.takeProfitPips != null
             ? pip * config.takeProfitPips
-            : Math.max(ind.atr * atrTpMult, entry * 0.0015);
-        // Enforce minimum ~1.5R so tight SL still has room to win
-        if (takeProfitEnabled && tpDist < stopDist * 1.5) {
-          tpDist = stopDist * 1.5;
-        }
-        tpDist = Math.max(tpDist, minDist);
+            : Math.max(ind.atr * atrTpMult, pip * 3);
+        tpDist = Math.max(tpDist, pip * 2);
 
         const stopLoss =
           signal === "BUY"

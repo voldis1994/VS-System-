@@ -126,7 +126,7 @@ export class StrategiesService {
     const configurationJson = {
       ...prevConfig,
       oneTradeOnly: prevConfig.oneTradeOnly !== false,
-      closeOnlyNoFlip: prevConfig.closeOnlyNoFlip ?? true,
+      closeOnlyNoFlip: prevConfig.closeOnlyNoFlip === true,
     };
 
     const updated = await this.prisma.strategy.update({
@@ -387,9 +387,9 @@ export class StrategiesService {
     const cfgIn = input.configuration as Record<string, unknown>;
     const configuration = {
       ...input.configuration,
-      oneTradeOnly: true,
-      closeOnlyNoFlip: true,
-      // Respect client config; default selective (micro-safe)
+      oneTradeOnly: cfgIn.oneTradeOnly !== false,
+      // Flip BUY↔SELL allowed unless explicitly disabled
+      closeOnlyNoFlip: cfgIn.closeOnlyNoFlip === true,
       autoAggressive: cfgIn.autoAggressive === true,
     };
 
@@ -503,7 +503,11 @@ export class StrategiesService {
 
         let takeProfit: string | null = pos.takeProfit ? String(pos.takeProfit) : null;
         if (tpEnabled && Number.isFinite(entry) && entry > 0) {
-          const tpDist = Math.max(minDist * 1.5, entry * 0.001 * atrTpMult);
+          const takeProfitPips = Number(config.takeProfitPips);
+          const tpDist =
+            Number.isFinite(takeProfitPips) && takeProfitPips > 0
+              ? pip * takeProfitPips
+              : Math.max(pip * 3, entry * 0.0004 * Math.max(atrTpMult, 0.3));
           takeProfit = formatInstrumentPrice(
             pos.symbol,
             dir === "BUY"

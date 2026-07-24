@@ -150,7 +150,7 @@ function buildConfiguration(d: AccountDraft) {
     useRiskPercent: d.sizeMode === "RISK",
     volume,
     oneTradeOnly: true,
-    closeOnlyNoFlip: true,
+    closeOnlyNoFlip: false,
     autoAggressive: false,
     sessionFilter: false,
     minScore: 48,
@@ -549,7 +549,7 @@ export default function StrategiesPage() {
                     }
                     label={draft.tpEnabled ? "TP ON" : "TP OFF"}
                   />
-                  <Field label="TP ATR×">
+                  <Field label="TP ATR× (mazāks = tuvāks TP)">
                     <Input
                       value={draft.atrTpMult}
                       disabled={!draft.tpEnabled}
@@ -562,6 +562,10 @@ export default function StrategiesPage() {
                       className="font-mono"
                     />
                   </Field>
+                  <p className="text-[11px] text-zinc-500">
+                    BUY/SELL nosaka pēdējās 5×1m sveces. TP ATR× piem. 0.8–1.2 =
+                    tuvāks mērķis.
+                  </p>
                 </div>
 
                 <div className="space-y-2 rounded-md border border-white/[0.06] p-3">

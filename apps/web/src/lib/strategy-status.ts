@@ -22,6 +22,15 @@ export type DeploymentState = {
 };
 
 export function deploymentHint(d: DeploymentState): string | null {
+  if (d.skip === "micro_flat" || d.gate === "micro_flat") {
+    return "1m×5 sveces flat — gaida skaidru BUY/SELL ( ≥3 zaļas/sarkanas + net virziens ).";
+  }
+  if (d.skip === "htf_conflict") {
+    return "1m signāls pret HTF bias — gaida saskaņu.";
+  }
+  if (d.gate === "micro_1m5_buy" || d.gate === "micro_1m5_sell") {
+    return `Virziens no 1m×5 (${d.gate === "micro_1m5_buy" ? "BUY" : "SELL"}).`;
+  }
   if (d.skip === "live_trading_off") {
     return "LIVE trading OFF — Accounts lapā ieslēdz LIVE ON.";
   }
