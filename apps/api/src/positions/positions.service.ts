@@ -88,7 +88,6 @@ export class PositionsService {
   }
 
   async list(organizationId: string) {
-    await this.reconcileClosedAgainstBroker();
     const positions = await this.prisma.position.findMany({
       where: {
         organizationId,
@@ -96,36 +95,58 @@ export class PositionsService {
       },
       orderBy: { openedAt: "desc" },
     });
-    // Refresh mark-to-market from brokers when available
+
+    // One getOpenPositions per account (was N+1 — made UI feel laggy)
+    const byAccount = new Map<string, typeof positions>();
     for (const p of positions) {
-      const adapter = this.brokers.get(p.accountId);
-      if (!adapter || !p.brokerPositionId) continue;
-      const open = await adapter.getOpenPositions();
-      const match = open.find((x) => x.brokerPositionId === p.brokerPositionId);
-      if (match) {
-        await this.prisma.position.update({
-          where: { id: p.id },
-          data: {
-            currentPrice: match.currentPrice,
-            unrealizedPnl: match.unrealizedPnl,
-            volume: match.volume,
-            stopLoss: match.stopLoss,
-            takeProfit: match.takeProfit,
-            status: match.status as never,
-          },
-        });
-      } else {
-        await this.prisma.position.update({
-          where: { id: p.id },
-          data: {
-            status: "CLOSED",
-            closedAt: p.closedAt ?? new Date(),
-            unrealizedPnl: "0",
-            volume: "0",
-          },
-        });
+      const list = byAccount.get(p.accountId) ?? [];
+      list.push(p);
+      byAccount.set(p.accountId, list);
+    }
+
+    for (const [accountId, accountPositions] of byAccount) {
+      const adapter = this.brokers.get(accountId);
+      if (!adapter) continue;
+      let live: Awaited<ReturnType<typeof adapter.getOpenPositions>>;
+      try {
+        live = await adapter.getOpenPositions();
+      } catch {
+        continue;
+      }
+      const liveById = new Map(
+        live
+          .filter((x) => x.brokerPositionId)
+          .map((x) => [x.brokerPositionId!, x]),
+      );
+      for (const p of accountPositions) {
+        if (!p.brokerPositionId) continue;
+        const match = liveById.get(p.brokerPositionId);
+        if (match) {
+          await this.prisma.position.update({
+            where: { id: p.id },
+            data: {
+              currentPrice: match.currentPrice,
+              unrealizedPnl: match.unrealizedPnl,
+              volume: match.volume,
+              stopLoss: match.stopLoss,
+              takeProfit: match.takeProfit,
+              status: match.status as never,
+            },
+          });
+        } else {
+          await this.prisma.position.update({
+            where: { id: p.id },
+            data: {
+              status: "CLOSED",
+              closedAt: p.closedAt ?? new Date(),
+              unrealizedPnl: "0",
+              volume: "0",
+            },
+          });
+        }
       }
     }
+
     return this.prisma.position.findMany({
       where: {
         organizationId,
@@ -477,8 +498,12 @@ export class PositionsService {
   async autoManageProtections(
     priceBySymbol: Map<string, number>,
     correlationId: string,
+    opts?: { skipReconcile?: boolean },
   ) {
-    await this.reconcileClosedAgainstBroker();
+    // Reconcile is folded into the live snapshot below unless caller already did it
+    if (!opts?.skipReconcile) {
+      // no-op placeholder — live fetch below closes ghosts
+    }
 
     const open = await this.prisma.position.findMany({
       where: {

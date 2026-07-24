@@ -164,7 +164,7 @@ function buildConfiguration(d: AccountDraft) {
     trailingActivationPips: Number(d.trailActPips) || Number(d.trailPips) || 15,
     exitVersion: d.exitVersion,
     minAdx: 14,
-    cooldownSeconds: 30,
+    cooldownSeconds: 15,
   };
 }
 

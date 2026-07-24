@@ -42,7 +42,7 @@ export class MarketDataService implements OnModuleInit {
       this.prices.set(s, p);
     }
     this.timer = setInterval(() => void this.tickSimulation(), 1000);
-    this.capitalPriceTimer = setInterval(() => void this.refreshCapitalPrices(), 4000);
+    this.capitalPriceTimer = setInterval(() => void this.refreshCapitalPrices(), 8000);
   }
 
   getTick(symbol: string) {
@@ -273,15 +273,44 @@ export class MarketDataService implements OnModuleInit {
   }
 
   private async refreshCapitalPrices() {
+    // Prefer live trading symbols over dumping 40 market-nav epics into REST
+    const fromDb = await this.prisma.position.findMany({
+      where: { status: { in: ["OPEN", "PARTIALLY_CLOSED"] } },
+      select: { symbol: true },
+      take: 20,
+    });
+    const strategies = await this.prisma.strategy.findMany({
+      where: { status: "RUNNING" },
+      select: { assignedSymbols: true },
+      take: 20,
+    });
+    const fromStrategies: string[] = [];
+    for (const s of strategies) {
+      for (const sym of (s.assignedSymbols as string[]) ?? []) {
+        fromStrategies.push(resolveCapitalEpic(sym));
+      }
+    }
     const watch = [
       ...new Set([
-        ...[...this.prices.keys()].slice(0, 30),
-        ...this.capitalMarketsCache.slice(0, 20).map((m) => m.epic),
+        ...fromDb.map((p) => resolveCapitalEpic(p.symbol)),
+        ...fromStrategies,
+        ...[...this.prices.keys()].slice(0, 8),
       ]),
-    ].slice(0, 40);
+    ].slice(0, 12);
     if (watch.length === 0) return;
     const adapter = await this.getCapitalAdapter();
     if (!adapter) return;
+    try {
+      if (typeof adapter.getMarketQuotes === "function") {
+        const quotes = await adapter.getMarketQuotes(watch);
+        for (const q of quotes) {
+          if (q) this.upsertPriceFromMarket(q);
+        }
+        return;
+      }
+    } catch {
+      // fall through to sequential
+    }
     for (const epic of watch) {
       try {
         const q = await adapter.getMarketQuote(epic);

@@ -23,6 +23,8 @@ export class AccountsService {
       return { ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? "" };
     }
   })();
+  /** Throttle Capital equity refresh on list (UI polls often). */
+  private readonly lastEquityRefresh = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -37,13 +39,20 @@ export class AccountsService {
       where: { organizationId, archivedAt: null },
       orderBy: { createdAt: "asc" },
     });
-    // Refresh equity from live broker adapters when connected
+    // Refresh equity from live broker adapters when connected (max ~1× / 15s per account)
     const refreshed = [];
+    const now = Date.now();
     for (const account of accounts) {
       const adapter = this.brokers.get(account.id);
-      if (adapter && account.connectionStatus === "CONNECTED") {
+      const last = this.lastEquityRefresh.get(account.id) ?? 0;
+      if (
+        adapter &&
+        account.connectionStatus === "CONNECTED" &&
+        now - last >= 15_000
+      ) {
         try {
           const state = await adapter.getAccountState();
+          this.lastEquityRefresh.set(account.id, now);
           const updated = await this.prisma.tradingAccount.update({
             where: { id: account.id },
             data: {

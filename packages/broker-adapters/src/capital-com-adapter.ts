@@ -49,6 +49,9 @@ export class CapitalComAdapter implements BrokerAdapter {
   private connected = false;
   private tokens: SessionTokens | null = null;
   private lastHeartbeatAt = toUtcIso();
+  /** Last successful Capital HTTP activity (session stays warm ~10 min). */
+  private lastActivityAt = 0;
+  private positionsCache: { at: number; data: BrokerPosition[] } | null = null;
   private accountId = "";
   private leverage = 100;
   private currency = "USD";
@@ -339,60 +342,84 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async getMarketQuote(epic: string): Promise<CapitalMarketInfo | null> {
+    const batch = await this.getMarketQuotes([epic]);
+    return batch[0] ?? null;
+  }
+
+  /** Batch quotes — one Capital call for many epics (keeps under 10 req/s). */
+  async getMarketQuotes(epics: string[]): Promise<CapitalMarketInfo[]> {
     await this.ensureSession();
-    const resolved = resolveCapitalEpic(epic);
-    try {
-      const res = await this.request<{
-        market?: Record<string, unknown>;
-        instrument?: { epic?: string; name?: string; type?: string };
-        snapshot?: {
-          bid?: number;
-          offer?: number;
-          high?: number;
-          low?: number;
-          percentageChange?: number;
-          marketStatus?: string;
-        };
-      }>("GET", `/api/v1/markets/${encodeURIComponent(resolved)}`);
-      const epicOut = String(res.instrument?.epic ?? res.market?.epic ?? resolved);
-      return {
-        epic: epicOut,
-        name: String(res.instrument?.name ?? res.market?.instrumentName ?? epicOut),
-        instrumentType: String(res.instrument?.type ?? res.market?.instrumentType ?? "CFD"),
-        bid: numOrUndef(res.snapshot?.bid ?? res.market?.bid),
-        offer: numOrUndef(res.snapshot?.offer ?? res.market?.offer),
-        high: numOrUndef(res.snapshot?.high ?? res.market?.high),
-        low: numOrUndef(res.snapshot?.low ?? res.market?.low),
-        percentageChange: numOrUndef(
-          res.snapshot?.percentageChange ?? res.market?.percentageChange,
-        ),
-        marketStatus: String(
-          res.snapshot?.marketStatus ?? res.market?.marketStatus ?? "",
-        ),
-      };
-    } catch {
+    const resolved = [
+      ...new Set(epics.map((e) => resolveCapitalEpic(e)).filter(Boolean)),
+    ];
+    if (resolved.length === 0) return [];
+    // Capital accepts comma-separated epics; keep batches modest
+    const out: CapitalMarketInfo[] = [];
+    for (let i = 0; i < resolved.length; i += 20) {
+      const chunk = resolved.slice(i, i + 20);
       try {
         const res = await this.request<{ markets?: Array<Record<string, unknown>> }>(
           "GET",
-          `/api/v1/markets?epics=${encodeURIComponent(resolved)}`,
+          `/api/v1/markets?epics=${encodeURIComponent(chunk.join(","))}`,
         );
-        const m = res.markets?.[0];
-        if (!m) return null;
-        return {
-          epic: String(m.epic),
-          name: String(m.instrumentName ?? m.epic),
-          instrumentType: String(m.instrumentType ?? "CFD"),
-          bid: numOrUndef(m.bid),
-          offer: numOrUndef(m.offer),
-          high: numOrUndef(m.high),
-          low: numOrUndef(m.low),
-          percentageChange: numOrUndef(m.percentageChange),
-          marketStatus: String(m.marketStatus ?? ""),
-        };
+        for (const m of res.markets ?? []) {
+          out.push({
+            epic: String(m.epic),
+            name: String(m.instrumentName ?? m.epic),
+            instrumentType: String(m.instrumentType ?? "CFD"),
+            bid: numOrUndef(m.bid),
+            offer: numOrUndef(m.offer),
+            high: numOrUndef(m.high),
+            low: numOrUndef(m.low),
+            percentageChange: numOrUndef(m.percentageChange),
+            marketStatus: String(m.marketStatus ?? ""),
+          });
+        }
       } catch {
-        return null;
+        // fallback: single-market path for this chunk
+        for (const epic of chunk) {
+          try {
+            const res = await this.request<{
+              market?: Record<string, unknown>;
+              instrument?: { epic?: string; name?: string; type?: string };
+              snapshot?: {
+                bid?: number;
+                offer?: number;
+                high?: number;
+                low?: number;
+                percentageChange?: number;
+                marketStatus?: string;
+              };
+            }>("GET", `/api/v1/markets/${encodeURIComponent(epic)}`);
+            const epicOut = String(
+              res.instrument?.epic ?? res.market?.epic ?? epic,
+            );
+            out.push({
+              epic: epicOut,
+              name: String(
+                res.instrument?.name ?? res.market?.instrumentName ?? epicOut,
+              ),
+              instrumentType: String(
+                res.instrument?.type ?? res.market?.instrumentType ?? "CFD",
+              ),
+              bid: numOrUndef(res.snapshot?.bid ?? res.market?.bid),
+              offer: numOrUndef(res.snapshot?.offer ?? res.market?.offer),
+              high: numOrUndef(res.snapshot?.high ?? res.market?.high),
+              low: numOrUndef(res.snapshot?.low ?? res.market?.low),
+              percentageChange: numOrUndef(
+                res.snapshot?.percentageChange ?? res.market?.percentageChange,
+              ),
+              marketStatus: String(
+                res.snapshot?.marketStatus ?? res.market?.marketStatus ?? "",
+              ),
+            });
+          } catch {
+            // skip
+          }
+        }
       }
     }
+    return out;
   }
 
   private toBrokerSymbol(m: CapitalMarketInfo): BrokerSymbol {
@@ -483,6 +510,10 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async getOpenPositions(): Promise<BrokerPosition[]> {
+    const cached = this.positionsCache;
+    if (cached && Date.now() - cached.at < 1500) {
+      return cached.data;
+    }
     await this.ensureSession();
     const res = await this.request<{
       positions?: Array<{
@@ -501,7 +532,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       }>;
     }>("GET", "/api/v1/positions");
 
-    return (res.positions ?? []).map((row) => {
+    const data = (res.positions ?? []).map((row) => {
       const p = row.position!;
       const current =
         p.direction === "BUY"
@@ -525,6 +556,13 @@ export class CapitalComAdapter implements BrokerAdapter {
         updatedAt: toUtcIso(),
       };
     });
+    this.positionsCache = { at: Date.now(), data };
+    return data;
+  }
+
+  /** Drop short-lived positions cache after place/modify/close. */
+  private invalidatePositionsCache() {
+    this.positionsCache = null;
   }
 
   async getTradeHistory(_range: DateRange): Promise<BrokerTrade[]> {
@@ -595,6 +633,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       rejectionMessage: accepted ? undefined : confirm.reason ?? "Capital.com rejected order",
     };
     this.processed.set(request.clientRequestId, response);
+    this.invalidatePositionsCache();
     return response;
   }
 
@@ -654,8 +693,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       // UNKNOWN after timeout — still re-fetch; may have applied
     }
 
-    // Brief settle so getOpenPositions reflects new stop/profit levels
-    await new Promise((r) => setTimeout(r, 350));
+    this.invalidatePositionsCache();
     const positions = await this.getOpenPositions();
     const found = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
     if (!found) throw new Error("Position not found after modify");
@@ -684,6 +722,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       `/api/v1/positions/${request.brokerPositionId}`,
     );
     const confirm = await this.waitConfirm(res.dealReference);
+    this.invalidatePositionsCache();
     return {
       closedVolume: pos.volume,
       remainingVolume: "0",
@@ -712,6 +751,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       `/api/v1/positions/${request.brokerPositionId}?size=${closeSize}`,
     );
     const confirm = await this.waitConfirm(res.dealReference);
+    this.invalidatePositionsCache();
     const remaining = d(current).minus(closeSize);
     return {
       closedVolume: String(closeSize),
@@ -783,6 +823,8 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
     this.tokens = { cst, securityToken };
     this.lastHeartbeatAt = toUtcIso();
+    this.lastActivityAt = Date.now();
+    this.invalidatePositionsCache();
     try {
       const body = (await res.json()) as { accountId?: string };
       if (body.accountId) {
@@ -839,7 +881,11 @@ export class CapitalComAdapter implements BrokerAdapter {
       await this.createSession();
       return;
     }
-    // refresh proactively if idle risk — Capital sessions expire after 10 min inactivity
+    // Capital sessions expire after ~10 min inactivity — ping only when idle
+    const idleMs = Date.now() - this.lastActivityAt;
+    if (this.lastActivityAt > 0 && idleMs < 8 * 60_000) {
+      return;
+    }
     try {
       await this.request("GET", "/api/v1/session");
     } catch {
@@ -855,8 +901,10 @@ export class CapitalComAdapter implements BrokerAdapter {
     profit?: number;
     reason?: string;
   }> {
-    for (let i = 0; i < 8; i++) {
-      await new Promise((r) => setTimeout(r, 400));
+    // Fast poll with short backoff (was fixed 8×400ms = up to 3.2s sleep alone)
+    const delays = [40, 80, 120, 180, 250, 350, 500];
+    for (let i = 0; i < delays.length; i++) {
+      await new Promise((r) => setTimeout(r, delays[i]));
       try {
         const confirm = await this.request<{
           dealId?: string;
@@ -880,6 +928,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     method: string,
     path: string,
     body?: unknown,
+    retried = false,
   ): Promise<T> {
     if (!this.tokens && path !== "/api/v1/session") {
       await this.createSession();
@@ -903,10 +952,17 @@ export class CapitalComAdapter implements BrokerAdapter {
     if (cst && securityToken) {
       this.tokens = { cst, securityToken };
     }
+    if ((res.status === 401 || res.status === 403) && !retried && path !== "/api/v1/session") {
+      this.tokens = null;
+      await this.createSession();
+      return this.request(method, path, body, true);
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Capital.com ${method} ${path} failed (${res.status}): ${text}`);
     }
+    this.lastActivityAt = Date.now();
+    this.lastHeartbeatAt = toUtcIso();
     if (res.status === 204) return {} as T;
     const text = await res.text();
     if (!text) return {} as T;

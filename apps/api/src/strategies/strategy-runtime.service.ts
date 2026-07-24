@@ -77,8 +77,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit() {
-    this.timer = setInterval(() => void this.tickAll(), 5000);
-    this.log.log("VS System strategy runtime started (professional engine, 5s tick)");
+    this.timer = setInterval(() => void this.tickAll(), 3000);
+    this.log.log("VS System strategy runtime started (professional engine, 3s tick)");
   }
 
   onModuleDestroy() {
@@ -89,11 +89,34 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      await this.manageExitProtections();
-
+      // One reconcile pass for all accounts (was repeated per strategy + protections)
       const running = await this.prisma.strategy.findMany({
         where: { status: "RUNNING" },
       });
+      const accountIds = new Set<string>();
+      for (const s of running) {
+        for (const id of (s.assignedAccountIds as string[]) ?? []) {
+          accountIds.add(id);
+        }
+      }
+      const openAcc = await this.prisma.position.findMany({
+        where: { status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] } },
+        select: { accountId: true },
+        distinct: ["accountId"],
+      });
+      for (const row of openAcc) accountIds.add(row.accountId);
+      for (const accountId of accountIds) {
+        try {
+          await this.positions.reconcileClosedAgainstBroker(accountId);
+        } catch (err) {
+          this.log.warn(
+            `Reconcile ${accountId}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
+
+      await this.manageExitProtections();
+
       for (const strategy of running) {
         try {
           await this.tickStrategy(strategy);
@@ -136,7 +159,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         if (Number.isFinite(mid) && mid > 0) priceBySymbol.set(symbol, mid);
       }
     }
-    await this.positions.autoManageProtections(priceBySymbol, newId());
+    await this.positions.autoManageProtections(priceBySymbol, newId(), {
+      skipReconcile: true,
+    });
   }
 
   private async tickStrategy(strategy: {
@@ -152,16 +177,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   }) {
     const accountIds = (strategy.assignedAccountIds as string[]) ?? [];
     const symbols = (strategy.assignedSymbols as string[]) ?? ["EURUSD"];
-    // Drop ghost OPEN rows after broker SL/TP so oneTradeOnly can re-enter
-    for (const accountId of accountIds) {
-      try {
-        await this.positions.reconcileClosedAgainstBroker(accountId);
-      } catch (err) {
-        this.log.warn(
-          `Reconcile before tick failed: ${err instanceof Error ? err.message : err}`,
-        );
-      }
-    }
+    // Reconcile already ran once in tickAll — skip duplicate broker lists here
     const config = (strategy.configurationJson ?? {}) as {
       timeframe?: string;
       riskPercent?: number;
@@ -192,7 +208,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       /** Prefer London/NY session hours (UTC) — opt-in */
       sessionFilter?: boolean;
     };
-    const cooldownMs = (config.cooldownSeconds ?? 30) * 1000;
+    const cooldownMs = (config.cooldownSeconds ?? 15) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
     const atrStopMult = config.atrStopMult ?? 1.0;

@@ -30,7 +30,7 @@ export function useAccounts() {
     queryKey: ["accounts"],
     queryFn: () => api<TradingAccount[]>("/accounts", { token: token! }),
     enabled: !!token,
-    refetchInterval: 5000,
+    refetchInterval: 15_000,
   });
 }
 
@@ -40,7 +40,7 @@ export function usePositions() {
     queryKey: ["positions"],
     queryFn: () => api<Position[]>("/positions", { token: token! }),
     enabled: !!token,
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   });
 }
 
@@ -50,7 +50,7 @@ export function useOrders() {
     queryKey: ["orders"],
     queryFn: () => api<Order[]>("/orders", { token: token! }),
     enabled: !!token,
-    refetchInterval: 4000,
+    refetchInterval: 6000,
   });
 }
 
@@ -60,7 +60,7 @@ export function useTicks() {
     queryKey: ["ticks"],
     queryFn: () => api<MarketTick[]>("/market-data/ticks", { token: token! }),
     enabled: !!token,
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 }
 
@@ -70,7 +70,7 @@ export function useAnalytics() {
     queryKey: ["analytics-overview"],
     queryFn: () => api<AnalyticsOverview>("/analytics/overview", { token: token! }),
     enabled: !!token,
-    refetchInterval: 5000,
+    refetchInterval: 10_000,
   });
 }
 
@@ -80,7 +80,7 @@ export function useNotifications() {
     queryKey: ["notifications"],
     queryFn: () => api<Notification[]>("/notifications", { token: token! }),
     enabled: !!token,
-    refetchInterval: 8000,
+    refetchInterval: 10_000,
   });
 }
 
@@ -90,7 +90,7 @@ export function useStrategies() {
     queryKey: ["strategies"],
     queryFn: () => api<Strategy[]>("/strategies", { token: token! }),
     enabled: !!token,
-    refetchInterval: 5000,
+    refetchInterval: 4000,
   });
 }
 
