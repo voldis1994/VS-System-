@@ -24,6 +24,7 @@ type RegisterValues = z.infer<typeof RegisterSchema>;
 
 type AuthResponse = {
   accessToken?: string;
+  refreshToken?: string;
   requires2FA?: boolean;
   challengeToken?: string;
   user: AuthUser;
@@ -79,6 +80,7 @@ export default function LoginPage() {
       if (!res.accessToken) throw new Error("No access token returned");
       setSession({
         accessToken: res.accessToken,
+        refreshToken: res.refreshToken ?? null,
         user: res.user,
         organization: res.organization ?? null,
         tradingPinVerified: res.tradingPinVerified ?? false,
@@ -99,6 +101,7 @@ export default function LoginPage() {
       if (!res.accessToken) throw new Error("No access token returned");
       setSession({
         accessToken: res.accessToken,
+        refreshToken: res.refreshToken ?? null,
         user: res.user,
         organization: res.organization ?? null,
         tradingPinVerified: false,

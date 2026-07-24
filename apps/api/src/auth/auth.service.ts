@@ -349,6 +349,100 @@ export class AuthService {
     return { ok: true };
   }
 
+  /** Rotate refresh token → new access + refresh (keeps trading PIN claim when possible). */
+  async refresh(
+    raw: { refreshToken?: string; accessToken?: string },
+    meta: { ip?: string; ua?: string; correlationId: string },
+  ) {
+    const refreshToken = String(raw?.refreshToken ?? "");
+    if (refreshToken.length < 20) {
+      throw new AppError(
+        ErrorCodes.AUTH_SESSION_EXPIRED,
+        "Invalid or expired session",
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const session = await this.prisma.session.findFirst({
+      where: {
+        refreshTokenHash: hashToken(refreshToken),
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      include: {
+        user: true,
+        organization: true,
+      },
+    });
+    if (!session) {
+      throw new AppError(
+        ErrorCodes.AUTH_SESSION_EXPIRED,
+        "Invalid or expired session",
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const membership = await this.prisma.membership.findUnique({
+      where: {
+        organizationId_userId: {
+          organizationId: session.organizationId,
+          userId: session.userId,
+        },
+      },
+    });
+    if (!membership) {
+      throw new AppError(
+        ErrorCodes.AUTH_SESSION_EXPIRED,
+        "Invalid or expired session",
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    let tradingPinVerified = false;
+    if (raw.accessToken) {
+      try {
+        const prev = this.jwt.verify<{ tradingPinVerified?: boolean }>(raw.accessToken, {
+          ignoreExpiration: true,
+        });
+        tradingPinVerified = Boolean(prev.tradingPinVerified);
+      } catch {
+        tradingPinVerified = false;
+      }
+    }
+
+    // Rotate: revoke used refresh
+    await this.prisma.session.update({
+      where: { id: session.id },
+      data: { revokedAt: new Date() },
+    });
+
+    const tokens = await this.issueTokens({
+      userId: session.userId,
+      email: session.user.email,
+      organizationId: session.organizationId,
+      role: membership.role as Role,
+      tradingPinVerified,
+      ip: meta.ip,
+      ua: meta.ua,
+    });
+
+    await this.audit.record({
+      organizationId: session.organizationId,
+      actorId: session.userId,
+      action: "AUTH_REFRESH",
+      resourceType: "Session",
+      resourceId: session.id,
+      correlationId: meta.correlationId,
+    });
+
+    return {
+      user: this.publicUser(session.user),
+      organization: session.organization,
+      tradingPinVerified,
+      ...tokens,
+    };
+  }
+
   async me(userId: string, organizationId: string) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const membership = await this.prisma.membership.findUniqueOrThrow({

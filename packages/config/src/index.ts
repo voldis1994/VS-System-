@@ -7,7 +7,7 @@ export const EnvSchema = z.object({
   API_PORT: z.coerce.number().default(4000),
   API_HOST: z.string().default("0.0.0.0"),
   JWT_SECRET: z.string().min(32),
-  JWT_EXPIRES_IN: z.string().default("8h"),
+  JWT_EXPIRES_IN: z.string().default("24h"),
   ENCRYPTION_KEY: z.string().length(64),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   DEFAULT_TRADING_MODE: z.enum(["PAPER", "LIVE"]).default("PAPER"),

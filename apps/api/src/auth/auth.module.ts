@@ -12,7 +12,7 @@ const env = (() => {
   } catch {
     return {
       JWT_SECRET: process.env.JWT_SECRET ?? "dev-secret-change-me-32chars-min!!",
-      JWT_EXPIRES_IN: "8h",
+      JWT_EXPIRES_IN: "24h",
     };
   }
 })();

@@ -111,6 +111,21 @@ export class AuthController {
     return { ok: true };
   }
 
+  @Post("refresh")
+  async refresh(
+    @Body() body: { refreshToken?: string; accessToken?: string },
+    @Req() req: Request & { correlationId?: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.auth.refresh(body, {
+      ip: req.ip,
+      ua: req.headers["user-agent"],
+      correlationId: req.correlationId ?? "unknown",
+    });
+    this.setAuthCookie(res, result.accessToken);
+    return result;
+  }
+
   @Get("me")
   @UseGuards(JwtAuthGuard)
   async me(@Req() req: Request & { user: AuthUser }) {
@@ -122,7 +137,7 @@ export class AuthController {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
-      maxAge: 8 * 60 * 60 * 1000,
+      maxAge: 24 * 60 * 60 * 1000,
     });
   }
 }

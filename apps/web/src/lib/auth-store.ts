@@ -21,16 +21,19 @@ export type AuthOrganization = {
 
 type AuthState = {
   accessToken: string | null;
+  refreshToken: string | null;
   tradingPinVerified: boolean;
   liveModeRequested: boolean;
   user: AuthUser | null;
   organization: AuthOrganization | null;
   setSession: (payload: {
     accessToken: string;
+    refreshToken?: string | null;
     user: AuthUser;
     organization?: AuthOrganization | null;
     tradingPinVerified?: boolean;
   }) => void;
+  setTokens: (accessToken: string, refreshToken?: string | null) => void;
   setTradingPinVerified: (verified: boolean, accessToken?: string) => void;
   setLiveModeRequested: (requested: boolean) => void;
   clear: () => void;
@@ -40,18 +43,32 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       accessToken: null,
+      refreshToken: null,
       tradingPinVerified: false,
       liveModeRequested: false,
       user: null,
       organization: null,
-      setSession: ({ accessToken, user, organization, tradingPinVerified }) =>
+      setSession: ({
+        accessToken,
+        refreshToken,
+        user,
+        organization,
+        tradingPinVerified,
+      }) =>
         set({
           accessToken,
+          refreshToken: refreshToken ?? null,
           user,
           organization: organization ?? null,
           tradingPinVerified: tradingPinVerified ?? false,
           liveModeRequested: false,
         }),
+      setTokens: (accessToken, refreshToken) =>
+        set((s) => ({
+          accessToken,
+          refreshToken:
+            refreshToken === undefined ? s.refreshToken : refreshToken,
+        })),
       setTradingPinVerified: (verified, accessToken) =>
         set((s) => ({
           tradingPinVerified: verified,
@@ -61,6 +78,7 @@ export const useAuthStore = create<AuthState>()(
       clear: () =>
         set({
           accessToken: null,
+          refreshToken: null,
           tradingPinVerified: false,
           liveModeRequested: false,
           user: null,
@@ -71,6 +89,7 @@ export const useAuthStore = create<AuthState>()(
       name: "nexus-auth",
       partialize: (s) => ({
         accessToken: s.accessToken,
+        refreshToken: s.refreshToken,
         user: s.user,
         organization: s.organization,
         tradingPinVerified: s.tradingPinVerified,
