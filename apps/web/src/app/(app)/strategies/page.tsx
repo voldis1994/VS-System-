@@ -121,7 +121,7 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
       ? exitVersion
       : "CUSTOM",
     tpEnabled: c.takeProfitEnabled !== false,
-    atrTpMult: String(typeof c.atrTpMult === "number" ? c.atrTpMult : 2.4),
+    atrTpMult: String(typeof c.atrTpMult === "number" ? c.atrTpMult : 2.2),
     beEnabled: Boolean(c.breakEvenEnabled),
     beActivationPips: String(
       typeof c.breakEvenActivationPips === "number" ? c.breakEvenActivationPips : 10,

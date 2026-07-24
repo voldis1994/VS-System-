@@ -320,7 +320,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             where: {
               organizationId: strategy.organizationId,
               accountId,
-              status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
             },
           });
           if (openCountForAcc > 0) {
@@ -350,7 +350,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             where: {
               organizationId: strategy.organizationId,
               accountId,
-              status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
               OR: [{ symbol: brokerSymbol }, { symbol }],
             },
           });
@@ -419,7 +419,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           where: {
             organizationId: strategy.organizationId,
             accountId,
-            status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+            status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
           },
         });
         const openOnSymbol = openOnAccount.filter(
@@ -521,8 +521,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           config.stopDistancePips != null
             ? pip * config.stopDistancePips
             : Math.max(ind.atr * atrStopMult, entry * 0.00065);
-        // Initial SL ~35%+ closer to entry — wide ATR stops caused heavy early losses
-        stopDist = Math.max(stopDist * 0.65, minDist * 0.85);
+        // Initial SL ~35% closer, but never tighter than Capital min-stop floor
+        stopDist = Math.max(stopDist * 0.65, minDist);
         let tpDist =
           config.takeProfitPips != null
             ? pip * config.takeProfitPips

@@ -184,7 +184,7 @@ export interface BrokerAdapter {
   getAccountState(): Promise<BrokerAccountState>;
   getSymbols(): Promise<BrokerSymbol[]>;
   getOpenOrders(): Promise<BrokerOrder[]>;
-  getOpenPositions(): Promise<BrokerPosition[]>;
+  getOpenPositions(opts?: { force?: boolean }): Promise<BrokerPosition[]>;
   getTradeHistory(range: DateRange): Promise<BrokerTrade[]>;
 
   placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderResponse>;

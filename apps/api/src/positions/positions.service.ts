@@ -55,7 +55,7 @@ export class PositionsService {
       if (!adapter) continue;
       let live: Awaited<ReturnType<typeof adapter.getOpenPositions>>;
       try {
-        live = await adapter.getOpenPositions();
+        live = await adapter.getOpenPositions({ force: true });
       } catch (err) {
         console.warn(
           `reconcileClosedAgainstBroker ${accId}:`,
@@ -109,7 +109,7 @@ export class PositionsService {
       if (!adapter) continue;
       let live: Awaited<ReturnType<typeof adapter.getOpenPositions>>;
       try {
-        live = await adapter.getOpenPositions();
+        live = await adapter.getOpenPositions({ force: true });
       } catch {
         continue;
       }
@@ -520,7 +520,7 @@ export class PositionsService {
       const adapter = this.brokers.get(accountId);
       if (!adapter) continue;
       try {
-        const live = await adapter.getOpenPositions();
+        const live = await adapter.getOpenPositions({ force: true });
         const liveIds = new Set(
           live.map((x) => x.brokerPositionId).filter(Boolean),
         );

@@ -288,7 +288,7 @@ export class AccountsService {
     const adapter =
       this.brokers.get(id) ?? (await this.brokers.connectAccount(account));
     const state = await adapter.getAccountState();
-    const positions = await adapter.getOpenPositions();
+    const positions = await adapter.getOpenPositions({ force: true });
     const orders = await adapter.getOpenOrders();
     // Close local ghosts after broker SL/TP (otherwise strategies stay blocked)
     const liveIds = new Set(

@@ -212,7 +212,7 @@ export class OrdersService {
     }
 
     const openTrades = await this.prisma.position.count({
-      where: { accountId, status: { in: ["OPEN", "PARTIALLY_CLOSED"] } },
+      where: { accountId, status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] } },
     });
 
     const entryPx = d(

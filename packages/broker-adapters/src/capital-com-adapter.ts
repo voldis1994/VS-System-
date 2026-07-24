@@ -143,6 +143,8 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
     this.connected = false;
     this.tokens = null;
+    this.lastActivityAt = 0;
+    this.invalidatePositionsCache();
   }
 
   async healthCheck(): Promise<BrokerHealth> {
@@ -509,9 +511,14 @@ export class CapitalComAdapter implements BrokerAdapter {
     });
   }
 
-  async getOpenPositions(): Promise<BrokerPosition[]> {
+  async getOpenPositions(opts?: { force?: boolean }): Promise<BrokerPosition[]> {
     const cached = this.positionsCache;
-    if (cached && Date.now() - cached.at < 1500) {
+    if (
+      !opts?.force &&
+      this.tokens &&
+      cached &&
+      Date.now() - cached.at < 1500
+    ) {
       return cached.data;
     }
     await this.ensureSession();
@@ -616,21 +623,59 @@ export class CapitalComAdapter implements BrokerAdapter {
       body,
     );
     const confirm = await this.waitConfirm(res.dealReference);
-    const accepted =
-      confirm.dealStatus === "ACCEPTED" ||
-      confirm.status === "OPEN" ||
-      Boolean(confirm.dealId);
+    let dealId =
+      confirm.dealId && confirm.dealStatus !== "UNKNOWN"
+        ? confirm.dealId
+        : undefined;
+    let fillLevel = confirm.level;
+    let accepted =
+      Boolean(dealId) &&
+      confirm.dealStatus !== "REJECTED" &&
+      confirm.status !== "REJECTED" &&
+      (confirm.dealStatus === "ACCEPTED" ||
+        confirm.status === "OPEN" ||
+        confirm.status === "ACCEPTED");
+
+    // Confirm timeout / UNKNOWN — verify against live positions (never treat dealReference as fill)
+    if (!accepted) {
+      this.invalidatePositionsCache();
+      await new Promise((r) => setTimeout(r, 200));
+      const epic = resolveCapitalEpic(request.symbol);
+      const open = await this.getOpenPositions({ force: true });
+      const match = open
+        .filter(
+          (p) =>
+            p.symbol === epic &&
+            p.direction === request.direction &&
+            Math.abs(Number(p.volume) - Number(request.volume)) < 0.0001,
+        )
+        .sort(
+          (a, b) =>
+            new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime(),
+        )[0];
+      if (match?.brokerPositionId) {
+        accepted = true;
+        dealId = match.brokerPositionId;
+        fillLevel = Number(match.averageEntry);
+      }
+    }
 
     const response: BrokerOrderResponse = {
       accepted,
-      brokerOrderId: confirm.dealId ?? res.dealReference,
+      brokerOrderId: dealId ?? res.dealReference,
       status: accepted ? OrderStatus.FILLED : OrderStatus.REJECTED,
       filledVolume: accepted ? request.volume : "0",
       averageFillPrice:
-        confirm.level != null ? String(confirm.level) : undefined,
-      positionId: confirm.dealId,
-      rejectionCode: accepted ? undefined : confirm.reason ?? "BROKER_ORDER_REJECTED",
-      rejectionMessage: accepted ? undefined : confirm.reason ?? "Capital.com rejected order",
+        fillLevel != null && Number.isFinite(fillLevel)
+          ? String(fillLevel)
+          : undefined,
+      positionId: dealId,
+      rejectionCode: accepted
+        ? undefined
+        : confirm.reason ?? "BROKER_ORDER_REJECTED",
+      rejectionMessage: accepted
+        ? undefined
+        : confirm.reason ?? "Capital.com rejected order / confirm timeout",
     };
     this.processed.set(request.clientRequestId, response);
     this.invalidatePositionsCache();
@@ -694,8 +739,16 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
 
     this.invalidatePositionsCache();
-    const positions = await this.getOpenPositions();
-    const found = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
+    let found: BrokerPosition | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 120 * attempt));
+        this.invalidatePositionsCache();
+      }
+      const positions = await this.getOpenPositions({ force: true });
+      found = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
+      if (found) break;
+    }
     if (!found) throw new Error("Position not found after modify");
 
     // Prefer requested levels when broker readback omits them (common race)
@@ -714,15 +767,34 @@ export class CapitalComAdapter implements BrokerAdapter {
 
   async closePosition(request: BrokerClosePositionRequest): Promise<BrokerCloseResult> {
     await this.ensureSession();
-    const positions = await this.getOpenPositions();
+    const positions = await this.getOpenPositions({ force: true });
     const pos = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
     if (!pos) throw new Error("Position not found");
+    this.invalidatePositionsCache();
     const res = await this.request<{ dealReference: string }>(
       "DELETE",
       `/api/v1/positions/${request.brokerPositionId}`,
     );
     const confirm = await this.waitConfirm(res.dealReference);
     this.invalidatePositionsCache();
+
+    const rejected =
+      confirm.dealStatus === "REJECTED" || confirm.status === "REJECTED";
+    if (rejected) {
+      throw new Error(
+        `Capital close rejected: ${confirm.reason ?? confirm.dealStatus ?? "unknown"}`,
+      );
+    }
+
+    // Confirm UNKNOWN — verify deal is gone from open list
+    if (confirm.dealStatus === "UNKNOWN" || (!confirm.dealId && !confirm.dealStatus)) {
+      await new Promise((r) => setTimeout(r, 200));
+      const stillOpen = await this.getOpenPositions({ force: true });
+      if (stillOpen.some((p) => p.brokerPositionId === request.brokerPositionId)) {
+        throw new Error("Capital close confirm timeout — position still open");
+      }
+    }
+
     return {
       closedVolume: pos.volume,
       remainingVolume: "0",
@@ -882,8 +954,11 @@ export class CapitalComAdapter implements BrokerAdapter {
       return;
     }
     // Capital sessions expire after ~10 min inactivity — ping only when idle
+    // Also re-auth if session has been open a very long time (absolute bound)
     const idleMs = Date.now() - this.lastActivityAt;
-    if (this.lastActivityAt > 0 && idleMs < 8 * 60_000) {
+    const sessionAgeOk =
+      this.lastActivityAt > 0 && idleMs < 8 * 60_000;
+    if (sessionAgeOk) {
       return;
     }
     try {
@@ -901,8 +976,8 @@ export class CapitalComAdapter implements BrokerAdapter {
     profit?: number;
     reason?: string;
   }> {
-    // Fast poll with short backoff (was fixed 8×400ms = up to 3.2s sleep alone)
-    const delays = [40, 80, 120, 180, 250, 350, 500];
+    // Fast poll with short backoff + two slower retries (confirm can lag under load)
+    const delays = [40, 80, 120, 180, 250, 350, 500, 700, 900];
     for (let i = 0; i < delays.length; i++) {
       await new Promise((r) => setTimeout(r, delays[i]));
       try {
@@ -921,7 +996,8 @@ export class CapitalComAdapter implements BrokerAdapter {
         // retry
       }
     }
-    return { dealStatus: "UNKNOWN", reason: "Confirm timeout", dealId: dealReference };
+    // Never return dealReference as dealId — callers used to treat that as a fill
+    return { dealStatus: "UNKNOWN", reason: "Confirm timeout" };
   }
 
   private async request<T = unknown>(

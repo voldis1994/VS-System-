@@ -231,7 +231,7 @@ export class PaperBrokerAdapter implements BrokerAdapter {
     );
   }
 
-  async getOpenPositions(): Promise<BrokerPosition[]> {
+  async getOpenPositions(_opts?: { force?: boolean }): Promise<BrokerPosition[]> {
     this.markToMarket();
     return [...this.positions.values()].filter((p) => p.status === "OPEN" || p.status === "PARTIALLY_CLOSED");
   }
