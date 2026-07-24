@@ -112,12 +112,24 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     const resolved = resolveCapitalEpic(symbol);
     const key = `${resolved}:${timeframe}`;
     const resolution = timeframeToCapitalResolution(timeframe);
+    // 1m/5m micro direction only needs a handful of bars; HTF needs 55+ for ATR
+    const minAccept =
+      timeframe === "1m" || timeframe === "5m" ? Math.max(8, Math.min(limit, 20)) : 55;
+    const cacheTtlMs = timeframe === "1m" ? 12_000 : 45_000;
+    const fetchMax =
+      timeframe === "1m" || timeframe === "5m"
+        ? Math.min(Math.max(limit, 30), 500)
+        : Math.min(Math.max(limit, 55), 500);
 
     // Prefer Capital historical prices when a CONNECTED adapter exists
     const adapter = await this.getCapitalAdapter();
     if (adapter && typeof adapter.getHistoricalPrices === "function") {
       const cached = this.candleFetchCache.get(key);
-      if (cached && Date.now() - cached.at < 45_000 && cached.candles.length >= 55) {
+      if (
+        cached &&
+        Date.now() - cached.at < cacheTtlMs &&
+        cached.candles.length >= minAccept
+      ) {
         this.candleSourceByKey.set(key, "capital");
         return cached.candles as Awaited<ReturnType<MarketDataService["generateCandles"]>>;
       }
@@ -125,9 +137,9 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         const raw = await adapter.getHistoricalPrices(
           resolved,
           resolution,
-          Math.min(Math.max(limit, 55), 500),
+          fetchMax,
         );
-        if (raw.length >= 55) {
+        if (raw.length >= minAccept) {
           // Replace poisoned sim candles so strategy never re-reads them
           await this.prisma.candle.deleteMany({
             where: { symbol: resolved, timeframe },
@@ -191,7 +203,7 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
       orderBy: { openTime: "desc" },
       take: limit,
     });
-    if (existing.length >= 55) {
+    if (existing.length >= minAccept) {
       const newest = existing[0]?.openTime
         ? new Date(existing[0].openTime).getTime()
         : 0;

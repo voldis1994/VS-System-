@@ -19,23 +19,34 @@ export type DeploymentState = {
   stopLoss?: string | null;
   takeProfit?: string | null;
   candleSource?: string;
+  candleSource1m?: string;
+  micro?: string;
+  microBull?: number;
+  microBear?: number;
 };
 
 export function deploymentHint(d: DeploymentState): string | null {
+  if (d.candleSource1m === "sim" || d.candleSource === "sim") {
+    return "1m sveces ir SIM — SELL/BUY var būt mākslīgi. Capital CONNECTED + restart.";
+  }
   if (d.skip === "micro_flat" || d.gate === "micro_flat") {
-    return "1m×5 sveces flat — gaida skaidru BUY/SELL (≥3 zaļas vai ≥3 sarkanas).";
+    return `1m×5 flat (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}) — gaida ≥3 vienā krāsā.`;
   }
   if (d.gate === "micro_1m5_buy" || d.gate === "micro_1m5_sell") {
-    return `Virziens no 1m×5 → ${d.gate === "micro_1m5_buy" ? "BUY" : "SELL"}.`;
+    const side = d.gate === "micro_1m5_buy" ? "BUY" : "SELL";
+    return `1m×5 → ${side} (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
   }
   if (d.skip === "live_trading_off") {
     return "LIVE trading OFF — Accounts lapā ieslēdz LIVE ON.";
   }
-  if (d.candleSource === "sim") {
-    return "Sveces ir SIM (nav Capital history) — signāli var būt tukši. Restartē pēc update.";
-  }
   if (d.skip === "waiting_open_close") {
+    if (d.signal === "BUY" || d.signal === "SELL") {
+      return `Signāls ${d.signal} — aizver pretējo / gaida close (${d.openTrades ?? 1} open).`;
+    }
     return `Gaida close — kontā ${d.openTrades ?? 1} atvērts treids.`;
+  }
+  if (d.skip === "closed_opposite_no_flip") {
+    return "Aizvēra pretējo — flip OFF, jaunu neatver.";
   }
   if (d.skip === "cooldown") {
     return `Cooldown ${d.cooldownSec ?? "…"}s — tad mēģinās vēlreiz.`;

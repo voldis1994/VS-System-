@@ -324,36 +324,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
       const key = `${strategy.id}:${brokerSymbol}`;
 
-      // If account already has an open trade, explain that clearly (don't hide behind cooldown)
-      if (oneTradeOnly) {
-        let blockedByOpen = false;
-        let openCount = 0;
-        for (const accountId of accountIds) {
-          const openCountForAcc = await this.prisma.position.count({
-            where: {
-              organizationId: strategy.organizationId,
-              accountId,
-              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
-            },
-          });
-          if (openCountForAcc > 0) {
-            blockedByOpen = true;
-            openCount = openCountForAcc;
-            break;
-          }
-        }
-        if (blockedByOpen) {
-          lastStatus = {
-            ...lastStatus,
-            symbol: brokerSymbol,
-            signal,
-            skip: "waiting_open_close",
-            reason: "one_trade_only",
-            openTrades: openCount,
-          };
-          continue;
-        }
-      }
+      // NOTE: do NOT early-return on any open trade — that blocked BUY↔SELL flips
+      // (oneTradeOnly still enforced below: close opposite, then open; wait if same side).
 
       // Flat after SL/close — allow same-direction re-entry (fingerprint used to block forever)
       {
@@ -425,6 +397,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       });
 
       let acted = false;
+      let placedOk = false;
 
       for (const accountId of accountIds) {
         // Account-wide open positions (not only this strategyId) — avoid double entries
@@ -670,6 +643,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               severity: "SUCCESS",
             });
             acted = true;
+            placedOk = true;
             lastStatus = {
               ...lastStatus,
               placed: true,
@@ -706,9 +680,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Only cooldown after a real action — waiting on open trade must not block forever
+      // Cooldown after close/place; fingerprint only after a successful open
+      // (close-then-failed-place must retry SELL/BUY — not lock same_signal forever)
       if (acted) {
         this.lastSignalAt.set(key, Date.now());
+      }
+      if (placedOk) {
         this.lastFingerprint.set(key, fingerprint);
       }
     }
@@ -718,7 +695,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       data: {
         deploymentStateJson: {
           lastTickAt: new Date().toISOString(),
-          engine: "VS_PRO_V2",
+          engine: "VS_MICRO_1M5",
           oneTradeOnly,
           ...lastStatus,
         },
