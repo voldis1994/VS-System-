@@ -18,9 +18,16 @@ export type DeploymentState = {
   entry?: number;
   stopLoss?: string | null;
   takeProfit?: string | null;
+  candleSource?: string;
 };
 
 export function deploymentHint(d: DeploymentState): string | null {
+  if (d.skip === "live_trading_off") {
+    return "LIVE trading OFF — Accounts lapā ieslēdz LIVE ON.";
+  }
+  if (d.candleSource === "sim") {
+    return "Sveces ir SIM (nav Capital history) — signāli var būt tukši. Restartē pēc update.";
+  }
   if (d.skip === "waiting_open_close") {
     return `Gaida close — kontā ${d.openTrades ?? 1} atvērts treids.`;
   }

@@ -353,6 +353,80 @@ export class CapitalComAdapter implements BrokerAdapter {
     return sortCapitalMarkets([...byEpic.values()]);
   }
 
+  async getHistoricalPrices(
+    epic: string,
+    resolution: string,
+    max = 220,
+  ): Promise<
+    Array<{
+      openTime: Date;
+      closeTime: Date;
+      open: string;
+      high: string;
+      low: string;
+      close: string;
+      volume: string;
+    }>
+  > {
+    await this.ensureSession();
+    const resolved = resolveCapitalEpic(epic);
+    const capped = Math.min(Math.max(max, 10), 1000);
+    const res = await this.request<{
+      prices?: Array<{
+        snapshotTimeUTC?: string;
+        snapshotTime?: string;
+        openPrice?: { bid?: number; ask?: number };
+        closePrice?: { bid?: number; ask?: number };
+        highPrice?: { bid?: number; ask?: number };
+        lowPrice?: { bid?: number; ask?: number };
+        lastTradedVolume?: number;
+      }>;
+    }>(
+      "GET",
+      `/api/v1/prices/${encodeURIComponent(resolved)}?resolution=${encodeURIComponent(resolution)}&max=${capped}`,
+    );
+
+    const mid = (side?: { bid?: number; ask?: number }) => {
+      if (!side) return NaN;
+      const b = Number(side.bid);
+      const a = Number(side.ask);
+      if (Number.isFinite(b) && Number.isFinite(a)) return (b + a) / 2;
+      if (Number.isFinite(b)) return b;
+      if (Number.isFinite(a)) return a;
+      return NaN;
+    };
+
+    const out: Array<{
+      openTime: Date;
+      closeTime: Date;
+      open: string;
+      high: string;
+      low: string;
+      close: string;
+      volume: string;
+    }> = [];
+
+    for (const p of res.prices ?? []) {
+      const open = mid(p.openPrice);
+      const close = mid(p.closePrice);
+      const high = mid(p.highPrice);
+      const low = mid(p.lowPrice);
+      if (![open, close, high, low].every((n) => Number.isFinite(n))) continue;
+      const openTime = new Date(p.snapshotTimeUTC ?? p.snapshotTime ?? "");
+      if (!Number.isFinite(openTime.getTime())) continue;
+      out.push({
+        openTime,
+        closeTime: openTime,
+        open: String(open),
+        high: String(high),
+        low: String(low),
+        close: String(close),
+        volume: String(p.lastTradedVolume ?? 0),
+      });
+    }
+    return out;
+  }
+
   async getMarketQuote(epic: string): Promise<CapitalMarketInfo | null> {
     const batch = await this.getMarketQuotes([epic]);
     return batch[0] ?? null;

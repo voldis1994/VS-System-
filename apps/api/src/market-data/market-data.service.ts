@@ -36,6 +36,11 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
   private capitalPriceTimer?: NodeJS.Timeout;
   private streamWatchTimer?: NodeJS.Timeout;
   private streamMode: "streaming" | "fallback" | "off" = "off";
+  private readonly candleSourceByKey = new Map<string, "capital" | "db" | "sim">();
+  private readonly candleFetchCache = new Map<
+    string,
+    { at: number; candles: unknown[] }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -105,24 +110,123 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
 
   async getCandles(symbol: string, timeframe = "1h", limit = 200) {
     const resolved = resolveCapitalEpic(symbol);
+    const key = `${resolved}:${timeframe}`;
+    const resolution = timeframeToCapitalResolution(timeframe);
+
+    // Prefer Capital historical prices when a CONNECTED adapter exists
+    const adapter = await this.getCapitalAdapter();
+    if (adapter && typeof adapter.getHistoricalPrices === "function") {
+      const cached = this.candleFetchCache.get(key);
+      if (cached && Date.now() - cached.at < 45_000 && cached.candles.length >= 55) {
+        this.candleSourceByKey.set(key, "capital");
+        return cached.candles as Awaited<ReturnType<MarketDataService["generateCandles"]>>;
+      }
+      try {
+        const raw = await adapter.getHistoricalPrices(
+          resolved,
+          resolution,
+          Math.min(Math.max(limit, 55), 500),
+        );
+        if (raw.length >= 55) {
+          // Replace poisoned sim candles so strategy never re-reads them
+          await this.prisma.candle.deleteMany({
+            where: { symbol: resolved, timeframe },
+          });
+          const stepMs = timeframeStepMs(timeframe);
+          const candles = [];
+          for (const bar of raw) {
+            const openTime = bar.openTime;
+            const closeTime = new Date(openTime.getTime() + stepMs);
+            const row = {
+              id: newId(),
+              symbol: resolved,
+              timeframe,
+              open: bar.open,
+              high: bar.high,
+              low: bar.low,
+              close: bar.close,
+              volume: bar.volume,
+              openTime,
+              closeTime,
+            };
+            candles.push(row);
+            await this.prisma.candle.upsert({
+              where: {
+                symbol_timeframe_openTime: {
+                  symbol: resolved,
+                  timeframe,
+                  openTime,
+                },
+              },
+              create: row,
+              update: {
+                open: row.open,
+                high: row.high,
+                low: row.low,
+                close: row.close,
+                volume: row.volume,
+                closeTime: row.closeTime,
+              },
+            });
+          }
+          candles.sort((a, b) => a.openTime.getTime() - b.openTime.getTime());
+          this.candleFetchCache.set(key, { at: Date.now(), candles });
+          this.candleSourceByKey.set(key, "capital");
+          this.log.log(
+            `Candles ${resolved} ${timeframe}: ${candles.length} from Capital (${resolution})`,
+          );
+          return candles.slice(-limit);
+        }
+      } catch (err) {
+        this.log.warn(
+          `Capital candles failed ${resolved} ${timeframe}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+
     const existing = await this.prisma.candle.findMany({
       where: { symbol: resolved, timeframe },
       orderBy: { openTime: "desc" },
       take: limit,
     });
-    if (existing.length > 0) {
-      return existing.reverse();
+    if (existing.length >= 55) {
+      const newest = existing[0]?.openTime
+        ? new Date(existing[0].openTime).getTime()
+        : 0;
+      const fresh = Date.now() - newest < timeframeStepMs(timeframe) * 3;
+      // Fresh Capital-persisted bars OK; very stale rows are likely old sim — regenerate only if no adapter
+      if (fresh || !adapter) {
+        this.candleSourceByKey.set(key, fresh ? "db" : "sim");
+        return existing.reverse();
+      }
+      // Stale DB with adapter that failed above — wipe and fall through to sim last resort
+      await this.prisma.candle.deleteMany({
+        where: { symbol: resolved, timeframe },
+      });
     }
-    // try original symbol key too
+
     if (resolved !== symbol) {
       const alt = await this.prisma.candle.findMany({
         where: { symbol, timeframe },
         orderBy: { openTime: "desc" },
         take: limit,
       });
-      if (alt.length > 0) return alt.reverse();
+      if (alt.length >= 55) {
+        this.candleSourceByKey.set(key, "db");
+        return alt.reverse();
+      }
     }
-    return this.generateCandles(resolved, timeframe, limit);
+
+    const sim = await this.generateCandles(resolved, timeframe, limit);
+    this.candleSourceByKey.set(key, "sim");
+    return sim;
+  }
+
+  getCandleSource(symbol: string, timeframe: string): "capital" | "db" | "sim" | "unknown" {
+    const resolved = resolveCapitalEpic(symbol);
+    return this.candleSourceByKey.get(`${resolved}:${timeframe}`) ?? "unknown";
   }
 
   async listSymbols(organizationId: string) {
@@ -475,4 +579,46 @@ function DecimalMax(a: ReturnType<typeof d>, b: ReturnType<typeof d>) {
 }
 function DecimalMin(a: ReturnType<typeof d>, b: ReturnType<typeof d>) {
   return a.lte(b) ? a : b;
+}
+
+function timeframeToCapitalResolution(tf: string): string {
+  switch (tf) {
+    case "1m":
+      return "MINUTE";
+    case "5m":
+      return "MINUTE_5";
+    case "15m":
+      return "MINUTE_15";
+    case "30m":
+      return "MINUTE_30";
+    case "1h":
+      return "HOUR";
+    case "4h":
+      return "HOUR_4";
+    case "1d":
+      return "DAY";
+    default:
+      return "MINUTE_15";
+  }
+}
+
+function timeframeStepMs(tf: string): number {
+  switch (tf) {
+    case "1m":
+      return 60_000;
+    case "5m":
+      return 300_000;
+    case "15m":
+      return 900_000;
+    case "30m":
+      return 1_800_000;
+    case "1h":
+      return 3_600_000;
+    case "4h":
+      return 14_400_000;
+    case "1d":
+      return 86_400_000;
+    default:
+      return 900_000;
+  }
 }

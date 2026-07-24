@@ -107,6 +107,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       for (const row of openAcc) accountIds.add(row.accountId);
       for (const accountId of accountIds) {
         try {
+          if (!this.brokers.get(accountId)) {
+            const account = await this.prisma.tradingAccount.findFirst({
+              where: { id: accountId, connectionStatus: "CONNECTED" },
+            });
+            if (account) await this.brokers.connectAccount(account);
+          }
           await this.positions.reconcileClosedAgainstBroker(accountId);
         } catch (err) {
           this.log.warn(
@@ -237,23 +243,31 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
+      const timeframe = config.timeframe ?? "15m";
       const candles = await this.market.getCandles(
         brokerSymbol,
-        config.timeframe ?? "15m",
+        timeframe,
         220,
       );
+      const candleSource = this.market.getCandleSource(brokerSymbol, timeframe);
       if (candles.length < 55) {
         lastStatus = {
           ...lastStatus,
           symbol: brokerSymbol,
           skip: "not_enough_candles",
           candles: candles.length,
+          candleSource,
         };
         continue;
       }
       const ind = computeIndicators(candles);
       if (!ind || ind.atr <= 0) {
-        lastStatus = { ...lastStatus, symbol: brokerSymbol, skip: "indicators_failed" };
+        lastStatus = {
+          ...lastStatus,
+          symbol: brokerSymbol,
+          skip: "indicators_failed",
+          candleSource,
+        };
         continue;
       }
 
@@ -293,6 +307,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         score: scored.score,
         gate: scored.gate,
         bias: scored.bias,
+        candleSource,
       };
 
       if (signal === "HOLD") {
@@ -557,6 +572,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         });
         if (!account || account.status === "LOCKED") {
           lastStatus = { ...lastStatus, skip: "account_locked_or_missing" };
+          continue;
+        }
+        if (account.accountType === "LIVE" && !account.liveTradingEnabled) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "live_trading_off",
+            error: "Live trading not enabled — Accounts → enable LIVE",
+          };
           continue;
         }
 
