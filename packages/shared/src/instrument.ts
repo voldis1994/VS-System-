@@ -31,6 +31,30 @@ export function minProtectiveDistance(symbol: string, entryPrice: number): numbe
   return Math.max(pip * minPips, pct, pip * 2);
 }
 
+/**
+ * Favorable move (price units) required before trailing arms.
+ * Uses user activation pips — never multiply floored broker trail distance.
+ */
+export function trailingArmThreshold(
+  symbol: string,
+  opts: {
+    trailingDistance?: number | string | null;
+    trailingActivationPips?: number | null;
+    trailingDistancePips?: number | null;
+  },
+): number {
+  const pip = instrumentPipSize(symbol);
+  const act =
+    opts.trailingActivationPips ??
+    opts.trailingDistancePips ??
+    null;
+  if (act != null && Number.isFinite(Number(act))) {
+    return pip * Math.max(Number(act), 0.1);
+  }
+  const dist = Number(opts.trailingDistance);
+  return Number.isFinite(dist) && dist > 0 ? dist : pip;
+}
+
 export function formatInstrumentPrice(symbol: string, price: number | string): string {
   const n = Number(price);
   if (!Number.isFinite(n)) return String(price);

@@ -152,6 +152,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   }) {
     const accountIds = (strategy.assignedAccountIds as string[]) ?? [];
     const symbols = (strategy.assignedSymbols as string[]) ?? ["EURUSD"];
+    // Drop ghost OPEN rows after broker SL/TP so oneTradeOnly can re-enter
+    for (const accountId of accountIds) {
+      try {
+        await this.positions.reconcileClosedAgainstBroker(accountId);
+      } catch (err) {
+        this.log.warn(
+          `Reconcile before tick failed: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
     const config = (strategy.configurationJson ?? {}) as {
       timeframe?: string;
       riskPercent?: number;
@@ -313,6 +323,28 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             openTrades: openCount,
           };
           continue;
+        }
+      }
+
+      // Flat after SL/close — allow same-direction re-entry (fingerprint used to block forever)
+      if (signal !== "CLOSE") {
+        let anyOpen = false;
+        for (const accountId of accountIds) {
+          const c = await this.prisma.position.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+              OR: [{ symbol: brokerSymbol }, { symbol }],
+            },
+          });
+          if (c > 0) {
+            anyOpen = true;
+            break;
+          }
+        }
+        if (!anyOpen) {
+          this.lastFingerprint.delete(key);
         }
       }
 
@@ -498,8 +530,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const beActivationPips = config.breakEvenActivationPips ?? 10;
         const beOffsetPips = config.breakEvenOffsetPips ?? 1;
         const trailPips = config.trailingDistancePips ?? 15;
-        const beActDist = Math.max(pip * beActivationPips, minDist);
+        // Activation uses user pips (do NOT floor to Capital min — that blocked 1-pip trail start)
+        const beActDist = Math.max(pip * beActivationPips, pip * 0.1);
         const beOffDist = Math.max(pip * beOffsetPips, pip);
+        // Trail SL distance still floored so Capital accepts modifyPosition
         const trailDist = Math.max(pip * trailPips, minDist);
 
         const account = await this.prisma.tradingAccount.findFirst({

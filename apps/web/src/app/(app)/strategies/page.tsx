@@ -626,7 +626,7 @@ export default function StrategiesPage() {
                       className="font-mono"
                     />
                   </Field>
-                  <Field label="Trail start (pips)">
+                  <Field label="Trail start (pips plusā)">
                     <Input
                       value={draft.trailActPips}
                       disabled={!draft.trailEnabled}
@@ -639,6 +639,13 @@ export default function StrategiesPage() {
                       className="font-mono"
                     />
                   </Field>
+                  {draft.trailEnabled ? (
+                    <p className="text-[11px] text-zinc-500">
+                      Start = kad trail ieslēdzas. Distance brokerī var tikt
+                      pacelta līdz Capital min (~8 pips FX / ~12 GOLD), bet start
+                      sekos Taviem pipiem.
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
@@ -700,11 +707,11 @@ export default function StrategiesPage() {
                     };
                     const skipHint =
                       d.skip === "waiting_open_close"
-                        ? `Bot gaida: kontā jau ir ${d.openTrades ?? 1} atvērts treids. Jauns orderis tikai pēc close (vai aizver pozīciju Trade lapā).`
+                        ? `Bot gaida: kontā DB rāda ${d.openTrades ?? 1} atvērtu treidu. Ja Capital jau aizvēra (SL), restartē / Sync — ghost pozīcijas tagad tiek auto-tīrītas.`
                         : d.skip === "cooldown"
                           ? `Cooldown ${d.cooldownSec ?? "…"}s — pēc tam mēģinās vēlreiz.`
                           : d.skip === "same_signal"
-                            ? "Tas pats signāls jau apstrādāts — gaida jaunu signālu / close."
+                            ? "Tas pats signāls jau apstrādāts — pēc close/flat atkal varēs to pašu virzienu."
                             : d.skip === "quality_wait" || d.gate === "score_low"
                               ? `VS_PRO_V2 gaida setup (score ${d.score ?? 0}/48+) — drīz mēģinās.`
                               : d.gate === "session_off" || d.skip === "session_off"

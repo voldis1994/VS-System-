@@ -470,7 +470,8 @@ export class StrategiesService {
       const entry = Number(pos.averageEntry);
       const pip = instrumentPipSize(pos.symbol);
       const minDist = minProtectiveDistance(pos.symbol, entry);
-      const beAct = Math.max(pip * Math.max(beActPips, 0.01), minDist);
+      // BE activation = user pips; trail distance floored for Capital min-stop on SL moves
+      const beAct = Math.max(pip * Math.max(beActPips, 0.01), pip * 0.1);
       const beOff = Math.max(pip * Math.max(beOffPips, 0), pip);
       const trail = Math.max(pip * Math.max(trailPips, 0.01), minDist);
 

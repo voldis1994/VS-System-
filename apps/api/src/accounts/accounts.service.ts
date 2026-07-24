@@ -281,6 +281,28 @@ export class AccountsService {
     const state = await adapter.getAccountState();
     const positions = await adapter.getOpenPositions();
     const orders = await adapter.getOpenOrders();
+    // Close local ghosts after broker SL/TP (otherwise strategies stay blocked)
+    const liveIds = new Set(
+      positions.map((p) => p.brokerPositionId).filter(Boolean),
+    );
+    const localOpen = await this.prisma.position.findMany({
+      where: {
+        accountId: id,
+        status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+      },
+    });
+    for (const p of localOpen) {
+      if (!p.brokerPositionId || liveIds.has(p.brokerPositionId)) continue;
+      await this.prisma.position.update({
+        where: { id: p.id },
+        data: {
+          status: "CLOSED",
+          closedAt: p.closedAt ?? new Date(),
+          unrealizedPnl: "0",
+          volume: "0",
+        },
+      });
+    }
     await this.brokers.persistState(id);
     const updated = await this.prisma.tradingAccount.update({
       where: { id },

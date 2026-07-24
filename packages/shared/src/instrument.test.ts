@@ -3,6 +3,7 @@ import {
   formatInstrumentPrice,
   instrumentPipSize,
   minProtectiveDistance,
+  trailingArmThreshold,
 } from "./instrument";
 
 describe("instrumentPipSize", () => {
@@ -26,6 +27,31 @@ describe("instrumentPipSize", () => {
 describe("minProtectiveDistance", () => {
   it("floors GOLD distances for Capital min-stop", () => {
     expect(minProtectiveDistance("GOLD", 2300)).toBeGreaterThanOrEqual(1.2);
+  });
+});
+
+describe("trailingArmThreshold", () => {
+  it("arms at user activation pips, not floored trail distance", () => {
+    const flooredTrail = minProtectiveDistance("EURUSD", 1.1); // ~8+ pips
+    expect(
+      trailingArmThreshold("EURUSD", {
+        trailingDistance: flooredTrail,
+        trailingActivationPips: 1,
+        trailingDistancePips: 1,
+      }),
+    ).toBeCloseTo(0.0001, 8);
+  });
+
+  it("does not inflate when start pips > trail pips", () => {
+    const floored = minProtectiveDistance("GOLD", 2300);
+    // Old bug: distance * (15/1) ≈ 276 pips of gold move
+    expect(
+      trailingArmThreshold("GOLD", {
+        trailingDistance: floored,
+        trailingActivationPips: 15,
+        trailingDistancePips: 1,
+      }),
+    ).toBeCloseTo(1.5, 5);
   });
 });
 

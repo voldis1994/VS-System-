@@ -6,7 +6,12 @@ import {
   ModifySlTpSchema,
   PartialCloseSchema,
 } from "@nexus/domain";
-import { breakEvenStop, d, trailingStopCandidate } from "@nexus/shared";
+import {
+  breakEvenStop,
+  d,
+  trailingArmThreshold,
+  trailingStopCandidate,
+} from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -24,7 +29,66 @@ export class PositionsService {
     private readonly notifications: NotificationsService,
   ) {}
 
+  /**
+   * Mark local OPEN rows CLOSED when the broker no longer has the deal
+   * (SL/TP/hit/manual close outside VS). Without this, oneTradeOnly blocks forever.
+   */
+  async reconcileClosedAgainstBroker(accountId?: string): Promise<number> {
+    const open = await this.prisma.position.findMany({
+      where: {
+        status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+        ...(accountId ? { accountId } : {}),
+      },
+    });
+    if (open.length === 0) return 0;
+
+    const byAccount = new Map<string, typeof open>();
+    for (const p of open) {
+      const list = byAccount.get(p.accountId) ?? [];
+      list.push(p);
+      byAccount.set(p.accountId, list);
+    }
+
+    let closed = 0;
+    for (const [accId, positions] of byAccount) {
+      const adapter = this.brokers.get(accId);
+      if (!adapter) continue;
+      let live: Awaited<ReturnType<typeof adapter.getOpenPositions>>;
+      try {
+        live = await adapter.getOpenPositions();
+      } catch (err) {
+        console.warn(
+          `reconcileClosedAgainstBroker ${accId}:`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      const liveIds = new Set(
+        live.map((x) => x.brokerPositionId).filter(Boolean),
+      );
+      for (const p of positions) {
+        if (!p.brokerPositionId) continue;
+        if (liveIds.has(p.brokerPositionId)) continue;
+        await this.prisma.position.update({
+          where: { id: p.id },
+          data: {
+            status: "CLOSED",
+            closedAt: p.closedAt ?? new Date(),
+            unrealizedPnl: "0",
+            volume: "0",
+          },
+        });
+        closed += 1;
+        console.warn(
+          `Reconciled ghost position ${p.id} (${p.symbol}) — missing on broker`,
+        );
+      }
+    }
+    return closed;
+  }
+
   async list(organizationId: string) {
+    await this.reconcileClosedAgainstBroker();
     const positions = await this.prisma.position.findMany({
       where: {
         organizationId,
@@ -48,6 +112,16 @@ export class PositionsService {
             stopLoss: match.stopLoss,
             takeProfit: match.takeProfit,
             status: match.status as never,
+          },
+        });
+      } else {
+        await this.prisma.position.update({
+          where: { id: p.id },
+          data: {
+            status: "CLOSED",
+            closedAt: p.closedAt ?? new Date(),
+            unrealizedPnl: "0",
+            volume: "0",
           },
         });
       }
@@ -404,6 +478,8 @@ export class PositionsService {
     priceBySymbol: Map<string, number>,
     correlationId: string,
   ) {
+    await this.reconcileClosedAgainstBroker();
+
     const open = await this.prisma.position.findMany({
       where: {
         status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
@@ -419,14 +495,23 @@ export class PositionsService {
       byAccount.set(p.accountId, list);
     }
     const brokerMarks = new Map<string, number>();
+    const missingOnBroker = new Set<string>();
     for (const [accountId, positions] of byAccount) {
       const adapter = this.brokers.get(accountId);
       if (!adapter) continue;
       try {
         const live = await adapter.getOpenPositions();
+        const liveIds = new Set(
+          live.map((x) => x.brokerPositionId).filter(Boolean),
+        );
         for (const p of positions) {
           const match = live.find((x) => x.brokerPositionId === p.brokerPositionId);
-          if (!match) continue;
+          if (!match) {
+            if (p.brokerPositionId && !liveIds.has(p.brokerPositionId)) {
+              missingOnBroker.add(p.id);
+            }
+            continue;
+          }
           const mark = Number(match.currentPrice);
           if (Number.isFinite(mark) && mark > 0) {
             brokerMarks.set(p.id, mark);
@@ -438,7 +523,20 @@ export class PositionsService {
       }
     }
 
+    for (const positionId of missingOnBroker) {
+      await this.prisma.position.update({
+        where: { id: positionId },
+        data: {
+          status: "CLOSED",
+          closedAt: new Date(),
+          unrealizedPnl: "0",
+          volume: "0",
+        },
+      });
+    }
+
     for (const position of open) {
+      if (missingOnBroker.has(position.id)) continue;
       try {
         const mark =
           brokerMarks.get(position.id) ??
@@ -475,9 +573,11 @@ export class PositionsService {
 
         // Re-read after possible BE
         const fresh = await this.get(position.organizationId, position.id);
+        if (fresh.status === "CLOSED") continue;
 
         if (fresh.trailingEnabled && fresh.trailingDistance != null) {
           const distance = String(fresh.trailingDistance);
+          // Arm from user pips — never multiply floored broker distance (that made 1-pip start need ~8–18+ pips)
           let armThreshold = Number(distance);
           if (fresh.strategyId) {
             const strategy = await this.prisma.strategy.findFirst({
@@ -488,11 +588,11 @@ export class PositionsService {
               trailingActivationPips?: number;
               trailingDistancePips?: number;
             };
-            if (cfg.trailingActivationPips != null) {
-              const trailPips = cfg.trailingDistancePips ?? 15;
-              const ratio = cfg.trailingActivationPips / Math.max(trailPips, 1);
-              armThreshold = Number(distance) * ratio;
-            }
+            armThreshold = trailingArmThreshold(position.symbol, {
+              trailingDistance: distance,
+              trailingActivationPips: cfg.trailingActivationPips,
+              trailingDistancePips: cfg.trailingDistancePips,
+            });
           }
           const armed =
             fresh.trailingActivatedAt != null || favorable >= armThreshold;
