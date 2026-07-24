@@ -613,6 +613,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               volumeMode: useRisk ? VolumeMode.RISK_PERCENT : VolumeMode.FIXED_LOT,
               volume: config.volume ?? "0.01",
               riskPercent: config.riskPercent ?? 0.5,
+              entryPrice: formatInstrumentPrice(brokerSymbol, entry),
               stopLoss,
               takeProfit,
               trailingEnabled,

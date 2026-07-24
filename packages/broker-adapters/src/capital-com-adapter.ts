@@ -927,6 +927,7 @@ export class CapitalComAdapter implements BrokerAdapter {
         if (!q || (q.bid == null && q.offer == null)) continue;
         const bid = Number(q.bid ?? q.offer);
         const ask = Number(q.offer ?? q.bid);
+        if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0) continue;
         const mid = (bid + ask) / 2;
         yield {
           symbol: q.epic,

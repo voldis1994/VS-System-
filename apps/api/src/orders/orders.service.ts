@@ -16,6 +16,7 @@ import { RiskService } from "../risk/risk.service";
 import { EventBusService } from "../events/event-bus.service";
 import { AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { MarketDataService } from "../market-data/market-data.service";
 import { AppError } from "../common/errors/app-error";
 
 @Injectable()
@@ -27,6 +28,7 @@ export class OrdersService {
     private readonly events: EventBusService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly market: MarketDataService,
   ) {}
 
   async list(organizationId: string) {
@@ -468,12 +470,44 @@ export class OrdersService {
   }
 
   private async midPrice(
-    adapter: { subscribeTicks: (s: string[]) => AsyncIterable<{ mid: string }> },
+    adapter: {
+      subscribeTicks: (s: string[]) => AsyncIterable<{ mid: string }>;
+      getMarketQuote?: (epic: string) => Promise<{
+        bid?: number | null;
+        offer?: number | null;
+      } | null>;
+    },
     symbol: string,
   ): Promise<string> {
-    for await (const tick of adapter.subscribeTicks([symbol])) {
-      return tick.mid;
+    // 1) In-memory live marks (Capital WS / REST)
+    const cached = this.market.getTick(symbol);
+    if (cached?.mid && Number(cached.mid) > 0) {
+      return cached.mid;
     }
+
+    // 2) Direct Capital quote
+    if (typeof adapter.getMarketQuote === "function") {
+      try {
+        const q = await adapter.getMarketQuote(symbol);
+        const bid = Number(q?.bid ?? q?.offer);
+        const ask = Number(q?.offer ?? q?.bid);
+        if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0) {
+          return String((bid + ask) / 2);
+        }
+      } catch {
+        // fall through
+      }
+    }
+
+    // 3) Adapter tick stream (one-shot)
+    try {
+      for await (const tick of adapter.subscribeTicks([symbol])) {
+        if (tick.mid && Number(tick.mid) > 0) return tick.mid;
+      }
+    } catch {
+      // fall through
+    }
+
     throw new AppError(ErrorCodes.MARKET_DATA_STALE, "No market price");
   }
 }
