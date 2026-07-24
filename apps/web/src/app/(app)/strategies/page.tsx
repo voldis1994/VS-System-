@@ -713,6 +713,7 @@ export default function StrategiesPage() {
                             d.symbol ? `sym ${d.symbol}` : null,
                             d.signal ? `sig ${d.signal}` : null,
                             typeof d.score === "number" ? `score ${d.score}` : null,
+                            d.candleSource ? `candles:${d.candleSource}` : null,
                             d.gate ? `gate:${d.gate}` : null,
                             d.skip ? `skip:${d.skip}` : null,
                             d.reason ? `reason:${d.reason}` : null,
