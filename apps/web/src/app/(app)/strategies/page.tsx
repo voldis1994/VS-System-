@@ -563,9 +563,9 @@ export default function StrategiesPage() {
                     />
                   </Field>
                   <p className="text-[11px] text-zinc-500">
-                    Virzienu nosaka stratēģijas mode (TREND/SCALP/…) uz TF
-                    svecēm; 1m×5 tikai apstiprina entry. TP ATR× piem. 0.8–1.2 =
-                    tuvāks mērķis.
+                    Filtrs visām stratēģijām: BUY neder pret bearish svecēm, SELL
+                    neder pret bullish (TF + 1m×5). TP ATR× piem. 0.8–1.2 = tuvāks
+                    mērķis.
                   </p>
                 </div>
 

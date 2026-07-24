@@ -16,6 +16,10 @@ import { MarketDataService } from "../market-data/market-data.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { evaluateMicro1mFive } from "./micro-1m";
+import {
+  directionAllowedAgainstCandles,
+  evaluateCandleBiasFive,
+} from "./candle-bias";
 
 type Signal = "BUY" | "SELL" | "CLOSE" | "HOLD";
 
@@ -243,7 +247,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       trailingEnabled,
       engine: "VS_PRO_V2",
       minScore,
-      microConfirm: true,
+      candleDirectionFilter: true,
     };
 
     for (const symbol of symbols) {
@@ -286,10 +290,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         sessionFilter,
       );
 
-      // 1m×5 only confirms timing — does NOT replace strategy mode
+      // 1m×5 timing + candle bias (same rules as TF filter)
       const m1 = await this.market.getCandles(brokerSymbol, "1m", 30);
       const m1Source = this.market.getCandleSource(brokerSymbol, "1m");
       const micro = evaluateMicro1mFive(m1);
+      // Strategy TF last 5 — mandatory: BUY≠bearish, SELL≠bullish
+      const tfBias = evaluateCandleBiasFive(candles);
 
       lastStatus = {
         ...lastStatus,
@@ -306,6 +312,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         microNetPct: Number(micro.netPct.toFixed(4)),
         candleSource1m: m1Source,
         strategySignal: scored.signal,
+        tfBias: tfBias.bias,
+        tfBull: tfBias.bullCount,
+        tfBear: tfBias.bearCount,
+        candleDirectionFilter: true,
       };
 
       if (scored.signal === "HOLD") {
@@ -342,24 +352,43 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // Micro confirm: strategy BUY needs 1m not bearish; SELL needs 1m not bullish
-      // Flat 1m → wait for timing; opposite 1m → conflict (no entry)
-      if (micro.signal === "HOLD") {
+      // OBLIGATORY for all strategies:
+      // BUY invalid vs bearish candles; SELL invalid vs bullish candles (TF + 1m)
+      const tfFilter = directionAllowedAgainstCandles(scored.signal, tfBias.bias);
+      if (!tfFilter.ok) {
+        lastStatus = {
+          ...lastStatus,
+          signal: scored.signal,
+          skip: tfFilter.skip,
+          reason: tfFilter.reason,
+          gate: tfFilter.skip,
+        };
+        continue;
+      }
+
+      const microBias =
+        micro.signal === "BUY"
+          ? ("bull" as const)
+          : micro.signal === "SELL"
+            ? ("bear" as const)
+            : ("flat" as const);
+      if (microBias === "flat") {
         lastStatus = {
           ...lastStatus,
           signal: scored.signal,
           skip: "micro_timing",
-          reason: "wait_1m5_confirm",
+          reason: "wait_1m5_not_against",
         };
         continue;
       }
-      if (micro.signal !== scored.signal) {
+      const m1Filter = directionAllowedAgainstCandles(scored.signal, microBias);
+      if (!m1Filter.ok) {
         lastStatus = {
           ...lastStatus,
           signal: scored.signal,
-          skip: "micro_conflict",
-          reason: `strategy_${scored.signal}_micro_${micro.signal}`,
-          gate: "micro_conflict",
+          skip: m1Filter.skip,
+          reason: `${m1Filter.reason} (1m)`,
+          gate: m1Filter.skip,
         };
         continue;
       }
@@ -370,6 +399,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         signal,
         gate: scored.gate,
         microGate: micro.gate,
+        tfGate: tfBias.gate,
       };
 
       const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;

@@ -23,20 +23,29 @@ export type DeploymentState = {
   micro?: string;
   microBull?: number;
   microBear?: number;
+  tfBias?: string;
+  tfBull?: number;
+  tfBear?: number;
 };
 
 export function deploymentHint(d: DeploymentState): string | null {
   if (d.candleSource1m === "sim" || d.candleSource === "sim") {
     return "Sveces ir SIM — signāli var būt mākslīgi. Capital CONNECTED + restart.";
   }
+  if (d.skip === "buy_vs_bearish") {
+    return `BUY bloķēts — bearish sveces (TF 🔴${d.tfBear ?? "?"} / 1m 🔴${d.microBear ?? "?"}).`;
+  }
+  if (d.skip === "sell_vs_bullish") {
+    return `SELL bloķēts — bullish sveces (TF 🟢${d.tfBull ?? "?"} / 1m 🟢${d.microBull ?? "?"}).`;
+  }
   if (d.skip === "quality_wait" || d.gate === "score_low") {
     return `Stratēģija gaida setup — score ${d.score ?? 0}/48+ (${d.gate ?? "…"}).`;
   }
   if (d.skip === "micro_timing") {
-    return `Stratēģija ${d.signal ?? "…"} — gaida 1m×5 apstiprinājumu (tagad flat 🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
+    return `Stratēģija ${d.signal ?? "…"} — gaida 1m×5 (nedrīkst pretējas sveces; tagad flat 🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
   }
   if (d.skip === "micro_conflict" || d.gate === "micro_conflict") {
-    return `Konflikt: stratēģija ${d.signal ?? "?"} vs 1m ${d.micro ?? "?"} — neieiet pret micro.`;
+    return `Konflikt: stratēģija ${d.signal ?? "?"} vs 1m ${d.micro ?? "?"} — BUY≠bearish, SELL≠bullish.`;
   }
   if (d.skip === "micro_flat" || d.gate === "micro_flat") {
     return `1m×5 flat (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
@@ -107,6 +116,8 @@ export function deploymentTone(
     d.gate === "score_low" ||
     d.skip === "micro_timing" ||
     d.skip === "micro_conflict" ||
+    d.skip === "buy_vs_bearish" ||
+    d.skip === "sell_vs_bullish" ||
     d.skip === "cooldown" ||
     d.signal === "HOLD"
   ) {
