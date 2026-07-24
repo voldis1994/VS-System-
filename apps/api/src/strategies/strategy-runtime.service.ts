@@ -574,8 +574,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           config.stopDistancePips != null
             ? pip * config.stopDistancePips
             : Math.max(ind.atr * atrStopMult, entry * 0.00065);
-        // Initial SL ~35% closer, but never tighter than Capital min-stop floor
-        stopDist = Math.max(stopDist * 0.65, minDist);
+        // Initial SL: prior 0.65×, then −40% more → 0.39× (still floored at Capital min)
+        stopDist = Math.max(stopDist * 0.39, minDist);
         // TP follows user ATR× / pips — allow closer TP (no minDist / 1.5R force)
         let tpDist =
           config.takeProfitPips != null
