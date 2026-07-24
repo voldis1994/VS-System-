@@ -47,13 +47,26 @@ describe("evaluateMicro1mFive", () => {
     expect(["SELL", "HOLD", "BUY"]).toContain(r.signal);
   });
 
-  it("HOLD when mixed / flat", () => {
+  it("2-2 with net down → SELL", () => {
     const candles = [
       bar(100, 101),
       bar(101, 100),
       bar(100, 101),
       bar(101, 100),
-      bar(100, 100.0),
+      bar(100, 100.0), // flat; first close 101 → last 100 → net down
+    ];
+    const r = evaluateMicro1mFive(candles);
+    expect(r.signal).toBe("SELL");
+    expect(r.gate).toBe("micro_1m5_sell");
+  });
+
+  it("HOLD when 2-2 and net flat", () => {
+    const candles = [
+      bar(100, 101),
+      bar(101, 100),
+      bar(100, 101),
+      bar(101, 100),
+      bar(101, 101), // flat; last close = first close → net 0
     ];
     expect(evaluateMicro1mFive(candles).signal).toBe("HOLD");
   });
