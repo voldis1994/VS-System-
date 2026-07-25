@@ -50,6 +50,14 @@ const STRATEGY_MODES = [
   StrategyMode.SCALPING,
   StrategyMode.MEAN_REVERSION,
   StrategyMode.REVERSAL,
+  StrategyMode.RANGE,
+  StrategyMode.CUSTOM,
+  StrategyMode.GRID,
+  StrategyMode.DCA,
+  StrategyMode.NEWS,
+  StrategyMode.SESSION,
+  StrategyMode.ARBITRAGE_SIM,
+  StrategyMode.MARKET_MAKING_SIM,
 ] as const;
 
 const LOT_PRESETS = ["0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1"] as const;

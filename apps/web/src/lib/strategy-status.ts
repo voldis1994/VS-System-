@@ -44,7 +44,10 @@ export function deploymentHint(d: DeploymentState): string | null {
     return `Flip ${d.flippedFrom ?? "?"}→${d.signal} (sveces bloķēja ${d.flippedFrom ?? "?"}).`;
   }
   if (d.skip === "quality_wait" || d.gate === "score_low") {
-    return `Stratēģija gaida setup — score ${d.score ?? 0}/48+ (${d.gate ?? "…"}).`;
+    return `Stratēģija gaida setup — score ${d.score ?? 0} (${d.gate ?? "…"}).`;
+  }
+  if (d.gate === "mid_range") {
+    return "Mid-range zona — HOLD (mazāk trokšņa).";
   }
   if (d.skip === "micro_timing") {
     return `Gaida 1m×5 / TF bias (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
@@ -119,6 +122,7 @@ export function deploymentTone(
   if (
     d.skip === "quality_wait" ||
     d.gate === "score_low" ||
+    d.gate === "mid_range" ||
     d.skip === "micro_timing" ||
     d.skip === "micro_conflict" ||
     d.skip === "buy_vs_bearish" ||
