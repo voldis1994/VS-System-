@@ -54,6 +54,11 @@ export type Indicators = {
   avgVolRange: number;
   lastRange: number;
   volumeOk: boolean;
+  volumeStrong: boolean;
+  gapUpAtr: number;
+  gapDownAtr: number;
+  sessionHigh: number;
+  sessionLow: number;
   vwapProxy: number;
   rejectionBull: boolean;
   rejectionBear: boolean;
@@ -72,6 +77,7 @@ export function modeMinScore(mode: StrategyMode): number {
     case StrategyMode.DCA:
     case StrategyMode.MARKET_MAKING_SIM:
       return 52;
+    case StrategyMode.NEWS:
     case StrategyMode.ARBITRAGE_SIM:
       return 60;
     default:
@@ -155,12 +161,26 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
     volWindow.reduce((a, b) => a + b, 0) / Math.max(volWindow.length, 1);
   const lastVol = vols[n - 1] ?? 0;
   const volumeOk = volAvg <= 0 || lastVol >= volAvg * 1.1;
+  const volumeStrong = volAvg <= 0 || lastVol >= volAvg * 1.5;
 
-  const typical = candles.map((c) => {
-    const h = Number(c.high);
-    const l = Number(c.low);
-    const cl = Number(c.close);
-    return (h + l + cl) / 3;
+  const prevClose = closes[n - 2] ?? closes[n - 1]!;
+  const gap = opens[n - 1]! - prevClose;
+  const gapUpAtr = atr > 0 ? Math.max(gap, 0) / atr : 0;
+  const gapDownAtr = atr > 0 ? Math.max(-gap, 0) / atr : 0;
+
+  // Session high/low: max/min of prior bars in window (breakout vs established range)
+  const sessSliceH = highs.slice(-13, -1);
+  const sessSliceL = lows.slice(-13, -1);
+  const sessionHigh =
+    sessSliceH.length > 0 ? Math.max(...sessSliceH) : highs[n - 2] ?? highs[n - 1]!;
+  const sessionLow =
+    sessSliceL.length > 0 ? Math.min(...sessSliceL) : lows[n - 2] ?? lows[n - 1]!;
+
+  const typical = candles.map((bar) => {
+    const hh = Number(bar.high);
+    const ll = Number(bar.low);
+    const cl = Number(bar.close);
+    return (hh + ll + cl) / 3;
   });
   const vwapProxy =
     typical.slice(-20).reduce((a, b) => a + b, 0) /
@@ -225,6 +245,11 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
     avgVolRange,
     lastRange,
     volumeOk,
+    volumeStrong,
+    gapUpAtr,
+    gapDownAtr,
+    sessionHigh,
+    sessionLow,
     vwapProxy,
     rejectionBull,
     rejectionBear,
@@ -294,12 +319,7 @@ export function evaluateStrategyMode(
     i.price <= i.bbLower + 0.15 * (i.bbUpper - i.bbLower);
   const rangeResist =
     i.price >= i.bbUpper - 0.15 * (i.bbUpper - i.bbLower);
-  const arbEdge = i.price > 0 && Math.abs(i.price - i.vwapProxy) / i.price >= 0.0008;
   const spreadOk = i.atr >= i.price * 0.0004 || i.atr >= 0.5;
-  const mmBid = i.price <= i.bbMid - 0.35 * (i.bbUpper - i.bbLower);
-  const mmAsk = i.price >= i.bbMid + 0.35 * (i.bbUpper - i.bbLower);
-  const inventoryOkBuy = opts?.hasOpenSell !== true;
-  const inventoryOkSell = opts?.hasOpenBuy !== true;
 
   // Soft exhaust close
   if (i.rsi > 78 && bearStack) {
@@ -585,34 +605,48 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.CUSTOM: {
-      pass(
-        i.adx > 25 &&
-          bullStack &&
-          i.ema21Slope > 0 &&
-          i.macdHist > 0 &&
-          i.macdHist >= i.macdHistPrev &&
-          i.plusDi > i.minusDi &&
-          i.rsi > 55 &&
-          i.price >= i.ema21,
-        58,
-        "buy",
-        "custom_long",
-      );
-      pass(
-        i.adx > 25 &&
-          bearStack &&
-          i.ema21Slope < 0 &&
-          i.macdHist < 0 &&
-          i.macdHist <= i.macdHistPrev &&
-          i.minusDi > i.plusDi &&
-          i.rsi < 45 &&
-          i.price <= i.ema21,
-        58,
-        "sell",
-        "custom_short",
-      );
-      if (i.adx <= 25) gate = "adaptive_flat";
-      break;
+      // Confluence scores — need clear edge (+10), no invalidation
+      let cBuy = 0;
+      let cSell = 0;
+      if (bullStack) cBuy += 18;
+      if (bearStack) cSell += 18;
+      if (i.ema21Slope > 0) cBuy += 10;
+      if (i.ema21Slope < 0) cSell += 10;
+      if (i.plusDi > i.minusDi) cBuy += 12;
+      if (i.minusDi > i.plusDi) cSell += 12;
+      if (i.macdHist > 0 && i.macdHist >= i.macdHistPrev) cBuy += 12;
+      if (i.macdHist < 0 && i.macdHist <= i.macdHistPrev) cSell += 12;
+      if (i.rsi > 55) cBuy += 10;
+      if (i.rsi < 45) cSell += 10;
+      if (i.adx > 25) {
+        cBuy += 8;
+        cSell += 8;
+      }
+      if (i.price >= i.ema21) cBuy += 8;
+      if (i.price <= i.ema21) cSell += 8;
+      buy = Math.min(100, cBuy);
+      sell = Math.min(100, cSell);
+      const invalidated = atrRatio < 0.45 || atrRatio > 3.0 || midRangeHold;
+      if (invalidated) {
+        return {
+          signal: "HOLD",
+          score: Math.max(buy, sell),
+          gate: midRangeHold ? "mid_range" : "invalidation",
+          bias: "flat",
+        };
+      }
+      if (buy >= 55 && buy > sell + 10) {
+        return { signal: "BUY", score: buy, gate: "custom_long", bias: "bull" };
+      }
+      if (sell >= 55 && sell > buy + 10) {
+        return { signal: "SELL", score: sell, gate: "custom_short", bias: "bear" };
+      }
+      return {
+        signal: "HOLD",
+        score: Math.max(buy, sell),
+        gate: Math.abs(buy - sell) < 10 ? "edge_low" : "score_low",
+        bias: buy === sell ? "flat" : buy > sell ? "bull" : "bear",
+      };
     }
     case StrategyMode.GRID: {
       applyMidHold = !(nearGridLower || nearGridUpper);
@@ -650,7 +684,6 @@ export function evaluateStrategyMode(
         "buy",
         "dca_long",
       );
-      // Flatten / exit long conditions → CLOSE
       if (
         i.rsi > 70 &&
         i.price > i.bbUpper &&
@@ -661,131 +694,138 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.NEWS: {
-      const sentBull = bullStack && i.macdHist > 0 && i.plusDi > i.minusDi;
-      const sentBear = bearStack && i.macdHist < 0 && i.minusDi > i.plusDi;
+      applyMidHold = false;
+      const macdUp = i.macdHist > 0 && i.macdHist >= i.macdHistPrev;
+      const macdDown = i.macdHist < 0 && i.macdHist <= i.macdHistPrev;
       pass(
-        sentBull &&
-          bullStack &&
+        i.gapUpAtr >= 0.5 &&
+          i.volumeStrong &&
+          i.adx > 25 &&
           i.plusDi > i.minusDi &&
-          i.macdHist > 0 &&
+          macdUp &&
           i.rsi >= 55 &&
-          i.rsi <= 70 &&
-          i.adx > 25,
-        58,
+          i.rsi <= 75,
+        65,
         "buy",
         "news_long",
       );
       pass(
-        sentBear &&
-          bearStack &&
+        i.gapDownAtr >= 0.5 &&
+          i.volumeStrong &&
+          i.adx > 25 &&
           i.minusDi > i.plusDi &&
-          i.macdHist < 0 &&
-          i.rsi >= 30 &&
-          i.rsi <= 45 &&
-          i.adx > 25,
-        58,
+          macdDown &&
+          i.rsi >= 25 &&
+          i.rsi <= 45,
+        65,
         "sell",
         "news_short",
       );
-      if (!sentBull && !sentBear) gate = "sentiment_neutral";
+      if (!i.volumeStrong) gate = "volume_low";
+      else if (i.gapUpAtr < 0.5 && i.gapDownAtr < 0.5) gate = "no_gap";
       break;
     }
     case StrategyMode.SESSION: {
+      applyMidHold = false;
       if (!isLiquidSessionUtc()) {
         return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat" };
       }
       pass(
         i.volumeOk &&
-          bullStack &&
-          i.macdHist > 0 &&
+          i.price > i.sessionHigh &&
+          i.ema9 > i.ema21 &&
+          i.plusDi > i.minusDi &&
+          i.adx > 20 &&
           i.rsi >= 52 &&
-          i.rsi <= 68 &&
-          i.adx > 20,
-        58,
+          i.rsi <= 70,
+        60,
         "buy",
         "session_long",
       );
       pass(
         i.volumeOk &&
-          bearStack &&
-          i.macdHist < 0 &&
-          i.rsi >= 32 &&
-          i.rsi <= 48 &&
-          i.adx > 20,
-        58,
+          i.price < i.sessionLow &&
+          i.ema9 < i.ema21 &&
+          i.minusDi > i.plusDi &&
+          i.adx > 20 &&
+          i.rsi >= 30 &&
+          i.rsi <= 48,
+        60,
         "sell",
         "session_short",
       );
+      if (!i.volumeOk) gate = "volume_low";
       break;
     }
     case StrategyMode.ARBITRAGE_SIM: {
       applyMidHold = false;
+      const belowVwap = i.price < i.vwapProxy * (1 - 0.0008);
+      const aboveVwap = i.price > i.vwapProxy * (1 + 0.0008);
       pass(
-        arbEdge && i.price < i.vwapProxy && spreadOk,
+        belowVwap && i.rsi < 45 && atrStable && spreadOk,
         65,
         "buy",
         "arb_long",
       );
       pass(
-        arbEdge && i.price > i.vwapProxy && spreadOk,
+        aboveVwap && i.rsi > 55 && atrStable && spreadOk,
         65,
         "sell",
         "arb_short",
       );
+      if (!belowVwap && !aboveVwap) gate = "edge_low";
+      else if (!spreadOk) gate = "spread_bad";
+      else if (!atrStable) gate = "atr_unstable";
       break;
     }
     case StrategyMode.MARKET_MAKING_SIM: {
       applyMidHold = false;
+      if (i.adx > 20 || atrRatio > 3.0 || !noBreakout) {
+        return {
+          signal: "HOLD",
+          score: 0,
+          gate: !noBreakout ? "breakout" : i.adx > 20 ? "adx_high" : "atr_spike",
+          bias: "flat",
+        };
+      }
       pass(
-        i.adx <= 20 &&
-          spreadOk &&
-          mmBid &&
-          atrStable &&
-          inventoryOkBuy &&
-          noBreakout,
-        58,
+        i.adx <= 20 && i.price < i.bbMid && atrStable && spreadOk,
+        55,
         "buy",
         "mm_bid",
       );
       pass(
-        i.adx <= 20 &&
-          spreadOk &&
-          mmAsk &&
-          atrStable &&
-          inventoryOkSell &&
-          noBreakout,
-        58,
+        i.adx <= 20 && i.price > i.bbMid && atrStable && spreadOk,
+        55,
         "sell",
         "mm_ask",
       );
       break;
     }
     default: {
-      pass(
-        i.adx > 25 &&
-          bullStack &&
-          i.ema21Slope > 0 &&
-          i.macdHist > 0 &&
-          i.plusDi > i.minusDi &&
-          i.rsi > 55 &&
-          i.price >= i.ema21,
-        58,
-        "buy",
-        "custom_long",
-      );
-      pass(
-        i.adx > 25 &&
-          bearStack &&
-          i.ema21Slope < 0 &&
-          i.macdHist < 0 &&
-          i.minusDi > i.plusDi &&
-          i.rsi < 45 &&
-          i.price <= i.ema21,
-        58,
-        "sell",
-        "custom_short",
-      );
-      break;
+      // same as CUSTOM early-return path for unknown modes
+      let cBuy = 0;
+      let cSell = 0;
+      if (bullStack) cBuy += 18;
+      if (bearStack) cSell += 18;
+      if (i.plusDi > i.minusDi) cBuy += 12;
+      if (i.minusDi > i.plusDi) cSell += 12;
+      if (i.macdHist > 0) cBuy += 12;
+      if (i.macdHist < 0) cSell += 12;
+      buy = Math.min(100, cBuy);
+      sell = Math.min(100, cSell);
+      if (buy >= 55 && buy > sell + 10) {
+        return { signal: "BUY", score: buy, gate: "custom_long", bias: "bull" };
+      }
+      if (sell >= 55 && sell > buy + 10) {
+        return { signal: "SELL", score: sell, gate: "custom_short", bias: "bear" };
+      }
+      return {
+        signal: "HOLD",
+        score: Math.max(buy, sell),
+        gate: "score_low",
+        bias: "flat",
+      };
     }
   }
 
