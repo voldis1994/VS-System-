@@ -12,6 +12,8 @@ export type DeploymentState = {
   cooldownSec?: number;
   score?: number;
   minScore?: number;
+  buyScore?: number;
+  sellScore?: number;
   gate?: string;
   engine?: string;
   bias?: string;
@@ -58,6 +60,9 @@ export function deploymentHint(d: DeploymentState): string | null {
   }
   if (d.flipped && (d.signal === "BUY" || d.signal === "SELL")) {
     return `Flip ${d.flippedFrom ?? "?"}→${d.signal} (sveces bloķēja ${d.flippedFrom ?? "?"}).`;
+  }
+  if (d.gate === "breakout" || d.gate === "adx_high") {
+    return `MM risk-off — tirgus pārāk trendo/breakout (score ${d.score ?? 0}). Gaida klusu zonu.`;
   }
   if (d.skip === "quality_wait" || d.gate === "score_low") {
     const bar = d.minScore && d.minScore > 0 ? d.minScore : 55;

@@ -304,6 +304,9 @@ export function StrategyConstellation() {
                     <div className="mb-1 flex justify-between font-mono text-[10px] text-white/40">
                       <span>
                         score {deploy.score ?? "—"}/{bar}+
+                        {deploy.buyScore != null || deploy.sellScore != null
+                          ? ` · B${deploy.buyScore ?? 0}/S${deploy.sellScore ?? 0}`
+                          : ""}
                       </span>
                       <span>{scorePct}%</span>
                     </div>

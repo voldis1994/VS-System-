@@ -966,11 +966,11 @@ export function evaluateStrategyMode(
         }
         return {
           signal: "HOLD",
-          score: 0,
+          score: Math.max(softSideScore(i, "buy"), softSideScore(i, "sell")),
           gate: !noBreakout ? "breakout" : i.adx > 20 ? "adx_high" : "atr_spike",
           bias: "flat",
-          buyScore: 0,
-          sellScore: 0,
+          buyScore: softSideScore(i, "buy"),
+          sellScore: softSideScore(i, "sell"),
         };
       }
       const band = Math.max(i.bbUpper - i.bbLower, i.atr);
@@ -1054,13 +1054,15 @@ export function evaluateStrategyMode(
   }
 
   if (applyMidHold && midRangeHold && buy < 80 && sell < 80) {
+    const displayBuy = buy > 0 ? buy : softSideScore(i, "buy");
+    const displaySell = sell > 0 ? sell : softSideScore(i, "sell");
     return {
       signal: "HOLD",
-      score: Math.max(buy, sell),
+      score: Math.max(displayBuy, displaySell),
       gate: "mid_range",
       bias: "flat",
-      buyScore: buy,
-      sellScore: sell,
+      buyScore: displayBuy,
+      sellScore: displaySell,
     };
   }
 
@@ -1073,14 +1075,59 @@ export function evaluateStrategyMode(
   if (sell >= minScore && sell >= buy + 3) {
     return { signal: "SELL", score: sell, gate, bias: "bear", buyScore: buy, sellScore: sell };
   }
+
+  // Binary modes stay at 0 until full AND — show soft confluence so UI isn't "dead"
+  let displayBuy = buy;
+  let displaySell = sell;
+  if (displayBuy === 0 && displaySell === 0) {
+    displayBuy = softSideScore(i, "buy");
+    displaySell = softSideScore(i, "sell");
+  }
   return {
     signal: "HOLD",
-    score: Math.max(buy, sell),
+    score: Math.max(displayBuy, displaySell),
     gate: Math.max(buy, sell) > 0 ? "score_low" : gate,
-    bias: buy === sell ? "flat" : buy > sell ? "bull" : "bear",
-    buyScore: buy,
-    sellScore: sell,
+    bias:
+      displayBuy === displaySell
+        ? "flat"
+        : displayBuy > displaySell
+          ? "bull"
+          : "bear",
+    buyScore: displayBuy,
+    sellScore: displaySell,
   };
+}
+
+/** Progressive 0–100 probe for UI when hard AND entry has not fired. */
+function softSideScore(
+  i: Indicators,
+  side: "buy" | "sell",
+): number {
+  let s = 0;
+  if (side === "buy") {
+    if (i.ema9 > i.ema21) s += 12;
+    if (i.ema21 > i.ema55) s += 10;
+    if (i.ema21Slope > 0) s += 8;
+    if (i.plusDi > i.minusDi) s += 12;
+    if (i.adx > 18) s += 10;
+    if (i.macdHist > 0) s += 10;
+    if (i.macdHist >= i.macdHistPrev) s += 8;
+    if (i.rsi >= 45 && i.rsi <= 68) s += 10;
+    if (i.price >= i.ema21) s += 8;
+    if (i.stochK >= i.stochD) s += 6;
+  } else {
+    if (i.ema9 < i.ema21) s += 12;
+    if (i.ema21 < i.ema55) s += 10;
+    if (i.ema21Slope < 0) s += 8;
+    if (i.minusDi > i.plusDi) s += 12;
+    if (i.adx > 18) s += 10;
+    if (i.macdHist < 0) s += 10;
+    if (i.macdHist <= i.macdHistPrev) s += 8;
+    if (i.rsi >= 32 && i.rsi <= 55) s += 10;
+    if (i.price <= i.ema21) s += 8;
+    if (i.stochK <= i.stochD) s += 6;
+  }
+  return Math.max(0, Math.min(100, s));
 }
 
 function isLiquidSessionUtc(now = new Date()): boolean {
