@@ -682,6 +682,7 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.DCA: {
+      // Long DCA: buy dips in uptrend; Short DCA: sell rips in downtrend
       pass(
         i.ema200Slope > 0 &&
           i.price < i.ema55 &&
@@ -692,12 +693,45 @@ export function evaluateStrategyMode(
         "buy",
         "dca_long",
       );
+      pass(
+        i.ema200Slope < 0 &&
+          i.price > i.ema55 &&
+          i.rsi > 55 &&
+          i.price > i.vwapProxy &&
+          i.price >= i.ema21 - 2.5 * i.atr,
+        58,
+        "sell",
+        "dca_short",
+      );
       if (
+        opts?.hasOpenBuy &&
         i.rsi > 70 &&
         i.price > i.bbUpper &&
         i.price > i.ema21 + 2 * i.atr
       ) {
-        return { signal: "CLOSE", score: 65, gate: "dca_exit", bias: "bear", buyScore: buy, sellScore: sell };
+        return {
+          signal: "CLOSE",
+          score: 65,
+          gate: "dca_exit_long",
+          bias: "bear",
+          buyScore: buy,
+          sellScore: sell,
+        };
+      }
+      if (
+        opts?.hasOpenSell &&
+        i.rsi < 30 &&
+        i.price < i.bbLower &&
+        i.price < i.ema21 - 2 * i.atr
+      ) {
+        return {
+          signal: "CLOSE",
+          score: 65,
+          gate: "dca_exit_short",
+          bias: "bull",
+          buyScore: buy,
+          sellScore: sell,
+        };
       }
       break;
     }
@@ -770,29 +804,83 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.ARBITRAGE_SIM: {
+      // Single-venue statistical arb: fade VWAP dislocations when mean-reversion is likely
       applyMidHold = false;
-      const belowVwap = i.price < i.vwapProxy * (1 - 0.0008);
-      const aboveVwap = i.price > i.vwapProxy * (1 + 0.0008);
+      const edge = Math.abs(i.price - i.vwapProxy) / Math.max(i.atr, i.price * 1e-6);
+      const cheap = i.price <= i.vwapProxy - 0.85 * i.atr;
+      const rich = i.price >= i.vwapProxy + 0.85 * i.atr;
+      const revertingUp =
+        i.macdHist > i.macdHistPrev && i.stochK > i.stochKPrev;
+      const revertingDown =
+        i.macdHist < i.macdHistPrev && i.stochK < i.stochKPrev;
+      // Flatten when edge collapses back through VWAP
+      if (opts?.hasOpenBuy && i.price >= i.vwapProxy) {
+        return {
+          signal: "CLOSE",
+          score: 70,
+          gate: "arb_edge_closed",
+          bias: "flat",
+          buyScore: 0,
+          sellScore: 0,
+        };
+      }
+      if (opts?.hasOpenSell && i.price <= i.vwapProxy) {
+        return {
+          signal: "CLOSE",
+          score: 70,
+          gate: "arb_edge_closed",
+          bias: "flat",
+          buyScore: 0,
+          sellScore: 0,
+        };
+      }
       pass(
-        belowVwap && i.rsi < 45 && atrStable && spreadOk,
+        cheap &&
+          !opts?.hasOpenBuy &&
+          i.adx < 28 &&
+          i.rsi < 42 &&
+          revertingUp &&
+          atrStable &&
+          spreadOk &&
+          edge >= 0.85,
         65,
         "buy",
-        "arb_long",
+        "stat_arb_long",
       );
       pass(
-        aboveVwap && i.rsi > 55 && atrStable && spreadOk,
+        rich &&
+          !opts?.hasOpenSell &&
+          i.adx < 28 &&
+          i.rsi > 58 &&
+          revertingDown &&
+          atrStable &&
+          spreadOk &&
+          edge >= 0.85,
         65,
         "sell",
-        "arb_short",
+        "stat_arb_short",
       );
-      if (!belowVwap && !aboveVwap) gate = "edge_low";
+      if (edge < 0.85) gate = "edge_low";
       else if (!spreadOk) gate = "spread_bad";
       else if (!atrStable) gate = "atr_unstable";
+      else if (i.adx >= 28) gate = "trend_risk";
       break;
     }
     case StrategyMode.MARKET_MAKING_SIM: {
+      // Inventory-aware quote sim: buy near bid / sell near ask, flatten at mid
       applyMidHold = false;
       if (i.adx > 20 || atrRatio > 3.0 || !noBreakout) {
+        // Risk-off: flatten inventory on regime break
+        if (opts?.hasOpenBuy || opts?.hasOpenSell) {
+          return {
+            signal: "CLOSE",
+            score: 60,
+            gate: !noBreakout ? "mm_breakout_flat" : i.adx > 20 ? "mm_adx_flat" : "mm_atr_flat",
+            bias: "flat",
+            buyScore: 0,
+            sellScore: 0,
+          };
+        }
         return {
           signal: "HOLD",
           score: 0,
@@ -802,18 +890,55 @@ export function evaluateStrategyMode(
           sellScore: 0,
         };
       }
+      const band = Math.max(i.bbUpper - i.bbLower, i.atr);
+      const nearBid = i.price <= i.bbMid - 0.35 * band;
+      const nearAsk = i.price >= i.bbMid + 0.35 * band;
+      // Inventory mean-reversion exits at mid
+      if (opts?.hasOpenBuy && i.price >= i.bbMid) {
+        return {
+          signal: "CLOSE",
+          score: 62,
+          gate: "mm_flatten_long",
+          bias: "flat",
+          buyScore: 0,
+          sellScore: 0,
+        };
+      }
+      if (opts?.hasOpenSell && i.price <= i.bbMid) {
+        return {
+          signal: "CLOSE",
+          score: 62,
+          gate: "mm_flatten_short",
+          bias: "flat",
+          buyScore: 0,
+          sellScore: 0,
+        };
+      }
       pass(
-        i.adx <= 20 && i.price < i.bbMid && atrStable && spreadOk,
+        !opts?.hasOpenBuy &&
+          i.adx <= 18 &&
+          nearBid &&
+          atrStable &&
+          spreadOk &&
+          i.rsi < 48,
         55,
         "buy",
         "mm_bid",
       );
       pass(
-        i.adx <= 20 && i.price > i.bbMid && atrStable && spreadOk,
+        !opts?.hasOpenSell &&
+          i.adx <= 18 &&
+          nearAsk &&
+          atrStable &&
+          spreadOk &&
+          i.rsi > 52,
         55,
         "sell",
         "mm_ask",
       );
+      if (!spreadOk) gate = "spread_bad";
+      else if (!atrStable) gate = "atr_unstable";
+      else if (!nearBid && !nearAsk) gate = "not_at_quote";
       break;
     }
     default: {

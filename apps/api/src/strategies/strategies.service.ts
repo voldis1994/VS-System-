@@ -220,13 +220,12 @@ export class StrategiesService {
     correlationId: string,
   ) {
     const strategy = await this.require(organizationId, id);
-    const { computeIndicators, evaluateStrategyMode, modeMinScore } =
-      await import("./strategy-engine");
+    const { runStrategyBacktest } = await import("./backtest-harness");
     const symbols = (strategy.assignedSymbols as string[]) ?? ["EURUSD"];
     const rawSymbol = symbols[0] ?? "EURUSD";
     const symbol = resolveCapitalEpic(rawSymbol);
-    const cfg = (strategy.configurationJson ?? {}) as { timeframe?: string };
-    const timeframe = cfg.timeframe ?? "15m";
+    const cfg = (strategy.configurationJson ?? {}) as Record<string, unknown>;
+    const timeframe = (cfg.timeframe as string) ?? "15m";
     let candles = await this.prisma.candle.findMany({
       where: { symbol, timeframe },
       orderBy: { openTime: "asc" },
@@ -239,61 +238,82 @@ export class StrategiesService {
         take: 800,
       });
     }
-    let equity = 10000;
-    let peak = equity;
-    let maxDd = 0;
-    const trades: Array<Record<string, unknown>> = [];
-    let position: null | { entry: number; direction: "BUY" | "SELL" } = null;
-    const minScore = modeMinScore(strategy.mode as never);
-    for (let i = 80; i < candles.length; i++) {
-      const slice = candles.slice(0, i);
-      const ind = computeIndicators(slice);
-      if (!ind) continue;
-      const scored = evaluateStrategyMode(
-        strategy.mode as never,
-        ind,
-        minScore,
-        false,
-      );
-      const price = ind.price;
-      if (!position && (scored.signal === "BUY" || scored.signal === "SELL")) {
-        position = { entry: price, direction: scored.signal };
-      } else if (
-        position &&
-        ((position.direction === "BUY" &&
-          (scored.signal === "SELL" || scored.signal === "CLOSE")) ||
-          (position.direction === "SELL" &&
-            (scored.signal === "BUY" || scored.signal === "CLOSE")))
-      ) {
-        const pnl =
-          position.direction === "BUY"
-            ? (price - position.entry) * 100000 * 0.1
-            : (position.entry - price) * 100000 * 0.1;
-        equity += pnl;
-        peak = Math.max(peak, equity);
-        maxDd = Math.max(maxDd, peak - equity);
-        trades.push({
-          entry: position.entry,
-          exit: price,
-          pnl,
-          direction: position.direction,
-          time: candles[i]!.closeTime,
-        });
-        position = null;
-      }
-    }
-    const wins = trades.filter((t) => Number(t.pnl) > 0);
+    const candles1m = await this.prisma.candle.findMany({
+      where: {
+        symbol: { in: [symbol, rawSymbol] },
+        timeframe: "1m",
+      },
+      orderBy: { openTime: "asc" },
+      take: 5000,
+    });
+
+    const run = runStrategyBacktest({
+      mode: strategy.mode,
+      symbol,
+      candles,
+      candles1m,
+      config: {
+        timeframe,
+        sessionFilter: cfg.sessionFilter === true,
+        minScore:
+          typeof cfg.minScore === "number" ? cfg.minScore : undefined,
+        atrStopMult:
+          typeof cfg.atrStopMult === "number" ? cfg.atrStopMult : undefined,
+        atrTpMult:
+          typeof cfg.atrTpMult === "number" ? cfg.atrTpMult : undefined,
+        takeProfitEnabled: cfg.takeProfitEnabled !== false,
+        takeProfitPips:
+          typeof cfg.takeProfitPips === "number"
+            ? cfg.takeProfitPips
+            : undefined,
+        stopDistancePips:
+          typeof cfg.stopDistancePips === "number"
+            ? cfg.stopDistancePips
+            : undefined,
+        breakEvenEnabled: Boolean(cfg.breakEvenEnabled),
+        breakEvenActivationPips:
+          typeof cfg.breakEvenActivationPips === "number"
+            ? cfg.breakEvenActivationPips
+            : undefined,
+        breakEvenOffsetPips:
+          typeof cfg.breakEvenOffsetPips === "number"
+            ? cfg.breakEvenOffsetPips
+            : undefined,
+        trailingEnabled: Boolean(cfg.trailingEnabled),
+        trailingDistancePips:
+          typeof cfg.trailingDistancePips === "number"
+            ? cfg.trailingDistancePips
+            : undefined,
+        trailingActivationPips:
+          typeof cfg.trailingActivationPips === "number"
+            ? cfg.trailingActivationPips
+            : undefined,
+        oneTradeOnly: cfg.oneTradeOnly !== false,
+        closeOnlyNoFlip: cfg.closeOnlyNoFlip === true,
+      },
+    });
+
     const result = {
       strategyId: id,
       symbol,
       timeframe,
-      engine: "VS_PRO_V10",
-      trades: trades.length,
-      netProfit: equity - 10000,
-      winRate: trades.length ? wins.length / trades.length : 0,
-      maxDrawdown: maxDd,
-      equityCurveEnd: equity,
+      engine: run.engine,
+      trades: run.trades.length,
+      netProfit: run.netProfit,
+      winRate: run.winRate,
+      maxDrawdown: run.maxDrawdown,
+      equityCurveEnd: run.equityCurveEnd,
+      exitBreakdown: run.trades.reduce(
+        (acc, t) => {
+          acc[t.exitReason] = (acc[t.exitReason] ?? 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>,
+      ),
+      skipped: run.skipped,
+      sampleTrades: run.trades.slice(-20),
       parameterSnapshot: strategy.configurationJson,
+      parity: "runtime_signal+sl_tp_be_trail",
     };
     await this.audit.record({
       organizationId,

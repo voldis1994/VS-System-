@@ -601,8 +601,10 @@ export default function StrategiesPage() {
                   </Field>
                   <p className="text-[11px] text-zinc-500">
                     Filtrs: BUY≠bearish / SELL≠bullish; flip tikai ja TF+1m
-                    piekrīt. ARBITRAGE_SIM / MARKET_MAKING_SIM = proxy (ne īsts
-                    arb/MM). TP ATR× piem. 0.8–1.2 = tuvāks mērķis.
+                    piekrīt. ARBITRAGE_SIM = VWAP stat-arb; MARKET_MAKING_SIM =
+                    inventory quote (bid/ask→mid). DCA = long+short. Backtest =
+                    tas pats signāls + SL/TP/BE/trail. TP ATR× piem. 0.8–1.2 =
+                    tuvāks mērķis.
                   </p>
                 </div>
 
