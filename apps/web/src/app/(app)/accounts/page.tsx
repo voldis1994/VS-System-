@@ -33,6 +33,8 @@ export default function AccountsPage() {
   const [fixApiKey, setFixApiKey] = useState("");
   const [fixIdentifier, setFixIdentifier] = useState("");
   const [fixPassword, setFixPassword] = useState("");
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   async function createAccount() {
     if (provider === "CAPITAL" && !demo && !riskAccepted) {
@@ -111,6 +113,30 @@ export default function AccountsPage() {
       toast.error(msg, { duration: 12000 });
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function saveRename(id: string) {
+    const next = renameValue.trim();
+    if (!next) {
+      toast.error("Nosaukums nevar būt tukšs");
+      return;
+    }
+    setBusyId(id);
+    try {
+      await api(`/accounts/${id}`, {
+        method: "PATCH",
+        token: token!,
+        body: JSON.stringify({ name: next.slice(0, 80) }),
+      });
+      toast.success("Nosaukums saglabāts");
+      setRenameId(null);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Rename failed");
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -360,7 +386,48 @@ export default function AccountsPage() {
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-white">{a.name}</span>
+                        {renameId === a.id ? (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Input
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              className="h-8 w-48 font-medium"
+                              maxLength={80}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void saveRename(a.id);
+                                if (e.key === "Escape") setRenameId(null);
+                              }}
+                            />
+                            <Button
+                              size="sm"
+                              loading={busyId === a.id}
+                              onClick={() => void saveRename(a.id)}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setRenameId(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="font-medium text-white hover:text-accent"
+                            title="Pārdēvēt kontu"
+                            onClick={() => {
+                              setRenameId(a.id);
+                              setRenameValue(a.name);
+                              setFixCredsId(null);
+                            }}
+                          >
+                            {a.name}
+                          </button>
+                        )}
                         <Badge tone="accent">{a.provider}</Badge>
                         <Badge tone="neutral">{a.accountType}</Badge>
                         <Badge
@@ -388,6 +455,19 @@ export default function AccountsPage() {
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
+                      {renameId !== a.id ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setRenameId(a.id);
+                            setRenameValue(a.name);
+                            setFixCredsId(null);
+                          }}
+                        >
+                          Rename
+                        </Button>
+                      ) : null}
                       {a.connectionStatus !== "CONNECTED" ? (
                         <Button
                           size="sm"
