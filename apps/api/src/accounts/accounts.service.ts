@@ -300,6 +300,8 @@ export class AccountsService {
     );
     for (const bp of positions) {
       if (!bp.brokerPositionId) continue;
+      const symbol = String(bp.symbol ?? "").trim();
+      if (!symbol) continue;
       const existing = await this.prisma.position.findFirst({
         where: {
           accountId: id,
@@ -311,6 +313,7 @@ export class AccountsService {
         await this.prisma.position.update({
           where: { id: existing.id },
           data: {
+            symbol,
             currentPrice: bp.currentPrice,
             unrealizedPnl: bp.unrealizedPnl,
             volume: bp.volume,
@@ -325,7 +328,7 @@ export class AccountsService {
             organizationId,
             accountId: id,
             brokerPositionId: bp.brokerPositionId,
-            symbol: bp.symbol,
+            symbol,
             direction: bp.direction as never,
             volume: bp.volume,
             initialVolume: bp.volume,

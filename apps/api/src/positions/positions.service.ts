@@ -211,12 +211,14 @@ export class PositionsService {
       // Import broker-only opens (opened on Capital outside VS / wrong-session before)
       for (const bp of live) {
         if (!bp.brokerPositionId || seenLocal.has(bp.brokerPositionId)) continue;
+        const symbol = String(bp.symbol ?? "").trim();
+        if (!symbol) continue;
         await this.prisma.position.create({
           data: {
             organizationId,
             accountId,
             brokerPositionId: bp.brokerPositionId,
-            symbol: bp.symbol,
+            symbol,
             direction: bp.direction as never,
             volume: bp.volume,
             initialVolume: bp.volume,

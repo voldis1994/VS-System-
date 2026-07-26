@@ -655,7 +655,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       positions?: Array<{
         position?: {
           dealId: string;
-          epic: string;
+          epic?: string;
           direction: string;
           size: number;
           level: number;
@@ -664,34 +664,49 @@ export class CapitalComAdapter implements BrokerAdapter {
           upl?: number;
           createdDate?: string;
         };
-        market?: { bid?: number; offer?: number };
+        market?: {
+          epic?: string;
+          symbol?: string;
+          instrumentName?: string;
+          bid?: number;
+          offer?: number;
+        };
       }>;
     }>("GET", "/api/v1/positions");
 
-    const data = (res.positions ?? []).map((row) => {
-      const p = row.position!;
-      const current =
-        p.direction === "BUY"
-          ? row.market?.bid ?? p.level
-          : row.market?.offer ?? p.level;
-      return {
-        brokerPositionId: p.dealId,
-        symbol: p.epic,
-        direction: p.direction === "BUY" ? OrderDirection.BUY : OrderDirection.SELL,
-        volume: String(p.size),
-        averageEntry: String(p.level),
-        currentPrice: String(current),
-        stopLoss: p.stopLevel != null ? String(p.stopLevel) : undefined,
-        takeProfit: p.profitLevel != null ? String(p.profitLevel) : undefined,
-        unrealizedPnl: String(p.upl ?? 0),
-        realizedPnl: "0",
-        commission: "0",
-        swap: "0",
-        status: "OPEN",
-        openedAt: p.createdDate ?? toUtcIso(),
-        updatedAt: toUtcIso(),
-      };
-    });
+    const data = (res.positions ?? [])
+      .map((row) => {
+        const p = row.position;
+        if (!p?.dealId) return null;
+        // Capital puts epic on market (not always on position)
+        const symbol = String(
+          p.epic ?? row.market?.epic ?? row.market?.symbol ?? "",
+        ).trim();
+        if (!symbol) return null;
+        const current =
+          p.direction === "BUY"
+            ? row.market?.bid ?? p.level
+            : row.market?.offer ?? p.level;
+        return {
+          brokerPositionId: p.dealId,
+          symbol,
+          direction:
+            p.direction === "BUY" ? OrderDirection.BUY : OrderDirection.SELL,
+          volume: String(p.size),
+          averageEntry: String(p.level),
+          currentPrice: String(current),
+          stopLoss: p.stopLevel != null ? String(p.stopLevel) : undefined,
+          takeProfit: p.profitLevel != null ? String(p.profitLevel) : undefined,
+          unrealizedPnl: String(p.upl ?? 0),
+          realizedPnl: "0",
+          commission: "0",
+          swap: "0",
+          status: "OPEN",
+          openedAt: p.createdDate ?? toUtcIso(),
+          updatedAt: toUtcIso(),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null);
     this.positionsCache = { at: Date.now(), data };
     return data;
   }
