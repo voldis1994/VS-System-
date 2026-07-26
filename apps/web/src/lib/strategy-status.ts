@@ -31,8 +31,8 @@ export type DeploymentState = {
 };
 
 export function deploymentHint(d: DeploymentState): string | null {
-  if (d.candleSource1m === "sim" || d.candleSource === "sim") {
-    return "Sveces ir SIM — signāli var būt mākslīgi. Capital CONNECTED + restart.";
+  if (d.candleSource1m === "sim" || d.candleSource === "sim" || d.skip === "sim_candles") {
+    return "Sveces ir SIM — entry bloķēts. Capital CONNECTED + Sync history.";
   }
   if (d.skip === "buy_vs_bearish") {
     return `BUY bloķēts pret bearish — ja SELL arī neder, gaida.`;
@@ -48,6 +48,9 @@ export function deploymentHint(d: DeploymentState): string | null {
   }
   if (d.gate === "mid_range") {
     return "Mid-range zona — HOLD (mazāk trokšņa).";
+  }
+  if (d.skip === "sim_candles") {
+    return "SIM sveces — entry bloķēts. Capital history Sync.";
   }
   if (d.skip === "micro_timing") {
     return `Gaida 1m×5 / TF bias (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;

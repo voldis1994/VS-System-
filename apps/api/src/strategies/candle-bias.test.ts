@@ -60,9 +60,9 @@ describe("candle bias + direction filter", () => {
     expect(r).toMatchObject({ signal: "BUY", flipped: true, from: "SELL" });
   });
 
-  it("both sides blocked → null", () => {
-    // TF bear blocks BUY; 1m bull would block flipped SELL
-    const r = resolveEntryWithCandleFlip("BUY", "bear", "bull");
+  it("no flip when 1m flat (wait instead)", () => {
+    const r = resolveEntryWithCandleFlip("BUY", "bear", "flat");
     expect(r.signal).toBeNull();
+    expect(r.reason).toMatch(/wait_1m/);
   });
 });

@@ -66,6 +66,13 @@ export class PositionsService {
       const liveIds = new Set(
         live.map((x) => x.brokerPositionId).filter(Boolean),
       );
+      // Empty snapshot is ambiguous (API glitch) — do not mass-close
+      if (live.length === 0 && positions.length > 0) {
+        console.warn(
+          `reconcileClosedAgainstBroker ${accId}: empty broker list — skip ghost close`,
+        );
+        continue;
+      }
       for (const p of positions) {
         if (!p.brokerPositionId) continue;
         if (liveIds.has(p.brokerPositionId)) continue;
@@ -462,12 +469,38 @@ export class PositionsService {
       correlationId,
       { silent: opts?.silent },
     );
+    // BE sends stopLevel which clears Capital native trail — re-arm trail if still enabled
+    let trailRearmed = false;
+    if (position.trailingEnabled && position.trailingDistance) {
+      try {
+        await this.modifySlTp(
+          organizationId,
+          actorId,
+          id,
+          {
+            trailingStop: true,
+            stopDistance: String(position.trailingDistance),
+            takeProfit:
+              position.takeProfit != null ? String(position.takeProfit) : undefined,
+          },
+          correlationId,
+          { silent: true },
+        );
+        trailRearmed = true;
+      } catch {
+        // fall through — clear activated so autoManage can retry
+      }
+    }
     const final = await this.prisma.position.update({
       where: { id },
       data: {
         breakEvenActivatedAt: new Date(),
         breakEvenEnabled: true,
         stopLoss: newSl,
+        // If re-arm failed, allow autoManage to arm again next tick
+        trailingActivatedAt: trailRearmed
+          ? position.trailingActivatedAt ?? new Date()
+          : null,
       },
     });
     await this.events.publish({
@@ -529,6 +562,8 @@ export class PositionsService {
       if (!adapter) continue;
       try {
         const live = await adapter.getOpenPositions({ force: true });
+        // Empty list is ambiguous — don't mark everything missing
+        if (live.length === 0 && positions.length > 0) continue;
         const liveIds = new Set(
           live.map((x) => x.brokerPositionId).filter(Boolean),
         );
@@ -633,9 +668,11 @@ export class PositionsService {
           });
           const capitalNative = account?.provider === "CAPITAL";
 
-          // Capital native trailing follows BUY↑ / SELL↓ — arm once, don't fight with stopLevel
+          // Capital native trailing — arm after activation distance; re-arm after BE
           if (capitalNative) {
-            if (!fresh.trailingActivatedAt) {
+            const needsArm = !fresh.trailingActivatedAt;
+            // After BE, trailingActivatedAt may be null → re-arm here
+            if (needsArm) {
               let nativeOk = false;
               try {
                 await this.modifySlTp(
@@ -683,7 +720,7 @@ export class PositionsService {
               }
               if (nativeOk) continue;
             } else {
-              // Already on Capital native trail — don't overwrite with stopLevel
+              // Native trail already active — sync mark only
               continue;
             }
           }
@@ -770,9 +807,41 @@ export class PositionsService {
   ) {
     const position = await this.get(organizationId, id);
     if (!body.enabled) {
+      // Clear Capital native trail → leave a fixed SL at current candidate / existing
+      const account = await this.prisma.tradingAccount.findFirst({
+        where: { id: position.accountId },
+        select: { provider: true },
+      });
+      if (account?.provider === "CAPITAL" && position.brokerPositionId) {
+        const keepSl =
+          position.stopLoss != null
+            ? String(position.stopLoss)
+            : position.currentPrice != null && position.trailingDistance != null
+              ? trailingStopCandidate(
+                  position.direction as "BUY" | "SELL",
+                  String(position.currentPrice),
+                  String(position.trailingDistance),
+                  null,
+                )
+              : undefined;
+        if (keepSl) {
+          try {
+            await this.modifySlTp(
+              organizationId,
+              actorId,
+              id,
+              { stopLoss: keepSl },
+              correlationId,
+              { silent: true },
+            );
+          } catch {
+            // still disable locally
+          }
+        }
+      }
       const updated = await this.prisma.position.update({
         where: { id },
-        data: { trailingEnabled: false },
+        data: { trailingEnabled: false, trailingActivatedAt: null },
       });
       await this.audit.record({
         organizationId,

@@ -118,10 +118,25 @@ export function resolveEntryWithCandleFlip(
   let check = passes(signal);
 
   if (!check.ok) {
+    // Flip only when 1m also clearly agrees (not TF-alone / flat micro)
+    if (microBias === "flat") {
+      return {
+        signal: null,
+        flipped: false,
+        skip: check.skip,
+        reason: `${check.reason}; wait_1m_before_flip`,
+      };
+    }
     const opposite: "BUY" | "SELL" = signal === "BUY" ? "SELL" : "BUY";
     const oppCheck = passes(opposite);
-    if (oppCheck.ok) {
-      // Opposite allowed — take it instead of waiting
+    const oppAgreesMicro =
+      (opposite === "BUY" && microBias === "bull") ||
+      (opposite === "SELL" && microBias === "bear");
+    const oppAgreesTf =
+      (opposite === "BUY" && tfBias === "bull") ||
+      (opposite === "SELL" && tfBias === "bear") ||
+      tfBias === "flat";
+    if (oppCheck.ok && oppAgreesMicro && oppAgreesTf) {
       return {
         signal: opposite,
         flipped: true,
@@ -137,25 +152,12 @@ export function resolveEntryWithCandleFlip(
     };
   }
 
-  // Original side OK — if 1m flat, still wait for timing unless TF bias already agrees
+  // Original side OK — if 1m flat, wait (no speculative TF-only flip)
   if (microBias === "flat") {
     const agrees =
       (signal === "BUY" && tfBias === "bull") ||
       (signal === "SELL" && tfBias === "bear");
     if (!agrees) {
-      // Try opposite if TF clearly favors it
-      const opposite: "BUY" | "SELL" = signal === "BUY" ? "SELL" : "BUY";
-      const oppAgrees =
-        (opposite === "BUY" && tfBias === "bull") ||
-        (opposite === "SELL" && tfBias === "bear");
-      if (oppAgrees && passes(opposite).ok) {
-        return {
-          signal: opposite,
-          flipped: true,
-          from: strategySignal,
-          reason: `flipped_flat1m_tf_${tfBias}`,
-        };
-      }
       return {
         signal: null,
         flipped,

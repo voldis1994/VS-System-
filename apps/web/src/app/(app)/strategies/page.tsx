@@ -148,6 +148,25 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
   };
 }
 
+function modeMinScoreClient(mode: string): number {
+  switch (mode) {
+    case StrategyMode.SCALPING:
+      return 50;
+    case StrategyMode.MEAN_REVERSION:
+    case StrategyMode.RANGE:
+    case StrategyMode.REVERSAL:
+    case StrategyMode.GRID:
+    case StrategyMode.DCA:
+    case StrategyMode.MARKET_MAKING_SIM:
+      return 52;
+    case StrategyMode.NEWS:
+    case StrategyMode.ARBITRAGE_SIM:
+      return 60;
+    default:
+      return 55;
+  }
+}
+
 function buildConfiguration(d: AccountDraft) {
   const lot = Number(d.lotSize);
   const volume =
@@ -160,8 +179,8 @@ function buildConfiguration(d: AccountDraft) {
     oneTradeOnly: true,
     closeOnlyNoFlip: false,
     autoAggressive: false,
-    sessionFilter: false,
-    minScore: 48,
+    sessionFilter: d.mode === StrategyMode.SESSION,
+    minScore: modeMinScoreClient(d.mode),
     atrStopMult: 1.0,
     atrTpMult: Number(d.atrTpMult) || 2.2,
     takeProfitEnabled: d.tpEnabled,
@@ -173,7 +192,7 @@ function buildConfiguration(d: AccountDraft) {
     trailingActivationPips: Number(d.trailActPips) || Number(d.trailPips) || 15,
     exitVersion: d.exitVersion,
     minAdx: 14,
-    cooldownSeconds: 15,
+    cooldownSeconds: 30,
   };
 }
 
@@ -571,9 +590,9 @@ export default function StrategiesPage() {
                     />
                   </Field>
                   <p className="text-[11px] text-zinc-500">
-                    Filtrs: BUY neder pret bearish, SELL neder pret bullish — bet
-                    ja viena puse bloķēta, mēģina pretējo (nevis tikai gaida). TP
-                    ATR× piem. 0.8–1.2 = tuvāks mērķis.
+                    Filtrs: BUY≠bearish / SELL≠bullish; flip tikai ja TF+1m
+                    piekrīt. ARBITRAGE_SIM / MARKET_MAKING_SIM = proxy (ne īsts
+                    arb/MM). TP ATR× piem. 0.8–1.2 = tuvāks mērķis.
                   </p>
                 </div>
 
@@ -722,7 +741,7 @@ export default function StrategiesPage() {
                         ) : null}
                         <div className="font-mono text-[11px] text-white/35">
                           {[
-                            d.engine ?? "VS_PRO_V2",
+                            d.engine ?? "VS_PRO_V10",
                             d.symbol ? `sym ${d.symbol}` : null,
                             d.signal ? `sig ${d.signal}` : null,
                             typeof d.score === "number" ? `score ${d.score}` : null,

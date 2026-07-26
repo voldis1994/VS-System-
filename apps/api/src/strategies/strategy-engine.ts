@@ -55,6 +55,7 @@ export type Indicators = {
   lastRange: number;
   volumeOk: boolean;
   volumeStrong: boolean;
+  hasVolumeData: boolean;
   gapUpAtr: number;
   gapDownAtr: number;
   sessionHigh: number;
@@ -160,8 +161,10 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
   const volAvg =
     volWindow.reduce((a, b) => a + b, 0) / Math.max(volWindow.length, 1);
   const lastVol = vols[n - 1] ?? 0;
-  const volumeOk = volAvg <= 0 || lastVol >= volAvg * 1.1;
-  const volumeStrong = volAvg <= 0 || lastVol >= volAvg * 1.5;
+  // Unknown volume must NOT pass volume gates (Capital often sends 0)
+  const hasVolume = volAvg > 0 && lastVol > 0;
+  const volumeOk = hasVolume && lastVol >= volAvg * 1.1;
+  const volumeStrong = hasVolume && lastVol >= volAvg * 1.5;
 
   const prevClose = closes[n - 2] ?? closes[n - 1]!;
   const gap = opens[n - 1]! - prevClose;
@@ -246,6 +249,7 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
     lastRange,
     volumeOk,
     volumeStrong,
+    hasVolumeData: hasVolume,
     gapUpAtr,
     gapDownAtr,
     sessionHigh,
@@ -635,10 +639,10 @@ export function evaluateStrategyMode(
           bias: "flat",
         };
       }
-      if (buy >= 55 && buy > sell + 10) {
+      if (buy >= minScore && buy > sell + 10) {
         return { signal: "BUY", score: buy, gate: "custom_long", bias: "bull" };
       }
-      if (sell >= 55 && sell > buy + 10) {
+      if (sell >= minScore && sell > buy + 10) {
         return { signal: "SELL", score: sell, gate: "custom_short", bias: "bear" };
       }
       return {
@@ -731,7 +735,7 @@ export function evaluateStrategyMode(
         return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat" };
       }
       pass(
-        i.volumeOk &&
+        (i.hasVolumeData ? i.volumeOk : true) &&
           i.price > i.sessionHigh &&
           i.ema9 > i.ema21 &&
           i.plusDi > i.minusDi &&
@@ -743,7 +747,7 @@ export function evaluateStrategyMode(
         "session_long",
       );
       pass(
-        i.volumeOk &&
+        (i.hasVolumeData ? i.volumeOk : true) &&
           i.price < i.sessionLow &&
           i.ema9 < i.ema21 &&
           i.minusDi > i.plusDi &&
@@ -754,7 +758,7 @@ export function evaluateStrategyMode(
         "sell",
         "session_short",
       );
-      if (!i.volumeOk) gate = "volume_low";
+      if (i.hasVolumeData && !i.volumeOk) gate = "volume_low";
       break;
     }
     case StrategyMode.ARBITRAGE_SIM: {

@@ -136,7 +136,7 @@ export class StrategiesService {
         configurationJson: configurationJson as Prisma.InputJsonValue,
         deploymentStateJson: {
           startedAt: new Date().toISOString(),
-          engine: "VS_PRO_V2",
+          engine: "VS_PRO_V10",
           oneTradeOnly: true,
         },
         updatedById: actorId,
@@ -217,28 +217,43 @@ export class StrategiesService {
     correlationId: string,
   ) {
     const strategy = await this.require(organizationId, id);
-    // Event-driven simplified historical simulation using stored candles
+    const { computeIndicators, evaluateStrategyMode, modeMinScore } =
+      await import("./strategy-engine");
     const symbols = (strategy.assignedSymbols as string[]) ?? ["EURUSD"];
     const symbol = symbols[0] ?? "EURUSD";
+    const cfg = (strategy.configurationJson ?? {}) as { timeframe?: string };
+    const timeframe = cfg.timeframe ?? "15m";
     const candles = await this.prisma.candle.findMany({
-      where: { symbol, timeframe: "1h" },
+      where: { symbol, timeframe },
       orderBy: { openTime: "asc" },
-      take: 500,
+      take: 800,
     });
     let equity = 10000;
     let peak = equity;
     let maxDd = 0;
     const trades: Array<Record<string, unknown>> = [];
     let position: null | { entry: number; direction: "BUY" | "SELL" } = null;
-    for (let i = 50; i < candles.length; i++) {
-      const slice = candles.slice(i - 50, i);
-      const closes = slice.map((c) => Number(c.close));
-      const emaFast = ema(closes, 20);
-      const emaSlow = ema(closes, 50);
-      const price = Number(candles[i]!.close);
-      if (!position && emaFast > emaSlow) {
-        position = { entry: price, direction: "BUY" };
-      } else if (position && emaFast < emaSlow) {
+    const minScore = modeMinScore(strategy.mode as never);
+    for (let i = 80; i < candles.length; i++) {
+      const slice = candles.slice(0, i);
+      const ind = computeIndicators(slice);
+      if (!ind) continue;
+      const scored = evaluateStrategyMode(
+        strategy.mode as never,
+        ind,
+        minScore,
+        false,
+      );
+      const price = ind.price;
+      if (!position && (scored.signal === "BUY" || scored.signal === "SELL")) {
+        position = { entry: price, direction: scored.signal };
+      } else if (
+        position &&
+        ((position.direction === "BUY" &&
+          (scored.signal === "SELL" || scored.signal === "CLOSE")) ||
+          (position.direction === "SELL" &&
+            (scored.signal === "BUY" || scored.signal === "CLOSE")))
+      ) {
         const pnl =
           position.direction === "BUY"
             ? (price - position.entry) * 100000 * 0.1
@@ -260,6 +275,8 @@ export class StrategiesService {
     const result = {
       strategyId: id,
       symbol,
+      timeframe,
+      engine: "VS_PRO_V10",
       trades: trades.length,
       netProfit: equity - 10000,
       winRate: trades.length ? wins.length / trades.length : 0,
@@ -558,14 +575,4 @@ export class StrategiesService {
     }
     return strategy;
   }
-}
-
-function ema(values: number[], period: number): number {
-  if (values.length === 0) return 0;
-  const k = 2 / (period + 1);
-  let prev = values[0]!;
-  for (let i = 1; i < values.length; i++) {
-    prev = values[i]! * k + prev * (1 - k);
-  }
-  return prev;
 }

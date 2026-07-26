@@ -922,15 +922,30 @@ export class CapitalComAdapter implements BrokerAdapter {
       `/api/v1/positions/${request.brokerPositionId}?size=${closeSize}`,
     );
     const confirm = await this.waitConfirm(res.dealReference);
+    const rejected =
+      confirm.dealStatus === "REJECTED" ||
+      confirm.status === "REJECTED" ||
+      (confirm.reason &&
+        !confirm.dealId &&
+        confirm.dealStatus !== "ACCEPTED" &&
+        confirm.dealStatus !== "OPEN");
+    if (rejected) {
+      throw new Error(
+        `Capital partial close rejected: ${confirm.reason ?? confirm.dealStatus ?? "unknown"}`,
+      );
+    }
     this.invalidatePositionsCache();
-    const remaining = d(current).minus(closeSize);
+    const still = await this.getOpenPositions({ force: true });
+    const after = still.find((p) => p.brokerPositionId === request.brokerPositionId);
+    const remaining = after ? Number(after.volume) : 0;
     return {
       closedVolume: String(closeSize),
       remainingVolume: remaining.toFixed(2),
-      averageClosePrice: confirm.level != null ? String(confirm.level) : pos.currentPrice,
+      averageClosePrice:
+        confirm.level != null ? String(confirm.level) : pos.currentPrice,
       realizedPnl: confirm.profit != null ? String(confirm.profit) : "0",
       commission: "0",
-      positionClosed: remaining.lte(0),
+      positionClosed: !after || remaining <= 0,
     };
   }
 

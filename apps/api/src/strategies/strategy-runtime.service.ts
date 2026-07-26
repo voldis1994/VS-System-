@@ -237,7 +237,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         220,
       );
       const candleSource = this.market.getCandleSource(brokerSymbol, timeframe);
-      if (candles.length < 55) {
+      if (candles.length < 60) {
         lastStatus = {
           ...lastStatus,
           symbol: brokerSymbol,
@@ -311,6 +311,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         tfBear: tfBias.bearCount,
         candleDirectionFilter: true,
       };
+
+      if (candleSource === "sim" || m1Source === "sim") {
+        lastStatus = {
+          ...lastStatus,
+          signal: scored.signal,
+          skip: "sim_candles",
+          reason: "Capital history missing — refusing LIVE/sim entries",
+        };
+        continue;
+      }
 
       if (scored.signal === "HOLD") {
         lastStatus = {
@@ -423,11 +433,26 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       if (this.lastFingerprint.get(key) === fingerprint) {
+        // Prefer clear status when a same-side trade is already open
+        let openSame = 0;
+        for (const accountId of accountIds) {
+          openSame += await this.prisma.position.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+              direction: signal,
+              OR: [{ symbol: brokerSymbol }, { symbol }],
+            },
+          });
+        }
         lastStatus = {
           ...lastStatus,
           symbol: brokerSymbol,
           signal,
-          skip: "same_signal",
+          skip: openSame > 0 ? "waiting_open_close" : "same_signal",
+          reason: openSame > 0 ? "same_side_open" : undefined,
+          openTrades: openSame > 0 ? openSame : undefined,
         };
         continue;
       }
@@ -631,7 +656,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               entryPrice: formatInstrumentPrice(brokerSymbol, entry),
               stopLoss,
               takeProfit,
-              trailingEnabled,
+              // Delay broker native trail until activation pips (autoManage)
+              trailingEnabled: false,
               trailingDistance: trailingEnabled ? trailDist.toFixed(8) : undefined,
               breakEvenEnabled,
               breakEvenActivation: breakEvenEnabled
@@ -665,62 +691,26 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 trailingDistance: trailingEnabled ? trailDist.toFixed(8) : null,
               },
             });
-            // Re-attach protections — use Capital native trail so SL follows both directions
+            // Static SL/TP on fill — trail arms after activation pips (autoManage)
             try {
-              if (trailingEnabled) {
-                await this.positions.modifySlTp(
-                  strategy.organizationId,
-                  actorId,
-                  child.position.id,
-                  {
-                    trailingStop: true,
-                    stopDistance: trailDist.toFixed(8),
-                    takeProfit: takeProfit ?? null,
-                  },
-                  correlationId,
-                  { silent: true },
-                );
-                await this.prisma.position.update({
-                  where: { id: child.position.id },
-                  data: { trailingActivatedAt: new Date() },
-                });
-              } else {
-                await this.positions.modifySlTp(
-                  strategy.organizationId,
-                  actorId,
-                  child.position.id,
-                  {
-                    stopLoss,
-                    takeProfit: takeProfit ?? null,
-                  },
-                  correlationId,
-                  { silent: true },
-                );
-              }
+              await this.positions.modifySlTp(
+                strategy.organizationId,
+                actorId,
+                child.position.id,
+                {
+                  stopLoss,
+                  takeProfit: takeProfit ?? null,
+                },
+                correlationId,
+                { silent: true },
+              );
+              // Do NOT set trailingActivatedAt here — wait for arm threshold
             } catch (attachErr) {
               this.log.warn(
                 `Post-fill SL/TP attach failed: ${
                   attachErr instanceof Error ? attachErr.message : attachErr
                 }`,
               );
-              // Fallback: static SL if native trail rejected
-              if (trailingEnabled) {
-                try {
-                  await this.positions.modifySlTp(
-                    strategy.organizationId,
-                    actorId,
-                    child.position.id,
-                    {
-                      stopLoss,
-                      takeProfit: takeProfit ?? null,
-                    },
-                    correlationId,
-                    { silent: true },
-                  );
-                } catch {
-                  /* already warned */
-                }
-              }
               await this.notifications.create({
                 organizationId: strategy.organizationId,
                 userId: actorId === "system" ? null : actorId,
@@ -778,12 +768,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Cooldown after close/place; fingerprint only after a successful open
-      // (close-then-failed-place must retry SELL/BUY — not lock same_signal forever)
-      if (acted) {
-        this.lastSignalAt.set(key, Date.now());
-      }
+      // Cooldown only after successful place — close-only must not delay flip retry
       if (placedOk) {
+        this.lastSignalAt.set(key, Date.now());
         this.lastFingerprint.set(key, fingerprint);
       }
     }
