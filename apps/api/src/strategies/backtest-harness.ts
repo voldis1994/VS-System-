@@ -5,10 +5,13 @@
 import { StrategyMode } from "@nexus/domain";
 import {
   breakEvenStop,
+  buildEqualMultiTpPlan,
   instrumentPipSize,
   minProtectiveDistance,
+  multiTpHit,
   trailingArmThreshold,
   trailingStopCandidate,
+  type MultiTpLevelPlan,
 } from "@nexus/shared";
 import {
   evaluateCandleBiasFive,
@@ -29,6 +32,8 @@ export type BacktestConfig = {
   atrStopMult?: number;
   atrTpMult?: number;
   takeProfitEnabled?: boolean;
+  takeProfitMode?: "SINGLE" | "MULTI";
+  multiTpCount?: number;
   takeProfitPips?: number;
   stopDistancePips?: number;
   breakEvenEnabled?: boolean;
@@ -39,6 +44,7 @@ export type BacktestConfig = {
   trailingActivationPips?: number;
   oneTradeOnly?: boolean;
   closeOnlyNoFlip?: boolean;
+  volume?: string;
 };
 
 export type BacktestTrade = {
@@ -56,6 +62,9 @@ type OpenPos = {
   direction: "BUY" | "SELL";
   stopLoss: number;
   takeProfit: number | null;
+  multiLevels: MultiTpLevelPlan[];
+  remainingVolume: number;
+  initialVolume: number;
   beEnabled: boolean;
   beAct: number;
   beOff: number;
@@ -154,10 +163,13 @@ export function runStrategyBacktest(input: {
   const atrStopMult = Number(cfg.atrStopMult ?? 1.0);
   const atrTpMult = Number(cfg.atrTpMult ?? 2.2);
   const takeProfitEnabled = cfg.takeProfitEnabled !== false;
+  const takeProfitMode = cfg.takeProfitMode === "MULTI" ? "MULTI" : "SINGLE";
+  const multiTpCount = Math.max(2, Math.min(10, Math.floor(Number(cfg.multiTpCount ?? 3))));
   const breakEvenEnabled = Boolean(cfg.breakEvenEnabled);
   const trailingEnabled = Boolean(cfg.trailingEnabled);
   const oneTradeOnly = cfg.oneTradeOnly !== false;
   const closeOnlyNoFlip = cfg.closeOnlyNoFlip === true;
+  const lotSize = Math.max(0.01, Number(cfg.volume ?? 0.1) || 0.1);
 
   const bars = input.candles.map(asCandle);
   const bars1m = (input.candles1m ?? []).map(asCandle);
@@ -172,7 +184,11 @@ export function runStrategyBacktest(input: {
     skipped[k] = (skipped[k] ?? 0) + 1;
   };
 
-  const lotNotional = 100_000 * 0.1; // same scale as previous backtest
+  const pointValue = 100_000; // relative PnL scale (lot × price delta)
+  const pnlOf = (dir: "BUY" | "SELL", entry: number, exit: number, vol: number) => {
+    const delta = dir === "BUY" ? exit - entry : entry - exit;
+    return delta * pointValue * vol;
+  };
 
   for (let i = 80; i < bars.length; i++) {
     const slice = bars.slice(0, i + 1);
@@ -245,11 +261,41 @@ export function runStrategyBacktest(input: {
         exitReason = "tp";
       }
 
+      // Multi TP scale-out before full SL/TP
+      if (position.multiLevels.length > 0) {
+        const pending = position.multiLevels.find((l) => l.status === "PENDING");
+        const probe = position.direction === "BUY" ? high : low;
+        if (pending && multiTpHit(position.direction, probe, Number(pending.price))) {
+          const isLast =
+            position.multiLevels.filter((l) => l.status === "PENDING").length <= 1;
+          const closeVol = isLast
+            ? position.remainingVolume
+            : Math.min(Number(pending.closeVolume), position.remainingVolume);
+          const pnl = pnlOf(position.direction, position.entry, Number(pending.price), closeVol);
+          equity += pnl;
+          peak = Math.max(peak, equity);
+          maxDd = Math.max(maxDd, peak - equity);
+          trades.push({
+            entry: position.entry,
+            exit: Number(pending.price),
+            pnl,
+            direction: position.direction,
+            time: bar.closeTime ?? bar.openTime ?? new Date(),
+            exitReason: `tp${pending.index}`,
+            barsHeld: i - position.openedAt,
+          });
+          pending.status = "EXECUTED";
+          position.remainingVolume = Math.max(0, position.remainingVolume - closeVol);
+          if (isLast || position.remainingVolume <= 0.00000001) {
+            position = null;
+            continue;
+          }
+        }
+      }
+
       if (exitPrice != null) {
-        const pnl =
-          position.direction === "BUY"
-            ? (exitPrice - position.entry) * lotNotional
-            : (position.entry - exitPrice) * lotNotional;
+        const vol = position.remainingVolume > 0 ? position.remainingVolume : position.initialVolume;
+        const pnl = pnlOf(position.direction, position.entry, exitPrice, vol);
         equity += pnl;
         peak = Math.max(peak, equity);
         maxDd = Math.max(maxDd, peak - equity);
@@ -277,10 +323,12 @@ export function runStrategyBacktest(input: {
     // Soft close from engine
     if (position && scored.signal === "CLOSE") {
       const exitPrice = Number(bar.close);
-      const pnl =
-        position.direction === "BUY"
-          ? (exitPrice - position.entry) * lotNotional
-          : (position.entry - exitPrice) * lotNotional;
+      const pnl = pnlOf(
+        position.direction,
+        position.entry,
+        exitPrice,
+        position.remainingVolume || position.initialVolume,
+      );
       equity += pnl;
       peak = Math.max(peak, equity);
       maxDd = Math.max(maxDd, peak - equity);
@@ -349,10 +397,12 @@ export function runStrategyBacktest(input: {
       }
       // opposite — close then optionally flip
       const exitPrice = Number(bar.close);
-      const pnl =
-        position.direction === "BUY"
-          ? (exitPrice - position.entry) * lotNotional
-          : (position.entry - exitPrice) * lotNotional;
+      const pnl = pnlOf(
+        position.direction,
+        position.entry,
+        exitPrice,
+        position.remainingVolume || position.initialVolume,
+      );
       equity += pnl;
       peak = Math.max(peak, equity);
       maxDd = Math.max(maxDd, peak - equity);
@@ -412,11 +462,31 @@ export function runStrategyBacktest(input: {
       trailingDistancePips: cfg.trailingDistancePips ?? trailPips,
     });
 
+    let multiLevels: MultiTpLevelPlan[] = [];
+    let openTp: number | null = tpLevel;
+    if (takeProfitEnabled && takeProfitMode === "MULTI") {
+      multiLevels = buildEqualMultiTpPlan({
+        direction: signal,
+        entry,
+        initialVolume: lotSize,
+        count: multiTpCount,
+        atr: ind.atr,
+        atrTpMult,
+        volumeStep: 0.01,
+      });
+      if (multiLevels.length > 0) {
+        openTp = Number(multiLevels[multiLevels.length - 1]!.price);
+      }
+    }
+
     position = {
       entry,
       direction: signal,
       stopLoss: slLevel,
-      takeProfit: tpLevel,
+      takeProfit: openTp,
+      multiLevels,
+      remainingVolume: lotSize,
+      initialVolume: lotSize,
       beEnabled: breakEvenEnabled,
       beAct,
       beOff,
@@ -433,10 +503,12 @@ export function runStrategyBacktest(input: {
   if (position && bars.length > 0) {
     const last = bars[bars.length - 1]!;
     const exitPrice = Number(last.close);
-    const pnl =
-      position.direction === "BUY"
-        ? (exitPrice - position.entry) * lotNotional
-        : (position.entry - exitPrice) * lotNotional;
+    const pnl = pnlOf(
+      position.direction,
+      position.entry,
+      exitPrice,
+      position.remainingVolume || position.initialVolume,
+    );
     equity += pnl;
     peak = Math.max(peak, equity);
     maxDd = Math.max(maxDd, peak - equity);

@@ -4,6 +4,7 @@ import {
   CreateStrategySchema,
   DomainEventType,
   ErrorCodes,
+  StrategyMode,
   StrategyStatus,
 } from "@nexus/domain";
 import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d } from "@nexus/shared";
@@ -16,6 +17,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { AppError } from "../common/errors/app-error";
 import { StrategyRuntimeService } from "./strategy-runtime.service";
 import { PositionsService } from "../positions/positions.service";
+import { MarketDataService } from "../market-data/market-data.service";
 
 @Injectable()
 export class StrategiesService {
@@ -26,6 +28,7 @@ export class StrategiesService {
     private readonly notifications: NotificationsService,
     private readonly runtime: StrategyRuntimeService,
     private readonly positions: PositionsService,
+    private readonly market: MarketDataService,
   ) {}
 
   list(organizationId: string) {
@@ -325,6 +328,188 @@ export class StrategiesService {
       correlationId,
     });
     return result;
+  }
+
+  /**
+   * Strategy Lab — load recent 1m candles (~1 trading day) and simulate
+   * one or all modes with the same TP/BE/trail settings as LIVE.
+   */
+  async labSimulate(
+    organizationId: string,
+    actorId: string,
+    raw: unknown,
+    correlationId: string,
+  ) {
+    const body = (raw ?? {}) as {
+      symbol?: string;
+      mode?: string;
+      compareAll?: boolean;
+      days?: number;
+      volume?: string;
+      atrStopMult?: number;
+      atrTpMult?: number;
+      takeProfitEnabled?: boolean;
+      takeProfitMode?: "SINGLE" | "MULTI";
+      multiTpCount?: number;
+      breakEvenEnabled?: boolean;
+      breakEvenActivationPips?: number;
+      breakEvenOffsetPips?: number;
+      trailingEnabled?: boolean;
+      trailingDistancePips?: number;
+      trailingActivationPips?: number;
+      sessionFilter?: boolean;
+      minScore?: number;
+    };
+
+    const symbolIn = String(body.symbol ?? "GOLD").trim();
+    if (!symbolIn) {
+      throw new AppError(ErrorCodes.VALIDATION_FAILED, "symbol required", HttpStatus.BAD_REQUEST);
+    }
+    const symbol = resolveCapitalEpic(symbolIn);
+    const days = Math.max(0.25, Math.min(3, Number(body.days ?? 1)));
+    // Capital max ~1000 1m bars (~16h). Request up to that for ~1 day window.
+    const wantBars = Math.min(1000, Math.max(200, Math.round(days * 24 * 60)));
+
+    const candles = await this.market.getCandles(symbol, "1m", wantBars);
+    const candleSource = this.market.getCandleSource(symbol, "1m");
+    if (candles.length < 100) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        `Not enough 1m candles for ${symbol} (${candles.length}). Connect Capital + Sync, then retry.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const { runStrategyBacktest } = await import("./backtest-harness");
+    const config = {
+      timeframe: "1m",
+      sessionFilter: body.sessionFilter === true,
+      minScore: typeof body.minScore === "number" ? body.minScore : undefined,
+      atrStopMult: Number(body.atrStopMult ?? 1.0),
+      atrTpMult: Number(body.atrTpMult ?? 2.2),
+      takeProfitEnabled: body.takeProfitEnabled !== false,
+      takeProfitMode: body.takeProfitMode === "MULTI" ? ("MULTI" as const) : ("SINGLE" as const),
+      multiTpCount: Math.max(2, Math.min(10, Math.floor(Number(body.multiTpCount ?? 3)))),
+      breakEvenEnabled: Boolean(body.breakEvenEnabled),
+      breakEvenActivationPips:
+        typeof body.breakEvenActivationPips === "number"
+          ? body.breakEvenActivationPips
+          : 10,
+      breakEvenOffsetPips:
+        typeof body.breakEvenOffsetPips === "number"
+          ? body.breakEvenOffsetPips
+          : 1,
+      trailingEnabled: Boolean(body.trailingEnabled),
+      trailingDistancePips:
+        typeof body.trailingDistancePips === "number"
+          ? body.trailingDistancePips
+          : 15,
+      trailingActivationPips:
+        typeof body.trailingActivationPips === "number"
+          ? body.trailingActivationPips
+          : 15,
+      oneTradeOnly: true,
+      closeOnlyNoFlip: false,
+      volume: body.volume ?? "0.1",
+    };
+
+    const modes: StrategyMode[] = body.compareAll
+      ? (Object.values(StrategyMode) as StrategyMode[])
+      : [
+          (Object.values(StrategyMode) as string[]).includes(String(body.mode))
+            ? (body.mode as StrategyMode)
+            : StrategyMode.SCALPING,
+        ];
+
+    const first = candles[0];
+    const last = candles[candles.length - 1];
+    const from = first && "openTime" in first ? first.openTime : undefined;
+    const to = last && "closeTime" in last ? last.closeTime : last && "openTime" in last ? (last as { openTime?: Date }).openTime : undefined;
+
+    const results = modes.map((mode) => {
+      const run = runStrategyBacktest({
+        mode,
+        symbol,
+        candles,
+        config,
+      });
+      const exitBreakdown = run.trades.reduce(
+        (acc, t) => {
+          acc[t.exitReason] = (acc[t.exitReason] ?? 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>,
+      );
+      return {
+        mode,
+        trades: run.trades.length,
+        netProfit: Number(run.netProfit.toFixed(2)),
+        winRate: Number((run.winRate * 100).toFixed(1)),
+        maxDrawdown: Number(run.maxDrawdown.toFixed(2)),
+        equityCurveEnd: Number(run.equityCurveEnd.toFixed(2)),
+        exitBreakdown,
+        skippedTop: Object.entries(run.skipped)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 6)
+          .map(([k, v]) => ({ reason: k, count: v })),
+        sampleTrades: run.trades.slice(-25).map((t) => ({
+          direction: t.direction,
+          entry: Number(t.entry.toFixed(5)),
+          exit: Number(t.exit.toFixed(5)),
+          pnl: Number(t.pnl.toFixed(2)),
+          exitReason: t.exitReason,
+          barsHeld: t.barsHeld,
+          time: t.time,
+        })),
+      };
+    });
+
+    results.sort((a, b) => b.netProfit - a.netProfit);
+
+    const payload = {
+      engine: "VS_PRO_V10",
+      symbol,
+      symbolIn,
+      timeframe: "1m",
+      candleSource,
+      bars: candles.length,
+      windowFrom: from,
+      windowTo: to,
+      windowHours: Number(
+        (
+          (new Date(String(to ?? Date.now())).getTime() -
+            new Date(String(from ?? Date.now())).getTime()) /
+          3_600_000
+        ).toFixed(2),
+      ),
+      config,
+      compareAll: Boolean(body.compareAll),
+      results,
+      best: results[0] ?? null,
+      note:
+        candleSource === "sim"
+          ? "SIM candles — connect Capital for real history"
+          : `Capital/DB 1m · up to ~${wantBars} bars (broker max ~1000)`,
+      parity: "runtime_signal+sl_tp_be_trail+multi_tp",
+    };
+
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "STRATEGY_LAB_SIMULATE",
+      resourceType: "StrategyLab",
+      resourceId: symbol,
+      after: {
+        symbol,
+        bars: candles.length,
+        modes: modes.length,
+        best: payload.best?.mode,
+        bestPnl: payload.best?.netProfit,
+      },
+      correlationId,
+    });
+
+    return payload;
   }
 
   async update(

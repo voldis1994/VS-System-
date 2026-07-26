@@ -118,7 +118,7 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     const cacheTtlMs = timeframe === "1m" ? 12_000 : 45_000;
     const fetchMax =
       timeframe === "1m" || timeframe === "5m"
-        ? Math.min(Math.max(limit, 30), 500)
+        ? Math.min(Math.max(limit, 30), 1000)
         : Math.min(Math.max(limit, 55), 500);
 
     // Prefer Capital historical prices when a CONNECTED adapter exists

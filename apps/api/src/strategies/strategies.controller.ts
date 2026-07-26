@@ -57,6 +57,21 @@ export class StrategiesController {
     );
   }
 
+  /** Strategy Lab — simulate modes on recent 1m history (no live orders). */
+  @Post("lab/simulate")
+  @RequirePermissions("backtest:run")
+  labSimulate(
+    @Body() body: unknown,
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.strategies.labSimulate(
+      req.user.organizationId,
+      req.user.userId,
+      body,
+      req.correlationId ?? "unknown",
+    );
+  }
+
   @Post(":id/validate")
   @RequirePermissions("strategies:manage")
   validate(
