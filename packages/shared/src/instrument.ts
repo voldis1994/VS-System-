@@ -3,7 +3,8 @@ export function instrumentPipSize(symbol: string): number {
   const raw = String(symbol ?? "");
   const s = raw.toUpperCase();
 
-  if (/XAU|GOLD/.test(s)) return 0.1;
+  // Capital GOLD/XAU: 1 pip = 0.01 (point). Was 0.1 → 10× oversized SL/TP/BE/trail.
+  if (/XAU|GOLD/.test(s)) return 0.01;
   if (/XAG|SILVER/.test(s)) return 0.01;
   if (/BTC|BITCOIN|ETH|ETHER|CRYPTO/.test(s)) return 1;
   if (/OIL|WTI|BRENT|NATGAS|GAS/.test(s)) return 0.01;
@@ -21,13 +22,21 @@ export function instrumentPipSize(symbol: string): number {
   return 0.1;
 }
 
+/** Convert pip count → absolute price distance for SL/TP/BE/trail. */
+export function pipsToPriceDistance(symbol: string, pips: number): number {
+  const n = Number(pips);
+  if (!Number.isFinite(n)) return 0;
+  return instrumentPipSize(symbol) * n;
+}
+
 /** Floor protective distance so Capital min-stop rules don't reject BE/Trail/TP. */
 export function minProtectiveDistance(symbol: string, entryPrice: number): number {
   const pip = instrumentPipSize(symbol);
   const entry = Math.abs(Number(entryPrice)) || 0;
   const s = String(symbol ?? "").toUpperCase();
   const pct = entry > 0 ? entry * 0.0008 : 0;
-  const minPips = /XAU|GOLD/.test(s) ? 12 : /BTC|ETH|BITCOIN/.test(s) ? 8 : 8;
+  // GOLD: Capital often needs ~30–50 points (0.30–0.50); keep ≥0.50 floor
+  const minPips = /XAU|GOLD/.test(s) ? 50 : /BTC|ETH|BITCOIN/.test(s) ? 8 : 8;
   return Math.max(pip * minPips, pct, pip * 2);
 }
 

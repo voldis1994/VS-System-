@@ -294,12 +294,20 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      const lastBar = candles[candles.length - 1] as {
+        closeTime?: Date | string;
+        openTime?: Date | string;
+      };
       const scored = evaluateStrategyMode(
         mode,
         ind,
         minScore,
         sessionFilter,
-        { hasOpenBuy, hasOpenSell },
+        {
+          hasOpenBuy,
+          hasOpenSell,
+          at: lastBar?.closeTime ?? lastBar?.openTime ?? new Date(),
+        },
       );
 
       // 1m×5 timing + candle bias (same rules as TF filter)
@@ -345,26 +353,43 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      if (newsFilterEnabled && (scored.signal === "BUY" || scored.signal === "SELL")) {
-        const block = await this.news.isBlocked({
-          symbol: brokerSymbol,
-          enabled: true,
-          minutesBefore: config.newsMinutesBefore ?? 30,
-          minutesAfter: config.newsMinutesAfter ?? 15,
-          minImpact: config.newsMinImpact ?? "High",
-        });
-        if (block.blocked) {
-          lastStatus = {
-            ...lastStatus,
-            signal: scored.signal,
-            skip: "news_filter",
-            reason: block.reason,
-            newsEvent: block.event?.title,
-            newsCountry: block.event?.country,
-            newsImpact: block.event?.impact,
-            minutesUntilNews: block.minutesUntil,
-          };
-          continue;
+      if (scored.signal === "BUY" || scored.signal === "SELL") {
+        if (mode === StrategyMode.NEWS) {
+          // NEWS mode: only trade inside High-impact calendar window
+          const window = await this.news.isBlocked({
+            symbol: brokerSymbol,
+            enabled: true,
+            minutesBefore: config.newsMinutesBefore ?? 30,
+            minutesAfter: config.newsMinutesAfter ?? 15,
+            minImpact: config.newsMinImpact ?? "High",
+          });
+          if (!window.blocked) {
+            lastStatus = {
+              ...lastStatus,
+              signal: scored.signal,
+              skip: "no_news_window",
+              reason: "NEWS mode waits for High-impact calendar window",
+            };
+            continue;
+          }
+        } else if (newsFilterEnabled) {
+          const block = await this.news.isBlocked({
+            symbol: brokerSymbol,
+            enabled: true,
+            minutesBefore: config.newsMinutesBefore ?? 30,
+            minutesAfter: config.newsMinutesAfter ?? 15,
+            minImpact: config.newsMinImpact ?? "High",
+          });
+          if (block.blocked) {
+            lastStatus = {
+              ...lastStatus,
+              signal: scored.signal,
+              skip: "news_filter",
+              reason: block.reason ?? "High-impact news window",
+              newsEvent: block.event ?? null,
+            };
+            continue;
+          }
         }
       }
 
@@ -630,13 +655,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
         const pip = instrumentPipSize(brokerSymbol);
         const minDist = minProtectiveDistance(brokerSymbol, entry);
+        // Pip path: exact pip×size. ATR path: atr×mult. Never silently shrink (old ×0.39 bug).
         let stopDist =
           config.stopDistancePips != null
             ? pip * config.stopDistancePips
             : Math.max(ind.atr * atrStopMult, entry * 0.00065);
-        // Initial SL: prior 0.65×, then −40% more → 0.39× (still floored at Capital min)
-        stopDist = Math.max(stopDist * 0.39, minDist);
-        // TP follows user ATR× / pips — allow closer TP (no minDist / 1.5R force)
+        stopDist = Math.max(stopDist, minDist);
         let tpDist =
           config.takeProfitPips != null
             ? pip * config.takeProfitPips

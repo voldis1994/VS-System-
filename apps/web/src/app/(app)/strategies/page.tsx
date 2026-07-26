@@ -37,6 +37,9 @@ type AccountDraft = {
   tpMode: "SINGLE" | "MULTI";
   multiTpCount: string;
   atrTpMult: string;
+  atrStopMult: string;
+  stopDistancePips: string;
+  takeProfitPips: string;
   beEnabled: boolean;
   beActivationPips: string;
   beOffsetPips: string;
@@ -80,6 +83,9 @@ const EXIT_PRESETS: Record<
     tpMode: "SINGLE",
     multiTpCount: "3",
     atrTpMult: "1.8",
+    atrStopMult: "1.0",
+    stopDistancePips: "",
+    takeProfitPips: "",
     beEnabled: true,
     beActivationPips: "15",
     beOffsetPips: "2",
@@ -95,6 +101,9 @@ const EXIT_PRESETS: Record<
     tpMode: "SINGLE",
     multiTpCount: "3",
     atrTpMult: "2.4",
+    atrStopMult: "1.2",
+    stopDistancePips: "",
+    takeProfitPips: "",
     beEnabled: true,
     beActivationPips: "20",
     beOffsetPips: "2",
@@ -110,6 +119,9 @@ const EXIT_PRESETS: Record<
     tpMode: "SINGLE",
     multiTpCount: "3",
     atrTpMult: "3.0",
+    atrStopMult: "1.0",
+    stopDistancePips: "",
+    takeProfitPips: "",
     beEnabled: true,
     beActivationPips: "15",
     beOffsetPips: "2",
@@ -156,6 +168,13 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
       typeof c.multiTpCount === "number" ? c.multiTpCount : 3,
     ),
     atrTpMult: String(typeof c.atrTpMult === "number" ? c.atrTpMult : 2.2),
+    atrStopMult: String(typeof c.atrStopMult === "number" ? c.atrStopMult : 1.0),
+    stopDistancePips: String(
+      typeof c.stopDistancePips === "number" ? c.stopDistancePips : "",
+    ),
+    takeProfitPips: String(
+      typeof c.takeProfitPips === "number" ? c.takeProfitPips : "",
+    ),
     beEnabled: Boolean(c.breakEvenEnabled),
     beActivationPips: String(
       typeof c.breakEvenActivationPips === "number" ? c.breakEvenActivationPips : 10,
@@ -213,11 +232,19 @@ function buildConfiguration(d: AccountDraft) {
     autoAggressive: false,
     sessionFilter: d.mode === StrategyMode.SESSION,
     minScore: modeMinScoreClient(d.mode),
-    atrStopMult: 1.0,
+    atrStopMult: Number(d.atrStopMult) || 1.0,
     atrTpMult: Number(d.atrTpMult) || 2.2,
     takeProfitEnabled: d.tpEnabled,
     takeProfitMode: d.tpMode,
     multiTpCount: Math.max(2, Math.min(10, Math.floor(Number(d.multiTpCount) || 3))),
+    stopDistancePips: (() => {
+      const n = Number(d.stopDistancePips);
+      return Number.isFinite(n) && n > 0 ? n : undefined;
+    })(),
+    takeProfitPips: (() => {
+      const n = Number(d.takeProfitPips);
+      return Number.isFinite(n) && n > 0 ? n : undefined;
+    })(),
     newsFilterEnabled: d.newsFilterEnabled,
     newsMinutesBefore: Math.max(0, Number(d.newsMinutesBefore) || 30),
     newsMinutesAfter: Math.max(0, Number(d.newsMinutesAfter) || 15),
@@ -658,10 +685,55 @@ export default function StrategiesPage() {
                       </p>
                     </Field>
                   ) : null}
+                  <Field label="SL ATR×">
+                    <Input
+                      value={draft.atrStopMult}
+                      disabled={Boolean(draft.stopDistancePips)}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          atrStopMult: e.target.value,
+                          exitVersion: "CUSTOM",
+                        })
+                      }
+                      className="font-mono"
+                    />
+                  </Field>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="SL pips (opt)">
+                      <Input
+                        value={draft.stopDistancePips}
+                        onChange={(e) =>
+                          patchDraft(account.id, {
+                            stopDistancePips: e.target.value,
+                            exitVersion: "CUSTOM",
+                          })
+                        }
+                        className="font-mono"
+                        placeholder="ATR×"
+                      />
+                    </Field>
+                    <Field label="TP pips (opt)">
+                      <Input
+                        value={draft.takeProfitPips}
+                        disabled={!draft.tpEnabled}
+                        onChange={(e) =>
+                          patchDraft(account.id, {
+                            takeProfitPips: e.target.value,
+                            exitVersion: "CUSTOM",
+                          })
+                        }
+                        className="font-mono"
+                        placeholder="ATR×"
+                      />
+                    </Field>
+                  </div>
+                  <p className="text-[11px] text-white/35">
+                    GOLD 1 pip = 0.01. Tukšs = ATR×. Nav slepena SL shrink.
+                  </p>
                   <Field label="TP ATR× (final / single)">
                     <Input
                       value={draft.atrTpMult}
-                      disabled={!draft.tpEnabled}
+                      disabled={!draft.tpEnabled || Boolean(draft.takeProfitPips)}
                       onChange={(e) =>
                         patchDraft(account.id, {
                           atrTpMult: e.target.value,
@@ -798,7 +870,7 @@ export default function StrategiesPage() {
                   {draft.trailEnabled ? (
                     <p className="text-[11px] text-zinc-500">
                       Start = kad trail ieslēdzas. Distance brokerī var tikt
-                      pacelta līdz Capital min (~8 pips FX / ~12 GOLD), bet start
+                      pacelta līdz Capital min (~8 pips FX / ~50 GOLD punkti), bet start
                       sekos Taviem pipiem.
                     </p>
                   ) : null}

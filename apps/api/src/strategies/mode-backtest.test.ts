@@ -43,13 +43,11 @@ describe("DCA / ARB / MM modes", () => {
   it("DCA supports short entries in downtrend", () => {
     const i = withOverrides(ind0, {
       ema200Slope: -0.002,
-      price: ind0.ema55 + ind0.atr,
       ema55: ind0.ema55,
       ema21: ind0.ema21,
-      rsi: 62,
-      vwapProxy: ind0.price - ind0.atr,
+      rsi: 65,
+      adx: 20,
     });
-    // price > ema55, > vwap, rsi>55 already set — force price above vwap
     i.price = Math.max(i.ema55, i.ema21) + i.atr;
     i.vwapProxy = i.price - i.atr * 0.5;
     const scored = evaluateStrategyMode(StrategyMode.DCA, i, 52, false);

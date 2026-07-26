@@ -8,6 +8,8 @@ export type CandleLike = {
   low: unknown;
   close: unknown;
   volume?: unknown;
+  openTime?: Date | string;
+  closeTime?: Date | string;
 };
 
 export type Indicators = {
@@ -171,13 +173,48 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
   const gapUpAtr = atr > 0 ? Math.max(gap, 0) / atr : 0;
   const gapDownAtr = atr > 0 ? Math.max(-gap, 0) / atr : 0;
 
-  // Session high/low: max/min of prior bars in window (breakout vs established range)
-  const sessSliceH = highs.slice(-13, -1);
-  const sessSliceL = lows.slice(-13, -1);
-  const sessionHigh =
-    sessSliceH.length > 0 ? Math.max(...sessSliceH) : highs[n - 2] ?? highs[n - 1]!;
-  const sessionLow =
-    sessSliceL.length > 0 ? Math.min(...sessSliceL) : lows[n - 2] ?? lows[n - 1]!;
+  // Session high/low: range since liquid session open (UTC 07:00), else ~1 session lookback
+  const barTimeRaw =
+    candles[n - 1] &&
+    (("closeTime" in candles[n - 1]! && candles[n - 1]!.closeTime) ||
+      ("openTime" in candles[n - 1]! && candles[n - 1]!.openTime));
+  const barTime = barTimeRaw ? new Date(String(barTimeRaw)) : null;
+  let sessionHigh: number;
+  let sessionLow: number;
+  if (barTime && Number.isFinite(barTime.getTime())) {
+    const startMs = liquidSessionStartUtc(barTime).getTime();
+    const sessH: number[] = [];
+    const sessL: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      const c = candles[i]!;
+      const tRaw =
+        ("closeTime" in c && c.closeTime) || ("openTime" in c && c.openTime);
+      if (!tRaw) continue;
+      const t = new Date(String(tRaw)).getTime();
+      if (Number.isFinite(t) && t >= startMs) {
+        sessH.push(highs[i]!);
+        sessL.push(lows[i]!);
+      }
+    }
+    if (sessH.length >= 3) {
+      sessionHigh = Math.max(...sessH);
+      sessionLow = Math.min(...sessL);
+    } else {
+      const lookback = Math.min(48, n - 1);
+      const sliceH = highs.slice(n - 1 - lookback, n - 1);
+      const sliceL = lows.slice(n - 1 - lookback, n - 1);
+      sessionHigh = sliceH.length ? Math.max(...sliceH) : highs[n - 2] ?? highs[n - 1]!;
+      sessionLow = sliceL.length ? Math.min(...sliceL) : lows[n - 2] ?? lows[n - 1]!;
+    }
+  } else {
+    const lookback = Math.min(48, n - 1);
+    const sessSliceH = highs.slice(n - 1 - lookback, n - 1);
+    const sessSliceL = lows.slice(n - 1 - lookback, n - 1);
+    sessionHigh =
+      sessSliceH.length > 0 ? Math.max(...sessSliceH) : highs[n - 2] ?? highs[n - 1]!;
+    sessionLow =
+      sessSliceL.length > 0 ? Math.min(...sessSliceL) : lows[n - 2] ?? lows[n - 1]!;
+  }
 
   const typical = candles.map((bar) => {
     const hh = Number(bar.high);
@@ -267,9 +304,19 @@ export function evaluateStrategyMode(
   i: Indicators,
   minScore: number,
   sessionFilter: boolean,
-  opts?: { hasOpenBuy?: boolean; hasOpenSell?: boolean },
+  opts?: { hasOpenBuy?: boolean; hasOpenSell?: boolean; at?: Date | string | null },
 ): { signal: Signal; score: number; gate?: string; bias: string; buyScore: number; sellScore: number } {
-  const sessionOk = !sessionFilter || isLiquidSessionUtc();
+  const at =
+    opts?.at != null
+      ? opts.at instanceof Date
+        ? opts.at
+        : new Date(String(opts.at))
+      : undefined;
+  const sessionOk =
+    !sessionFilter ||
+    isLiquidSessionUtc(
+      at && Number.isFinite(at.getTime()) ? at : undefined,
+    );
   if (!sessionOk) {
     return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat", buyScore: 0, sellScore: 0 };
   }
@@ -347,18 +394,21 @@ export function evaluateStrategyMode(
 
   switch (mode) {
     case StrategyMode.TREND: {
+      // Require pullback toward EMA21 (not chasing 2 ATR extension) + stronger ADX
       pass(
         bullStack &&
           i.ema21Slope > 0 &&
+          i.ema200Slope >= 0 &&
           i.price >= i.ema21 &&
-          i.adx > 25 &&
+          i.price <= i.ema21 + 0.85 * i.atr &&
+          i.adx > 28 &&
           adxRising &&
           i.plusDi > i.minusDi &&
           i.rsi >= 52 &&
-          i.rsi <= 68 &&
+          i.rsi <= 65 &&
           i.rsi > i.rsiPrev &&
           macdHistUp2 &&
-          i.price <= i.ema21 + 2 * i.atr,
+          i.macdHist > 0,
         60,
         "buy",
         "trend_long",
@@ -366,51 +416,57 @@ export function evaluateStrategyMode(
       pass(
         bearStack &&
           i.ema21Slope < 0 &&
+          i.ema200Slope <= 0 &&
           i.price <= i.ema21 &&
-          i.adx > 25 &&
+          i.price >= i.ema21 - 0.85 * i.atr &&
+          i.adx > 28 &&
           adxRising &&
           i.minusDi > i.plusDi &&
-          i.rsi >= 32 &&
+          i.rsi >= 35 &&
           i.rsi <= 48 &&
           i.rsi < i.rsiPrev &&
           macdHistDown2 &&
-          i.price >= i.ema21 - 2 * i.atr,
+          i.macdHist < 0,
         60,
         "sell",
         "trend_short",
       );
-      if (i.adx <= 25) gate = "no_trend";
+      if (i.adx <= 28) gate = "no_trend";
       break;
     }
     case StrategyMode.MOMENTUM: {
+      // Fresh breakout of prior high/low + range expansion (not every 1m tick)
+      const rangeExpand = i.lastRange > i.avgVolRange * 1.15;
       pass(
         i.plusDi > i.minusDi &&
-          i.adx > 23 &&
+          i.adx > 28 &&
           adxRising &&
           i.macd > i.macdSignal &&
           i.macdHist > i.macdHistPrev &&
-          i.rsi >= 55 &&
+          i.rsi >= 58 &&
           i.rsi <= 72 &&
           i.rsi > i.rsiPrev &&
           i.price > i.ema9 &&
           i.ema9 > i.ema21 &&
-          i.price > i.prevHigh,
+          i.price > i.prevHigh &&
+          rangeExpand,
         60,
         "buy",
         "mom_long",
       );
       pass(
         i.minusDi > i.plusDi &&
-          i.adx > 23 &&
+          i.adx > 28 &&
           adxRising &&
           i.macd < i.macdSignal &&
           i.macdHist < i.macdHistPrev &&
           i.rsi >= 28 &&
-          i.rsi <= 45 &&
+          i.rsi <= 42 &&
           i.rsi < i.rsiPrev &&
           i.price < i.ema9 &&
           i.ema9 < i.ema21 &&
-          i.price < i.prevLow,
+          i.price < i.prevLow &&
+          rangeExpand,
         60,
         "sell",
         "mom_short",
@@ -420,13 +476,17 @@ export function evaluateStrategyMode(
     case StrategyMode.PULLBACK: {
       const inPullBuy = i.price <= i.ema21 && i.price >= i.ema55;
       const inPullSell = i.price >= i.ema21 && i.price <= i.ema55;
+      const turnUp =
+        i.rejectionBull || (i.stochK > i.stochD && i.stochKPrev <= i.stochD);
+      const turnDown =
+        i.rejectionBear || (i.stochK < i.stochD && i.stochKPrev >= i.stochD);
       pass(
         bullStack &&
           i.ema21Slope > 0 &&
           inPullBuy &&
-          i.rejectionBull &&
+          turnUp &&
           i.rsi >= 38 &&
-          i.rsi <= 50 &&
+          i.rsi <= 52 &&
           i.macdHist > i.macdHistPrev &&
           i.plusDi > i.minusDi &&
           i.price > i.ema55,
@@ -438,8 +498,8 @@ export function evaluateStrategyMode(
         bearStack &&
           i.ema21Slope < 0 &&
           inPullSell &&
-          i.rejectionBear &&
-          i.rsi >= 50 &&
+          turnDown &&
+          i.rsi >= 48 &&
           i.rsi <= 62 &&
           i.macdHist < i.macdHistPrev &&
           i.minusDi > i.plusDi &&
@@ -523,55 +583,53 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.MEAN_REVERSION: {
+      // Soften: band extreme + turn; atrFalling optional (not required)
       pass(
-        i.adx <= 22 &&
+        i.adx <= 24 &&
           i.price <= i.bbLower &&
-          i.rsi < 34 &&
-          i.stochK < 25 &&
+          i.rsi < 36 &&
+          i.stochK < 28 &&
           i.stochK > i.stochKPrev &&
-          i.pctB <= 0 &&
-          atrFalling,
+          i.pctB <= 0.08,
         58,
         "buy",
         "mean_long",
       );
       pass(
-        i.adx <= 22 &&
+        i.adx <= 24 &&
           i.price >= i.bbUpper &&
-          i.rsi > 66 &&
-          i.stochK > 75 &&
+          i.rsi > 64 &&
+          i.stochK > 72 &&
           i.stochK < i.stochKPrev &&
-          i.pctB >= 1 &&
-          atrFalling,
+          i.pctB >= 0.92,
         58,
         "sell",
         "mean_short",
       );
-      if (i.adx > 22) gate = "not_range";
+      if (i.adx > 24) gate = "not_range";
       break;
     }
     case StrategyMode.REVERSAL: {
       applyMidHold = false;
+      // Extreme + (divergence OR rejection) — both was unreachable
       pass(
         i.price < i.bbLower &&
-          i.rsi < 28 &&
-          i.stochK < 18 &&
+          i.rsi < 32 &&
+          i.stochK < 22 &&
           i.macdHist > i.macdHistPrev &&
-          i.bullDiv &&
-          i.rejectionBull &&
-          adxFalling,
+          (i.bullDiv || i.rejectionBull) &&
+          (adxFalling || i.adx < 28),
         58,
         "buy",
         "rev_long",
       );
       pass(
         i.price > i.bbUpper &&
-          i.rsi > 72 &&
-          i.stochK > 82 &&
+          i.rsi > 68 &&
+          i.stochK > 78 &&
           i.macdHist < i.macdHistPrev &&
-          i.bearDiv &&
-          i.rejectionBear &&
-          adxFalling,
+          (i.bearDiv || i.rejectionBear) &&
+          (adxFalling || i.adx < 28),
         58,
         "sell",
         "rev_short",
@@ -579,33 +637,33 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.RANGE: {
-      // Band touch allowed — noBreakout's strict inside-band check made RANGE unreachable
-      const rangeWidthOk = i.bbWidth <= i.bbWidthAvg * 1.15;
+      const rangeWidthOk = i.bbWidth <= i.bbWidthAvg * 1.2;
+      const flatOk = Math.abs(i.ema21Slope) <= i.atr * 0.08;
       pass(
-        i.adx <= 20 &&
+        i.adx <= 22 &&
           rangeSupport &&
           rangeWidthOk &&
-          i.rsi < 38 &&
-          i.stochK < 30 &&
+          i.rsi < 42 &&
+          i.stochK < 35 &&
           i.stochK > i.stochKPrev &&
-          ema21Flat,
+          flatOk,
         58,
         "buy",
         "range_long",
       );
       pass(
-        i.adx <= 20 &&
+        i.adx <= 22 &&
           rangeResist &&
           rangeWidthOk &&
-          i.rsi > 62 &&
-          i.stochK > 70 &&
+          i.rsi > 58 &&
+          i.stochK > 65 &&
           i.stochK < i.stochKPrev &&
-          ema21Flat,
+          flatOk,
         58,
         "sell",
         "range_short",
       );
-      if (i.adx > 20 || !rangeWidthOk) gate = "not_range";
+      if (i.adx > 22 || !rangeWidthOk) gate = "not_range";
       break;
     }
     case StrategyMode.CUSTOM: {
@@ -659,7 +717,7 @@ export function evaluateStrategyMode(
     case StrategyMode.GRID: {
       applyMidHold = !(nearGridLower || nearGridUpper);
       pass(
-        i.adx <= 20 &&
+        i.adx <= 22 &&
           nearGridLower &&
           (i.price <= i.bbLower || i.rsi < 40) &&
           atrStable &&
@@ -669,7 +727,7 @@ export function evaluateStrategyMode(
         "grid_long",
       );
       pass(
-        i.adx <= 20 &&
+        i.adx <= 22 &&
           nearGridUpper &&
           (i.price >= i.bbUpper || i.rsi > 60) &&
           atrStable &&
@@ -678,27 +736,29 @@ export function evaluateStrategyMode(
         "sell",
         "grid_short",
       );
-      if (i.adx > 20 || adxRising || !noBreakout) gate = "grid_hold";
+      if (i.adx > 22 || adxRising || !noBreakout) gate = "grid_hold";
       break;
     }
     case StrategyMode.DCA: {
-      // Long DCA: buy dips in uptrend; Short DCA: sell rips in downtrend
+      // True dip/rip vs EMA21 — not every mild pull under ema55
       pass(
         i.ema200Slope > 0 &&
+          i.price < i.ema21 &&
           i.price < i.ema55 &&
-          i.rsi < 45 &&
+          i.rsi < 40 &&
           i.price < i.vwapProxy &&
-          i.price <= i.ema21 + 2.5 * i.atr,
+          i.adx < 35,
         58,
         "buy",
         "dca_long",
       );
       pass(
         i.ema200Slope < 0 &&
+          i.price > i.ema21 &&
           i.price > i.ema55 &&
-          i.rsi > 55 &&
+          i.rsi > 60 &&
           i.price > i.vwapProxy &&
-          i.price >= i.ema21 - 2.5 * i.atr,
+          i.adx < 35,
         58,
         "sell",
         "dca_short",
@@ -739,49 +799,63 @@ export function evaluateStrategyMode(
       applyMidHold = false;
       const macdUp = i.macdHist > 0 && i.macdHist >= i.macdHistPrev;
       const macdDown = i.macdHist < 0 && i.macdHist <= i.macdHistPrev;
-      // Capital often has vol=0 — use ATR expansion as volume proxy
+      // Impulse: gap OR range expansion + ATR spike (calendar gated in runtime)
       const newsVolOk = i.hasVolumeData
         ? i.volumeStrong
         : atrRising && atrRatio >= 1.15;
+      const impulseUp =
+        (i.gapUpAtr >= 0.25 || i.lastRange > i.avgVolRange * 1.6) &&
+        atrRatio >= 1.2 &&
+        atrRising;
+      const impulseDown =
+        (i.gapDownAtr >= 0.25 || i.lastRange > i.avgVolRange * 1.6) &&
+        atrRatio >= 1.2 &&
+        atrRising;
       pass(
-        i.gapUpAtr >= 0.5 &&
+        impulseUp &&
           newsVolOk &&
-          i.adx > 25 &&
+          i.adx > 22 &&
           i.plusDi > i.minusDi &&
           macdUp &&
           i.rsi >= 55 &&
-          i.rsi <= 75,
+          i.rsi <= 78,
         65,
         "buy",
         "news_long",
       );
       pass(
-        i.gapDownAtr >= 0.5 &&
+        impulseDown &&
           newsVolOk &&
-          i.adx > 25 &&
+          i.adx > 22 &&
           i.minusDi > i.plusDi &&
           macdDown &&
-          i.rsi >= 25 &&
+          i.rsi >= 22 &&
           i.rsi <= 45,
         65,
         "sell",
         "news_short",
       );
       if (!newsVolOk) gate = "volume_low";
-      else if (i.gapUpAtr < 0.5 && i.gapDownAtr < 0.5) gate = "no_gap";
+      else if (!impulseUp && !impulseDown) gate = "no_impulse";
       break;
     }
     case StrategyMode.SESSION: {
       applyMidHold = false;
-      if (!isLiquidSessionUtc()) {
+      const sessAt =
+        at && Number.isFinite(at.getTime()) ? at : undefined;
+      if (!isLiquidSessionUtc(sessAt)) {
         return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat", buyScore: 0, sellScore: 0 };
       }
+      // Fresh break of session high/low + stronger trend filter
+      const breakHigh = i.price > i.sessionHigh && i.open <= i.sessionHigh;
+      const breakLow = i.price < i.sessionLow && i.open >= i.sessionLow;
       pass(
         (i.hasVolumeData ? i.volumeOk : true) &&
-          i.price > i.sessionHigh &&
+          breakHigh &&
           i.ema9 > i.ema21 &&
           i.plusDi > i.minusDi &&
-          i.adx > 20 &&
+          i.adx > 24 &&
+          adxRising &&
           i.rsi >= 52 &&
           i.rsi <= 70,
         60,
@@ -790,10 +864,11 @@ export function evaluateStrategyMode(
       );
       pass(
         (i.hasVolumeData ? i.volumeOk : true) &&
-          i.price < i.sessionLow &&
+          breakLow &&
           i.ema9 < i.ema21 &&
           i.minusDi > i.plusDi &&
-          i.adx > 20 &&
+          i.adx > 24 &&
+          adxRising &&
           i.rsi >= 30 &&
           i.rsi <= 48,
         60,
@@ -801,14 +876,16 @@ export function evaluateStrategyMode(
         "session_short",
       );
       if (i.hasVolumeData && !i.volumeOk) gate = "volume_low";
+      else if (!breakHigh && !breakLow) gate = "no_session_break";
       break;
     }
     case StrategyMode.ARBITRAGE_SIM: {
       // Single-venue statistical arb: fade VWAP dislocations when mean-reversion is likely
       applyMidHold = false;
       const edge = Math.abs(i.price - i.vwapProxy) / Math.max(i.atr, i.price * 1e-6);
-      const cheap = i.price <= i.vwapProxy - 0.85 * i.atr;
-      const rich = i.price >= i.vwapProxy + 0.85 * i.atr;
+      const edgeMin = 0.55;
+      const cheap = i.price <= i.vwapProxy - edgeMin * i.atr;
+      const rich = i.price >= i.vwapProxy + edgeMin * i.atr;
       const revertingUp =
         i.macdHist > i.macdHistPrev && i.stochK > i.stochKPrev;
       const revertingDown =
@@ -837,12 +914,12 @@ export function evaluateStrategyMode(
       pass(
         cheap &&
           !opts?.hasOpenBuy &&
-          i.adx < 28 &&
+          i.adx < 30 &&
           i.rsi < 42 &&
           revertingUp &&
           atrStable &&
           spreadOk &&
-          edge >= 0.85,
+          edge >= edgeMin,
         65,
         "buy",
         "stat_arb_long",
@@ -850,20 +927,20 @@ export function evaluateStrategyMode(
       pass(
         rich &&
           !opts?.hasOpenSell &&
-          i.adx < 28 &&
+          i.adx < 30 &&
           i.rsi > 58 &&
           revertingDown &&
           atrStable &&
           spreadOk &&
-          edge >= 0.85,
+          edge >= edgeMin,
         65,
         "sell",
         "stat_arb_short",
       );
-      if (edge < 0.85) gate = "edge_low";
+      if (edge < edgeMin) gate = "edge_low";
       else if (!spreadOk) gate = "spread_bad";
       else if (!atrStable) gate = "atr_unstable";
-      else if (i.adx >= 28) gate = "trend_risk";
+      else if (i.adx >= 30) gate = "trend_risk";
       break;
     }
     case StrategyMode.MARKET_MAKING_SIM: {
@@ -1003,6 +1080,18 @@ export function evaluateStrategyMode(
 function isLiquidSessionUtc(now = new Date()): boolean {
   const h = now.getUTCHours();
   return h >= 7 && h < 21;
+}
+
+/** UTC 07:00 start of the liquid window that contains `t`. */
+function liquidSessionStartUtc(t: Date): Date {
+  const d = new Date(t);
+  const start = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 7, 0, 0),
+  );
+  if (d.getUTCHours() < 7) {
+    start.setUTCDate(start.getUTCDate() - 1);
+  }
+  return start;
 }
 
 function detectDivergence(

@@ -90,9 +90,13 @@ export default function StrategyLabPage() {
   const accountList = useMemo(() => accounts ?? [], [accounts]);
   const [accountId, setAccountId] = useState("");
   const [symbol, setSymbol] = useState("GOLD");
+  const [timeframe, setTimeframe] = useState("15m");
   const [mode, setMode] = useState<string>(StrategyMode.SCALPING);
   const [compareAll, setCompareAll] = useState(true);
   const [lotSize, setLotSize] = useState("0.1");
+  const [atrStopMult, setAtrStopMult] = useState("1.0");
+  const [stopDistancePips, setStopDistancePips] = useState("");
+  const [takeProfitPips, setTakeProfitPips] = useState("");
   const [tpEnabled, setTpEnabled] = useState(true);
   const [tpMode, setTpMode] = useState<"SINGLE" | "MULTI">("SINGLE");
   const [multiTpCount, setMultiTpCount] = useState("3");
@@ -132,13 +136,18 @@ export default function StrategyLabPage() {
           accountId: accountId || undefined,
           mode,
           compareAll,
-          days: 1,
+          timeframe,
+          days: timeframe === "1m" ? 1 : 3,
           volume: lotSize,
+          atrStopMult: Number(atrStopMult) || 1.0,
+          stopDistancePips: stopDistancePips
+            ? Number(stopDistancePips)
+            : undefined,
+          takeProfitPips: takeProfitPips ? Number(takeProfitPips) : undefined,
           takeProfitEnabled: tpEnabled,
           takeProfitMode: tpMode,
           multiTpCount: Number(multiTpCount) || 3,
           atrTpMult: Number(atrTpMult) || 2.2,
-          atrStopMult: 1.0,
           breakEvenEnabled: beEnabled,
           breakEvenActivationPips: Number(beAct) || 10,
           breakEvenOffsetPips: Number(beOff) || 1,
@@ -169,10 +178,11 @@ export default function StrategyLabPage() {
     <div className="space-y-4 vs-fade-up">
       <Panel title="Strategy Lab">
         <p className="max-w-3xl text-sm text-white/55">
-          Ielādē pēdējās ~1 dienas <span className="text-accent">1m</span>{" "}
-          sveces (Capital), izvēlies režīmu vai salīdzini visus — redzi outcome
-          ar TP / BE / Trailing. Rezultāts ={" "}
-          <span className="text-accent">nauda</span> konta valūtā.
+          Ielādē ~3 dienu <span className="text-accent">15m</span> sveces
+          (kā LIVE), izvēlies režīmu vai salīdzini visus — redzi outcome ar
+          TP / BE / Trailing. Rezultāts ={" "}
+          <span className="text-accent">nauda</span> konta valūtā. SL/TP =
+          ATR× vai pips (bez slepena shrink).
         </p>
       </Panel>
 
@@ -225,6 +235,18 @@ export default function StrategyLabPage() {
               </div>
             </Field>
 
+            <Field label="Timeframe">
+              <Select
+                value={timeframe}
+                onChange={(e) => setTimeframe(e.target.value)}
+              >
+                <option value="15m">15m (LIVE default)</option>
+                <option value="5m">5m</option>
+                <option value="1m">1m (scalp)</option>
+                <option value="1h">1h</option>
+              </Select>
+            </Field>
+
             <Toggle
               checked={compareAll}
               onChange={setCompareAll}
@@ -250,6 +272,36 @@ export default function StrategyLabPage() {
                 className="font-mono"
               />
             </Field>
+
+            <div className="rounded-md border border-white/[0.06] p-3 space-y-2">
+              <Field label="SL ATR×">
+                <Input
+                  value={atrStopMult}
+                  onChange={(e) => setAtrStopMult(e.target.value)}
+                  className="font-mono"
+                  disabled={Boolean(stopDistancePips)}
+                />
+              </Field>
+              <Field label="SL pips (optional override)">
+                <Input
+                  value={stopDistancePips}
+                  onChange={(e) => setStopDistancePips(e.target.value)}
+                  className="font-mono"
+                  placeholder="e.g. 50 GOLD / 20 FX"
+                />
+              </Field>
+              <Field label="TP pips (optional override)">
+                <Input
+                  value={takeProfitPips}
+                  onChange={(e) => setTakeProfitPips(e.target.value)}
+                  className="font-mono"
+                  placeholder="empty = ATR× TP"
+                />
+              </Field>
+              <p className="text-[11px] text-white/35">
+                GOLD 1 pip = 0.01. Piem. 50 pips = $0.50. Bez override → ATR×.
+              </p>
+            </div>
 
             <div className="rounded-md border border-white/[0.06] p-3 space-y-2">
               <Toggle
@@ -350,7 +402,7 @@ export default function StrategyLabPage() {
               Run lab on 1m history
             </Button>
             <p className="text-[11px] text-white/35">
-              Capital max ~1000×1m (~16h). Vajag CONNECTED kontu reālām svecēm.
+              Default 15m ≈ LIVE. Capital max ~1000 bars. Vajag CONNECTED kontu.
             </p>
           </div>
         </Panel>

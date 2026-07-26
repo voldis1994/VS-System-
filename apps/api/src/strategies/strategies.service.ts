@@ -346,12 +346,15 @@ export class StrategiesService {
       mode?: string;
       compareAll?: boolean;
       days?: number;
+      timeframe?: string;
       volume?: string;
       atrStopMult?: number;
       atrTpMult?: number;
       takeProfitEnabled?: boolean;
       takeProfitMode?: "SINGLE" | "MULTI";
       multiTpCount?: number;
+      stopDistancePips?: number;
+      takeProfitPips?: number;
       breakEvenEnabled?: boolean;
       breakEvenActivationPips?: number;
       breakEvenOffsetPips?: number;
@@ -367,9 +370,20 @@ export class StrategiesService {
       throw new AppError(ErrorCodes.VALIDATION_FAILED, "symbol required", HttpStatus.BAD_REQUEST);
     }
     const symbol = resolveCapitalEpic(symbolIn);
-    const days = Math.max(0.25, Math.min(3, Number(body.days ?? 1)));
-    // Capital max ~1000 1m bars (~16h). Request up to that for ~1 day window.
-    const wantBars = Math.min(1000, Math.max(200, Math.round(days * 24 * 60)));
+    // Match LIVE default (15m). 1m still allowed for SCALPING labs.
+    const timeframeRaw = String(body.timeframe ?? "15m").toLowerCase();
+    const timeframe =
+      timeframeRaw === "1m" || timeframeRaw === "5m" || timeframeRaw === "15m" || timeframeRaw === "1h"
+        ? timeframeRaw
+        : "15m";
+    const tfMinutes =
+      timeframe === "1m" ? 1 : timeframe === "5m" ? 5 : timeframe === "1h" ? 60 : 15;
+    // Enough bars for indicators (≥80) + ~2–5 sessions on 15m
+    const days = Math.max(0.5, Math.min(7, Number(body.days ?? (timeframe === "1m" ? 1 : 3))));
+    const wantBars = Math.min(
+      1000,
+      Math.max(120, Math.round((days * 24 * 60) / tfMinutes)),
+    );
 
     let account: {
       id: string;
@@ -402,16 +416,35 @@ export class StrategiesService {
       }
     }
 
-    const candles = await this.market.getCandles(symbol, "1m", wantBars, {
+    const candles = await this.market.getCandles(symbol, timeframe, wantBars, {
       accountId: account?.id,
     });
-    const candleSource = this.market.getCandleSource(symbol, "1m");
+    const candleSource = this.market.getCandleSource(symbol, timeframe);
     if (candles.length < 100) {
       throw new AppError(
         ErrorCodes.VALIDATION_FAILED,
-        `Not enough 1m candles for ${symbol} (${candles.length}). Connect Capital + Sync, then retry.`,
+        `Not enough ${timeframe} candles for ${symbol} (${candles.length}). Connect Capital + Sync, then retry.`,
         HttpStatus.BAD_REQUEST,
       );
+    }
+
+    // 1m micro confirm when Lab TF > 1m (parity with LIVE)
+    let candles1m:
+      | Array<{
+          open: unknown;
+          high: unknown;
+          low: unknown;
+          close: unknown;
+          volume?: unknown;
+          openTime?: Date | string;
+          closeTime?: Date | string;
+        }>
+      | undefined;
+    if (timeframe !== "1m") {
+      const m1Want = Math.min(1000, Math.max(200, Math.round(days * 24 * 60)));
+      candles1m = await this.market.getCandles(symbol, "1m", m1Want, {
+        accountId: account?.id,
+      });
     }
 
     const currency = account?.baseCurrency ?? "USD";
@@ -422,7 +455,7 @@ export class StrategiesService {
 
     const { runStrategyBacktest } = await import("./backtest-harness");
     const config = {
-      timeframe: "1m",
+      timeframe,
       sessionFilter: body.sessionFilter === true,
       minScore: typeof body.minScore === "number" ? body.minScore : undefined,
       atrStopMult: Number(body.atrStopMult ?? 1.0),
@@ -430,6 +463,10 @@ export class StrategiesService {
       takeProfitEnabled: body.takeProfitEnabled !== false,
       takeProfitMode: body.takeProfitMode === "MULTI" ? ("MULTI" as const) : ("SINGLE" as const),
       multiTpCount: Math.max(2, Math.min(10, Math.floor(Number(body.multiTpCount ?? 3)))),
+      stopDistancePips:
+        typeof body.stopDistancePips === "number" ? body.stopDistancePips : undefined,
+      takeProfitPips:
+        typeof body.takeProfitPips === "number" ? body.takeProfitPips : undefined,
       breakEvenEnabled: Boolean(body.breakEvenEnabled),
       breakEvenActivationPips:
         typeof body.breakEvenActivationPips === "number"
@@ -472,6 +509,7 @@ export class StrategiesService {
         mode,
         symbol,
         candles,
+        candles1m,
         config,
       });
       const exitBreakdown = run.trades.reduce(
@@ -511,7 +549,7 @@ export class StrategiesService {
       engine: "VS_PRO_V10",
       symbol,
       symbolIn,
-      timeframe: "1m",
+      timeframe,
       candleSource,
       bars: candles.length,
       windowFrom: from,
@@ -546,8 +584,8 @@ export class StrategiesService {
       note:
         candleSource === "sim"
           ? "SIM candles — connect Capital for real history"
-          : `PnL in ${currency} · Capital/DB 1m · ~${wantBars} bars max`,
-      parity: "runtime_signal+sl_tp_be_trail+multi_tp+money",
+          : `PnL in ${currency} · ${timeframe} (LIVE parity) · ~${wantBars} bars`,
+      parity: "runtime_signal+sl_tp_be_trail+multi_tp+money+15m",
     };
 
     await this.audit.record({
@@ -796,12 +834,17 @@ export class StrategiesService {
         },
       });
 
-      // Push fixed SL/TP only — never enable Capital native trail here (bypasses arm delay)
+      // Push fixed SL/TP only when missing — never rewrite existing levels with wrong formula
       try {
         const dir = pos.direction as "BUY" | "SELL";
+        const stopDistancePips = Number(config.stopDistancePips);
+        const atrStopMult = Number(config.atrStopMult ?? 1.0);
         let stopLoss = pos.stopLoss ? String(pos.stopLoss) : null;
         if (!stopLoss && Number.isFinite(entry) && entry > 0) {
-          const slDist = Math.max(minDist, entry * 0.0005);
+          const slDist =
+            Number.isFinite(stopDistancePips) && stopDistancePips > 0
+              ? Math.max(minDist, pip * stopDistancePips)
+              : Math.max(minDist, pip * 20 * Math.max(atrStopMult, 0.5));
           stopLoss = formatInstrumentPrice(
             pos.symbol,
             dir === "BUY"
@@ -811,12 +854,13 @@ export class StrategiesService {
         }
 
         let takeProfit: string | null = pos.takeProfit ? String(pos.takeProfit) : null;
-        if (tpEnabled && Number.isFinite(entry) && entry > 0) {
+        // Only set TP if missing and TP enabled — do not overwrite ATR TP from entry
+        if (tpEnabled && !takeProfit && Number.isFinite(entry) && entry > 0) {
           const takeProfitPips = Number(config.takeProfitPips);
           const tpDist =
             Number.isFinite(takeProfitPips) && takeProfitPips > 0
               ? pip * takeProfitPips
-              : Math.max(pip * 3, entry * 0.0004 * Math.max(atrTpMult, 0.3));
+              : Math.max(pip * 3, minDist * Math.max(atrTpMult, 1));
           takeProfit = formatInstrumentPrice(
             pos.symbol,
             dir === "BUY"
@@ -827,14 +871,23 @@ export class StrategiesService {
           takeProfit = null;
         }
 
-        if (stopLoss || takeProfit !== undefined) {
+        const shouldPushSl = Boolean(stopLoss) && !pos.stopLoss;
+        const shouldPushTp =
+          tpEnabled
+            ? Boolean(takeProfit) && !pos.takeProfit
+            : pos.takeProfit != null;
+        if (shouldPushSl || shouldPushTp || (!tpEnabled && pos.takeProfit != null)) {
           await this.positions.modifySlTp(
             organizationId,
             "system",
             pos.id,
             {
-              stopLoss: stopLoss ?? undefined,
-              takeProfit,
+              stopLoss: shouldPushSl ? (stopLoss ?? undefined) : undefined,
+              takeProfit: !tpEnabled
+                ? null
+                : shouldPushTp
+                  ? takeProfit
+                  : undefined,
             },
             `apply-exit-${strategyId}`,
             { silent: true },

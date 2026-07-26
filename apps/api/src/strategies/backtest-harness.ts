@@ -325,6 +325,7 @@ export function runStrategyBacktest(input: {
     const scored = evaluateStrategyMode(mode, ind, minScore, sessionFilter, {
       hasOpenBuy,
       hasOpenSell,
+      at: bar.closeTime ?? bar.openTime ?? undefined,
     });
 
     // Soft close from engine
@@ -439,11 +440,12 @@ export function runStrategyBacktest(input: {
 
     const entry = Number(bar.close);
     const minDist = minProtectiveDistance(symbol, entry);
+    // Exact pips or ATR× — no silent ×0.39 shrink (matches LIVE)
     let stopDist =
       cfg.stopDistancePips != null
         ? pip * cfg.stopDistancePips
         : Math.max(ind.atr * atrStopMult, entry * 0.00065);
-    stopDist = Math.max(stopDist * 0.39, minDist);
+    stopDist = Math.max(stopDist, minDist);
     let tpDist =
       cfg.takeProfitPips != null
         ? pip * cfg.takeProfitPips

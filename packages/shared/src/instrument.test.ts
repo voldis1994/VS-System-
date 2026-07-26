@@ -14,8 +14,8 @@ describe("instrumentPipSize", () => {
   });
 
   it("resolves gold and crypto", () => {
-    expect(instrumentPipSize("GOLD")).toBe(0.1);
-    expect(instrumentPipSize("CS.D.CFDGOLD.CFD.IP")).toBe(0.1);
+    expect(instrumentPipSize("GOLD")).toBe(0.01);
+    expect(instrumentPipSize("CS.D.CFDGOLD.CFD.IP")).toBe(0.01);
     expect(instrumentPipSize("BITCOIN")).toBe(1);
   });
 
@@ -27,7 +27,8 @@ describe("instrumentPipSize", () => {
 
 describe("minProtectiveDistance", () => {
   it("floors GOLD distances for Capital min-stop", () => {
-    expect(minProtectiveDistance("GOLD", 2300)).toBeGreaterThanOrEqual(1.2);
+    // 50 points × 0.01 = 0.50, or 0.08% of price
+    expect(minProtectiveDistance("GOLD", 2300)).toBeGreaterThanOrEqual(0.5);
   });
 });
 
@@ -45,14 +46,14 @@ describe("trailingArmThreshold", () => {
 
   it("does not inflate when start pips > trail pips", () => {
     const floored = minProtectiveDistance("GOLD", 2300);
-    // Old bug: distance * (15/1) ≈ 276 pips of gold move
+    // 15 GOLD pips × 0.01 = 0.15
     expect(
       trailingArmThreshold("GOLD", {
         trailingDistance: floored,
         trailingActivationPips: 15,
         trailingDistancePips: 1,
       }),
-    ).toBeCloseTo(1.5, 5);
+    ).toBeCloseTo(0.15, 5);
   });
 });
 
