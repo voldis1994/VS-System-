@@ -29,11 +29,23 @@ export type DeploymentState = {
   tfBear?: number;
   flipped?: boolean;
   flippedFrom?: string;
+  newsEvent?: string;
+  newsCountry?: string;
+  newsImpact?: string;
+  takeProfitMode?: string;
 };
 
 export function deploymentHint(d: DeploymentState): string | null {
   if (d.candleSource1m === "sim" || d.candleSource === "sim" || d.skip === "sim_candles") {
     return "Sveces ir SIM — entry bloķēts. Capital CONNECTED + Sync history.";
+  }
+  if (d.skip === "news_filter") {
+    return `News filtra blackout${d.newsEvent ? ` — ${d.newsEvent}` : ""}${
+      d.newsCountry ? ` (${d.newsCountry})` : ""
+    }.`;
+  }
+  if (d.skip === "multi_tp_lot_too_small") {
+    return "Multi TP: lot pārāk mazs šim TP skaitam (min step 0.01).";
   }
   if (d.skip === "buy_vs_bearish") {
     return `BUY bloķēts pret bearish — ja SELL arī neder, gaida.`;
@@ -137,6 +149,7 @@ export function deploymentTone(
     d.skip === "micro_conflict" ||
     d.skip === "buy_vs_bearish" ||
     d.skip === "sell_vs_bullish" ||
+    d.skip === "news_filter" ||
     d.skip === "cooldown" ||
     d.signal === "HOLD"
   ) {

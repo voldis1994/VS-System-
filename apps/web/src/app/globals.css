@@ -3,15 +3,17 @@
 @tailwind utilities;
 
 :root {
-  --bg-deep: #06080c;
-  --bg-panel: #0e131a;
-  --accent: #d4a574;
-  --accent-soft: #e8c49a;
-  --signal: #3ddc97;
-  --profit: #3ddc97;
-  --loss: #ff6b5b;
-  --text: #f2efe8;
-  --muted: rgba(242, 239, 232, 0.45);
+  --bg-deep: #070b10;
+  --bg-panel: #101820;
+  --bg-panel-elevated: #15202b;
+  --accent: #c9a227;
+  --accent-soft: #e4c45a;
+  --signal: #2ecf8f;
+  --profit: #2ecf8f;
+  --loss: #f07167;
+  --text: #f4f1ea;
+  --muted: rgba(244, 241, 234, 0.42);
+  --line: rgba(201, 162, 39, 0.14);
 }
 
 html,
@@ -22,10 +24,10 @@ body {
 body {
   color: var(--text);
   background:
-    radial-gradient(ellipse 90% 55% at 12% -8%, rgba(212, 165, 116, 0.16), transparent 55%),
-    radial-gradient(ellipse 70% 45% at 92% 0%, rgba(61, 220, 151, 0.07), transparent 50%),
-    radial-gradient(ellipse 50% 40% at 50% 100%, rgba(212, 165, 116, 0.05), transparent 55%),
-    linear-gradient(165deg, #06080c 0%, #0b1016 42%, #080a0f 100%);
+    radial-gradient(ellipse 80% 50% at 8% -10%, rgba(201, 162, 39, 0.18), transparent 52%),
+    radial-gradient(ellipse 60% 40% at 96% 4%, rgba(46, 207, 143, 0.08), transparent 48%),
+    radial-gradient(ellipse 45% 35% at 70% 100%, rgba(201, 162, 39, 0.06), transparent 55%),
+    linear-gradient(168deg, #070b10 0%, #0c1219 45%, #080d12 100%);
   background-attachment: fixed;
   font-family: var(--font-body), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -37,12 +39,12 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.4;
+  opacity: 0.35;
   background-image:
-    linear-gradient(rgba(212, 165, 116, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(212, 165, 116, 0.045) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(ellipse at 30% 0%, black 15%, transparent 70%);
+    linear-gradient(rgba(201, 162, 39, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 162, 39, 0.05) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse at 25% 0%, black 12%, transparent 68%);
 }
 
 body::after {
@@ -51,7 +53,9 @@ body::after {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  background: radial-gradient(circle at 80% 60%, rgba(61, 220, 151, 0.04), transparent 35%);
+  background:
+    radial-gradient(circle at 85% 55%, rgba(46, 207, 143, 0.045), transparent 32%),
+    radial-gradient(circle at 12% 78%, rgba(201, 162, 39, 0.04), transparent 28%);
 }
 
 #__next,
@@ -62,7 +66,7 @@ main {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(212, 165, 116, 0.35) transparent;
+  scrollbar-color: rgba(201, 162, 39, 0.35) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -70,12 +74,12 @@ main {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(212, 165, 116, 0.35);
+  background: rgba(201, 162, 39, 0.35);
   border-radius: 999px;
 }
 
 input[type="range"] {
-  accent-color: #d4a574;
+  accent-color: #c9a227;
 }
 
 @keyframes vs-orbit {
@@ -122,6 +126,17 @@ input[type="range"] {
   }
 }
 
+@keyframes vs-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .vs-orbit {
   animation: vs-orbit 28s linear infinite;
 }
@@ -136,6 +151,10 @@ input[type="range"] {
 
 .vs-breathe {
   animation: vs-breathe 3.2s ease-in-out infinite;
+}
+
+.vs-fade-up {
+  animation: vs-fade-up 0.45s ease-out both;
 }
 
 .font-display {

@@ -33,6 +33,9 @@ type AccountDraft = {
   sizeMode: "LOT" | "RISK";
   exitVersion: ExitVersion;
   tpEnabled: boolean;
+  /** SINGLE = one ATR TP; MULTI = N partial TPs */
+  tpMode: "SINGLE" | "MULTI";
+  multiTpCount: string;
   atrTpMult: string;
   beEnabled: boolean;
   beActivationPips: string;
@@ -40,6 +43,9 @@ type AccountDraft = {
   trailEnabled: boolean;
   trailPips: string;
   trailActPips: string;
+  newsFilterEnabled: boolean;
+  newsMinutesBefore: string;
+  newsMinutesAfter: string;
 };
 
 const STRATEGY_MODES = [
@@ -71,6 +77,8 @@ const EXIT_PRESETS: Record<
 > = {
   SCALP: {
     tpEnabled: true,
+    tpMode: "SINGLE",
+    multiTpCount: "3",
     atrTpMult: "1.8",
     beEnabled: true,
     beActivationPips: "15",
@@ -78,9 +86,14 @@ const EXIT_PRESETS: Record<
     trailEnabled: true,
     trailPips: "20",
     trailActPips: "15",
+    newsFilterEnabled: true,
+    newsMinutesBefore: "30",
+    newsMinutesAfter: "15",
   },
   SWING: {
     tpEnabled: true,
+    tpMode: "SINGLE",
+    multiTpCount: "3",
     atrTpMult: "2.4",
     beEnabled: true,
     beActivationPips: "20",
@@ -88,9 +101,14 @@ const EXIT_PRESETS: Record<
     trailEnabled: false,
     trailPips: "25",
     trailActPips: "20",
+    newsFilterEnabled: true,
+    newsMinutesBefore: "45",
+    newsMinutesAfter: "20",
   },
   RUNNER: {
     tpEnabled: false,
+    tpMode: "SINGLE",
+    multiTpCount: "3",
     atrTpMult: "3.0",
     beEnabled: true,
     beActivationPips: "15",
@@ -98,6 +116,9 @@ const EXIT_PRESETS: Record<
     trailEnabled: true,
     trailPips: "25",
     trailActPips: "18",
+    newsFilterEnabled: true,
+    newsMinutesBefore: "30",
+    newsMinutesAfter: "15",
   },
 };
 
@@ -130,6 +151,10 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
       ? exitVersion
       : "CUSTOM",
     tpEnabled: c.takeProfitEnabled !== false,
+    tpMode: c.takeProfitMode === "MULTI" ? "MULTI" : "SINGLE",
+    multiTpCount: String(
+      typeof c.multiTpCount === "number" ? c.multiTpCount : 3,
+    ),
     atrTpMult: String(typeof c.atrTpMult === "number" ? c.atrTpMult : 2.2),
     beEnabled: Boolean(c.breakEvenEnabled),
     beActivationPips: String(
@@ -144,6 +169,13 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
     ),
     trailActPips: String(
       typeof c.trailingActivationPips === "number" ? c.trailingActivationPips : 15,
+    ),
+    newsFilterEnabled: Boolean(c.newsFilterEnabled),
+    newsMinutesBefore: String(
+      typeof c.newsMinutesBefore === "number" ? c.newsMinutesBefore : 30,
+    ),
+    newsMinutesAfter: String(
+      typeof c.newsMinutesAfter === "number" ? c.newsMinutesAfter : 15,
     ),
   };
 }
@@ -184,6 +216,12 @@ function buildConfiguration(d: AccountDraft) {
     atrStopMult: 1.0,
     atrTpMult: Number(d.atrTpMult) || 2.2,
     takeProfitEnabled: d.tpEnabled,
+    takeProfitMode: d.tpMode,
+    multiTpCount: Math.max(2, Math.min(10, Math.floor(Number(d.multiTpCount) || 3))),
+    newsFilterEnabled: d.newsFilterEnabled,
+    newsMinutesBefore: Math.max(0, Number(d.newsMinutesBefore) || 30),
+    newsMinutesAfter: Math.max(0, Number(d.newsMinutesAfter) || 15),
+    newsMinImpact: "High",
     breakEvenEnabled: d.beEnabled,
     breakEvenActivationPips: Number.isFinite(Number(d.beActivationPips))
       ? Number(d.beActivationPips)
@@ -586,7 +624,41 @@ export default function StrategiesPage() {
                     }
                     label={draft.tpEnabled ? "TP ON" : "TP OFF"}
                   />
-                  <Field label="TP ATR× (mazāks = tuvāks TP)">
+                  <Field label="TP mode">
+                    <Select
+                      value={draft.tpMode}
+                      disabled={!draft.tpEnabled}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          tpMode: e.target.value as "SINGLE" | "MULTI",
+                          exitVersion: "CUSTOM",
+                        })
+                      }
+                    >
+                      <option value="SINGLE">Single ATR TP</option>
+                      <option value="MULTI">Multi TP (lot split)</option>
+                    </Select>
+                  </Field>
+                  {draft.tpMode === "MULTI" ? (
+                    <Field label="TP count (equal % of entry lot)">
+                      <Input
+                        value={draft.multiTpCount}
+                        disabled={!draft.tpEnabled}
+                        onChange={(e) =>
+                          patchDraft(account.id, {
+                            multiTpCount: e.target.value,
+                            exitVersion: "CUSTOM",
+                          })
+                        }
+                        className="font-mono"
+                        placeholder="5"
+                      />
+                      <p className="mt-1 text-[11px] text-white/35">
+                        Piem. 0.5 lot ÷ 5 TP → katrs 0.1 (20%). Cenas = vienādi ATR soļi līdz ATR×.
+                      </p>
+                    </Field>
+                  ) : null}
+                  <Field label="TP ATR× (final / single)">
                     <Input
                       value={draft.atrTpMult}
                       disabled={!draft.tpEnabled}
@@ -599,12 +671,51 @@ export default function StrategiesPage() {
                       className="font-mono"
                     />
                   </Field>
+                  <Toggle
+                    checked={draft.newsFilterEnabled}
+                    onChange={(v) =>
+                      patchDraft(account.id, {
+                        newsFilterEnabled: v,
+                        exitVersion: "CUSTOM",
+                      })
+                    }
+                    label={
+                      draft.newsFilterEnabled
+                        ? "News filter ON"
+                        : "News filter OFF"
+                    }
+                  />
+                  {draft.newsFilterEnabled ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Min before">
+                        <Input
+                          value={draft.newsMinutesBefore}
+                          onChange={(e) =>
+                            patchDraft(account.id, {
+                              newsMinutesBefore: e.target.value,
+                              exitVersion: "CUSTOM",
+                            })
+                          }
+                          className="font-mono"
+                        />
+                      </Field>
+                      <Field label="Min after">
+                        <Input
+                          value={draft.newsMinutesAfter}
+                          onChange={(e) =>
+                            patchDraft(account.id, {
+                              newsMinutesAfter: e.target.value,
+                              exitVersion: "CUSTOM",
+                            })
+                          }
+                          className="font-mono"
+                        />
+                      </Field>
+                    </div>
+                  ) : null}
                   <p className="text-[11px] text-zinc-500">
-                    Filtrs: BUY≠bearish / SELL≠bullish; flip tikai ja TF+1m
-                    piekrīt. ARBITRAGE_SIM = VWAP stat-arb; MARKET_MAKING_SIM =
-                    inventory quote (bid/ask→mid). DCA = long+short. Backtest =
-                    tas pats signāls + SL/TP/BE/trail. TP ATR× piem. 0.8–1.2 =
-                    tuvāks mērķis.
+                    News = Forex Factory high-impact blackout. Multi TP = reāli
+                    partial close, ne tikai UI.
                   </p>
                 </div>
 

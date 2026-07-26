@@ -6,19 +6,19 @@ const config: Config = {
     extend: {
       colors: {
         navy: {
-          950: "#06080C",
-          900: "#0E131A",
-          800: "#151C26",
-          700: "#1E2836",
+          950: "#070B10",
+          900: "#101820",
+          800: "#15202B",
+          700: "#1C2A38",
         },
         accent: {
-          DEFAULT: "#D4A574",
-          soft: "#E8C49A",
-          muted: "rgba(212, 165, 116, 0.14)",
+          DEFAULT: "#C9A227",
+          soft: "#E4C45A",
+          muted: "rgba(201, 162, 39, 0.14)",
         },
-        signal: "#3DDC97",
-        profit: "#3DDC97",
-        loss: "#FF6B5B",
+        signal: "#2ECF8F",
+        profit: "#2ECF8F",
+        loss: "#F07167",
       },
       fontFamily: {
         sans: ["var(--font-body)", "system-ui", "sans-serif"],
@@ -26,8 +26,8 @@ const config: Config = {
         mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
       boxShadow: {
-        glow: "0 0 28px rgba(212, 165, 116, 0.12)",
-        signal: "0 0 20px rgba(61, 220, 151, 0.18)",
+        glow: "0 0 32px rgba(201, 162, 39, 0.14)",
+        signal: "0 0 20px rgba(46, 207, 143, 0.16)",
       },
       animation: {
         "pulse-live": "pulse-live 2s ease-in-out infinite",

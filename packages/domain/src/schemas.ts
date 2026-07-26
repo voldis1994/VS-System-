@@ -125,18 +125,27 @@ export const ClosePositionSchema = z.object({
 
 export const StrategyExitConfigSchema = z.object({
   takeProfitEnabled: z.boolean().default(true),
+  /** SINGLE = one ATR TP (default). MULTI = N scaled partial TPs */
+  takeProfitMode: z.enum(["SINGLE", "MULTI"]).default("SINGLE"),
+  /** Number of TP levels when MULTI (2–10). Lot split equally by %. */
+  multiTpCount: z.number().int().min(2).max(10).optional(),
   atrTpMult: z.number().min(0.1).max(20).optional(),
   takeProfitPips: z.number().min(1).max(5000).optional(),
   atrStopMult: z.number().min(0.1).max(20).optional(),
   stopDistancePips: z.number().min(1).max(5000).optional(),
   breakEvenEnabled: z.boolean().default(false),
-  breakEvenActivationPips: z.number().min(1).max(2000).default(10),
+  breakEvenActivationPips: z.number().min(0).max(2000).default(10),
   breakEvenOffsetPips: z.number().min(0).max(500).default(1),
   trailingEnabled: z.boolean().default(false),
   trailingDistancePips: z.number().min(1).max(2000).default(15),
   trailingActivationPips: z.number().min(0).max(2000).optional(),
   /** Named exit preset: SCALP | SWING | RUNNER | CUSTOM */
   exitVersion: z.string().max(32).optional(),
+  /** Block new entries around high-impact economic news */
+  newsFilterEnabled: z.boolean().default(false),
+  newsMinutesBefore: z.number().int().min(0).max(240).default(30),
+  newsMinutesAfter: z.number().int().min(0).max(240).default(15),
+  newsMinImpact: z.enum(["Medium", "High"]).default("High"),
 });
 
 export const AccountStrategyRunSchema = z.object({

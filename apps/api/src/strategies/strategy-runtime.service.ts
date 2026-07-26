@@ -7,12 +7,13 @@ import {
   VolumeMode,
 } from "@nexus/domain";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
-import { d, newId, instrumentPipSize, minProtectiveDistance, formatInstrumentPrice } from "@nexus/shared";
+import { d, newId, instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, buildEqualMultiTpPlan } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
 import { OrdersService } from "../orders/orders.service";
 import { PositionsService } from "../positions/positions.service";
 import { MarketDataService } from "../market-data/market-data.service";
+import { NewsCalendarService } from "../market-data/news-calendar.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { evaluateMicro1mFive } from "./micro-1m";
@@ -42,6 +43,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     private readonly orders: OrdersService,
     private readonly positions: PositionsService,
     private readonly market: MarketDataService,
+    private readonly news: NewsCalendarService,
     private readonly brokers: BrokerRuntimeService,
     private readonly notifications: NotificationsService,
   ) {}
@@ -193,6 +195,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       minScore?: number;
       /** Prefer London/NY session hours (UTC) — opt-in */
       sessionFilter?: boolean;
+      takeProfitMode?: "SINGLE" | "MULTI";
+      multiTpCount?: number;
+      newsFilterEnabled?: boolean;
+      newsMinutesBefore?: number;
+      newsMinutesAfter?: number;
+      newsMinImpact?: "Medium" | "High";
     };
     const cooldownMs = (config.cooldownSeconds ?? 30) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
@@ -214,12 +222,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     // Default OFF — aggressive EMA fallback was deadly on micro accounts
     const _autoAggressive = config.autoAggressive === true;
     void _autoAggressive;
+    const takeProfitMode =
+      config.takeProfitMode === "MULTI" ? "MULTI" : "SINGLE";
+    const multiTpCount = Math.max(
+      2,
+      Math.min(10, Math.floor(Number(config.multiTpCount ?? 3))),
+    );
+    const newsFilterEnabled = config.newsFilterEnabled === true;
     let lastStatus: Record<string, unknown> = {
       oneTradeOnly,
       closeOnlyNoFlip,
       takeProfitEnabled,
+      takeProfitMode,
+      multiTpCount: takeProfitMode === "MULTI" ? multiTpCount : undefined,
       breakEvenEnabled,
       trailingEnabled,
+      newsFilterEnabled,
       engine: "VS_PRO_V10",
       minScore,
       candleDirectionFilter: true,
@@ -325,6 +343,29 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           reason: "Capital history missing — refusing LIVE/sim entries",
         };
         continue;
+      }
+
+      if (newsFilterEnabled && (scored.signal === "BUY" || scored.signal === "SELL")) {
+        const block = await this.news.isBlocked({
+          symbol: brokerSymbol,
+          enabled: true,
+          minutesBefore: config.newsMinutesBefore ?? 30,
+          minutesAfter: config.newsMinutesAfter ?? 15,
+          minImpact: config.newsMinImpact ?? "High",
+        });
+        if (block.blocked) {
+          lastStatus = {
+            ...lastStatus,
+            signal: scored.signal,
+            skip: "news_filter",
+            reason: block.reason,
+            newsEvent: block.event?.title,
+            newsCountry: block.event?.country,
+            newsImpact: block.event?.impact,
+            minutesUntilNews: block.minutesUntil,
+          };
+          continue;
+        }
       }
 
       if (scored.signal === "HOLD") {
@@ -606,11 +647,49 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           signal === "BUY"
             ? formatInstrumentPrice(brokerSymbol, d(entry).minus(stopDist).toNumber())
             : formatInstrumentPrice(brokerSymbol, d(entry).plus(stopDist).toNumber());
-        const takeProfit = takeProfitEnabled
-          ? signal === "BUY"
-            ? formatInstrumentPrice(brokerSymbol, d(entry).plus(tpDist).toNumber())
-            : formatInstrumentPrice(brokerSymbol, d(entry).minus(tpDist).toNumber())
-          : undefined;
+        const entryLot = Number(config.volume ?? "0.01");
+        let takeProfit: string | undefined;
+        let takeProfits:
+          | Array<{ price: string; closePercent: number }>
+          | undefined;
+        let multiPlan: ReturnType<typeof buildEqualMultiTpPlan> | undefined;
+        if (takeProfitEnabled && takeProfitMode === "MULTI") {
+          multiPlan = buildEqualMultiTpPlan({
+            direction: signal,
+            entry,
+            initialVolume: Number.isFinite(entryLot) && entryLot > 0 ? entryLot : 0.01,
+            count: multiTpCount,
+            atr: ind.atr,
+            atrTpMult,
+            volumeStep: 0.01,
+          });
+          if (multiPlan.length === 0) {
+            lastStatus = {
+              ...lastStatus,
+              skip: "multi_tp_lot_too_small",
+              reason: `lot ${entryLot} cannot split into ${multiTpCount} TPs at 0.01 step`,
+            };
+            continue;
+          }
+          takeProfits = multiPlan.map((l) => ({
+            price: formatInstrumentPrice(brokerSymbol, Number(l.price)),
+            closePercent: l.closePercent,
+          }));
+          // Capital single profitLevel = final TP only (fail-safe for remainder)
+          const last = multiPlan[multiPlan.length - 1]!;
+          takeProfit = formatInstrumentPrice(brokerSymbol, Number(last.price));
+        } else if (takeProfitEnabled) {
+          takeProfit =
+            signal === "BUY"
+              ? formatInstrumentPrice(
+                  brokerSymbol,
+                  d(entry).plus(tpDist).toNumber(),
+                )
+              : formatInstrumentPrice(
+                  brokerSymbol,
+                  d(entry).minus(tpDist).toNumber(),
+                );
+        }
 
         const beActivationPips = config.breakEvenActivationPips ?? 10;
         const beOffsetPips = config.breakEvenOffsetPips ?? 1;
@@ -670,6 +749,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               entryPrice: formatInstrumentPrice(brokerSymbol, entry),
               stopLoss,
               takeProfit,
+              takeProfits,
               // Delay broker native trail until activation pips (autoManage)
               trailingEnabled: false,
               trailingDistance: trailingEnabled ? trailDist.toFixed(8) : undefined,
@@ -691,11 +771,41 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             | undefined;
 
           if (child?.ok && child.position?.id) {
+            const filledVol = Number(
+              (await this.prisma.position.findFirst({
+                where: { id: child.position.id },
+                select: { volume: true },
+              }))?.volume ?? entryLot,
+            );
+            // Rebuild plan with actual fill volume when MULTI
+            let planJson = multiPlan;
+            if (takeProfitMode === "MULTI" && takeProfitEnabled) {
+              planJson = buildEqualMultiTpPlan({
+                direction: signal,
+                entry,
+                initialVolume:
+                  Number.isFinite(filledVol) && filledVol > 0
+                    ? filledVol
+                    : entryLot,
+                count: multiTpCount,
+                atr: ind.atr,
+                atrTpMult,
+                volumeStep: 0.01,
+              });
+            }
             await this.prisma.position.update({
               where: { id: child.position.id },
               data: {
                 strategyId: strategy.id,
                 source: "STRATEGY",
+                initialVolume: String(
+                  Number.isFinite(filledVol) && filledVol > 0
+                    ? filledVol
+                    : entryLot,
+                ),
+                takeProfitsJson: planJson
+                  ? (planJson as unknown as object)
+                  : undefined,
                 breakEvenEnabled,
                 breakEvenActivation: breakEvenEnabled
                   ? beActDist.toFixed(8)

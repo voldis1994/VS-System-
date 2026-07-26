@@ -388,10 +388,14 @@ model Position {
   symbol               String
   direction            OrderDirection
   volume               Decimal         @db.Decimal(24, 8)
+  /** Original fill volume — Multi TP % is computed from this, not remaining */
+  initialVolume        Decimal?        @db.Decimal(24, 8)
   averageEntry         Decimal         @db.Decimal(24, 8)
   currentPrice         Decimal         @db.Decimal(24, 8)
   stopLoss             Decimal?        @db.Decimal(24, 8)
   takeProfit           Decimal?        @db.Decimal(24, 8)
+  /** Multi TP plan: [{index,price,closePercent,closeVolume,status}] */
+  takeProfitsJson      Json?
   unrealizedPnl        Decimal         @db.Decimal(24, 8) @default(0)
   realizedPnl          Decimal         @db.Decimal(24, 8) @default(0)
   commission           Decimal         @db.Decimal(24, 8) @default(0)

@@ -384,10 +384,30 @@ export class OrdersService {
           symbol: symbol.brokerSymbol,
           direction: input.direction,
           volume: brokerResponse.filledVolume,
+          initialVolume: brokerResponse.filledVolume,
           averageEntry: brokerResponse.averageFillPrice,
           currentPrice: brokerResponse.averageFillPrice,
           stopLoss: input.stopLoss,
           takeProfit: input.takeProfit,
+          takeProfitsJson: input.takeProfits
+            ? (input.takeProfits.map((tp, idx, arr) => {
+                const fill = Number(brokerResponse.filledVolume);
+                const step = 0.01;
+                const raw = (fill * tp.closePercent) / 100;
+                const closeVolume =
+                  idx === arr.length - 1
+                    ? null // filled below
+                    : Math.floor(raw / step + 1e-12) * step;
+                return {
+                  index: idx + 1,
+                  price: tp.price,
+                  closePercent: tp.closePercent,
+                  closeVolume:
+                    closeVolume == null ? "0" : closeVolume.toFixed(8),
+                  status: "PENDING",
+                };
+              }) as unknown as object)
+            : undefined,
           status: "OPEN",
           source: input.strategyId ? OrderSource.STRATEGY : OrderSource.MANUAL,
           strategyId: input.strategyId,
@@ -398,7 +418,33 @@ export class OrdersService {
           breakEvenOffset: input.breakEvenOffset,
         },
       });
-      await this.events.publish({
+      // Fix last multi-TP volume = remainder so % sums to fill
+      if (input.takeProfits && input.takeProfits.length > 0 && position) {
+        const fill = Number(brokerResponse.filledVolume);
+        const levels = (
+          Array.isArray(position.takeProfitsJson)
+            ? position.takeProfitsJson
+            : []
+        ) as Array<{
+          index: number;
+          price: string;
+          closePercent: number;
+          closeVolume: string;
+          status: string;
+        }>;
+        if (levels.length > 0) {
+          let used = 0;
+          for (let i = 0; i < levels.length - 1; i++) {
+            used += Number(levels[i]!.closeVolume);
+          }
+          const last = levels[levels.length - 1]!;
+          last.closeVolume = Math.max(0, fill - used).toFixed(8);
+          position = await this.prisma.position.update({
+            where: { id: position.id },
+            data: { takeProfitsJson: levels as unknown as object },
+          });
+        }
+      }      await this.events.publish({
         eventType: DomainEventType.PositionOpened,
         aggregateId: position.id,
         organizationId,

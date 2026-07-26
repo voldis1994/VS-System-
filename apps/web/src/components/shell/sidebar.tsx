@@ -37,17 +37,17 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-white/[0.06] bg-navy-950/90">
-      <div className="border-b border-white/[0.06] px-4 py-4">
+    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-[var(--line)] bg-[color:var(--bg-deep)]/95">
+      <div className="border-b border-[var(--line)] px-4 py-4">
         <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/vs-system-logo.png"
             alt="VS System"
-            className="h-9 w-9 rounded-md object-cover ring-1 ring-white/10"
+            className="h-10 w-10 rounded-xl object-cover ring-1 ring-accent/25"
           />
           <div>
-            <div className="font-sans text-lg font-bold tracking-tight text-white">
+            <div className="font-display text-lg font-bold tracking-tight text-white">
               VS <span className="text-accent">System</span>
             </div>
             <div className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-white/35">

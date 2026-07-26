@@ -11,6 +11,11 @@ import {
   d,
   trailingArmThreshold,
   trailingStopCandidate,
+  multiTpHit,
+  clampCloseVolume,
+  parseVolume,
+  newId,
+  type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
@@ -703,6 +708,22 @@ export class PositionsService {
           data: { currentPrice: mark },
         });
 
+        // App-managed Multi TP scale-out (Capital has only 1 native TP)
+        await this.manageMultiTakeProfits(
+          position.organizationId,
+          position.id,
+          mark,
+          correlationId,
+        );
+        const stillOpen = await this.prisma.position.findFirst({
+          where: {
+            id: position.id,
+            status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+          },
+          select: { id: true },
+        });
+        if (!stillOpen) continue;
+
         const entry = Number(position.averageEntry);
         const dir = position.direction as "BUY" | "SELL";
         const favorable =
@@ -1018,5 +1039,115 @@ export class PositionsService {
       correlationId,
     });
     return updated;
+  }
+
+  /**
+   * Execute PENDING multi-TP levels against live mark.
+   * TP1..N-1 → partialClose; final → close remaining.
+   */
+  private async manageMultiTakeProfits(
+    organizationId: string,
+    positionId: string,
+    mark: number,
+    correlationId: string,
+  ) {
+    const position = await this.prisma.position.findFirst({
+      where: { id: positionId, organizationId },
+    });
+    if (!position) return;
+    if (position.status !== "OPEN" && position.status !== "PARTIALLY_CLOSED") {
+      return;
+    }
+    const levels = (
+      Array.isArray(position.takeProfitsJson) ? position.takeProfitsJson : []
+    ) as MultiTpLevelPlan[];
+    if (levels.length === 0) return;
+
+    const dir = position.direction as "BUY" | "SELL";
+    const available = parseVolume(position.volume);
+    if (available <= 0) return;
+
+    const pendingIdx = levels.findIndex((l) => l.status === "PENDING");
+    if (pendingIdx < 0) return;
+    const level = levels[pendingIdx]!;
+    const levelPrice = Number(level.price);
+    if (!Number.isFinite(levelPrice) || !multiTpHit(dir, mark, levelPrice)) {
+      return;
+    }
+
+    const isLast =
+      levels.slice(pendingIdx + 1).every((l) => l.status !== "PENDING") ||
+      pendingIdx === levels.length - 1;
+
+    try {
+      if (isLast || available <= 0.01000001) {
+        await this.close(
+          organizationId,
+          "system",
+          positionId,
+          { clientRequestId: newId() },
+          correlationId,
+        );
+        levels[pendingIdx] = { ...level, status: "EXECUTED" };
+        await this.prisma.position.update({
+          where: { id: positionId },
+          data: { takeProfitsJson: levels as unknown as object },
+        });
+        await this.notifications.create({
+          organizationId,
+          userId: null,
+          title: `TP${level.index} hit`,
+          body: `${position.symbol} final scale-out @ ${level.price}`,
+          severity: "SUCCESS",
+        });
+        return;
+      }
+
+      const closeVol = clampCloseVolume(
+        Number(level.closeVolume),
+        available,
+        0.01,
+      );
+      if (!closeVol || Number(closeVol) >= available) {
+        await this.close(
+          organizationId,
+          "system",
+          positionId,
+          { clientRequestId: newId() },
+          correlationId,
+        );
+        levels[pendingIdx] = { ...level, status: "EXECUTED" };
+      } else {
+        await this.partialClose(
+          organizationId,
+          "system",
+          positionId,
+          { volume: closeVol, clientRequestId: newId() },
+          correlationId,
+        );
+        levels[pendingIdx] = { ...level, status: "EXECUTED" };
+      }
+      await this.prisma.position.update({
+        where: { id: positionId },
+        data: { takeProfitsJson: levels as unknown as object },
+      });
+      await this.notifications.create({
+        organizationId,
+        userId: null,
+        title: `TP${level.index} hit`,
+        body: `${position.symbol} closed ${closeVol ?? "rest"} @ ${level.price}`,
+        severity: "SUCCESS",
+      });
+    } catch (err) {
+      levels[pendingIdx] = { ...level, status: "FAILED" };
+      await this.prisma.position.update({
+        where: { id: positionId },
+        data: { takeProfitsJson: levels as unknown as object },
+      });
+      console.warn(
+        `multiTP ${positionId} TP${level.index}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 }

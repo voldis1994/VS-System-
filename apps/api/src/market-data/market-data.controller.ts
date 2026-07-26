@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import { Request } from "express";
 import { MarketDataService } from "./market-data.service";
+import { NewsCalendarService } from "./news-calendar.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import {
   PermissionsGuard,
@@ -19,7 +20,10 @@ import {
 @Controller()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class MarketDataController {
-  constructor(private readonly market: MarketDataService) {}
+  constructor(
+    private readonly market: MarketDataService,
+    private readonly news: NewsCalendarService,
+  ) {}
 
   @Get("symbols")
   @RequirePermissions("accounts:read")
@@ -37,6 +41,37 @@ export class MarketDataController {
   @RequirePermissions("accounts:read")
   feed() {
     return this.market.getFeedStatus();
+  }
+
+  @Get("market-data/news")
+  @RequirePermissions("accounts:read")
+  async newsCalendar(
+    @Query("symbol") symbol?: string,
+    @Query("hours") hours = "48",
+  ) {
+    const events = await this.news.upcoming(symbol, Number(hours) || 48);
+    return {
+      source: "forexfactory",
+      count: events.length,
+      events,
+    };
+  }
+
+  @Get("market-data/news/block")
+  @RequirePermissions("accounts:read")
+  async newsBlock(
+    @Query("symbol") symbol = "EURUSD",
+    @Query("before") before = "30",
+    @Query("after") after = "15",
+    @Query("minImpact") minImpact: "Medium" | "High" = "High",
+  ) {
+    return this.news.isBlocked({
+      symbol,
+      minutesBefore: Number(before) || 30,
+      minutesAfter: Number(after) || 15,
+      minImpact,
+      enabled: true,
+    });
   }
 
   @Get("market-data/:symbol/candles")
