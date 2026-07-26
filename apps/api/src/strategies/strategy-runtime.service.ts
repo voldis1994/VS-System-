@@ -5,6 +5,7 @@ import {
   OrderType,
   StrategyMode,
   VolumeMode,
+  modePreferredTimeframe,
 } from "@nexus/domain";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { d, newId, instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, buildEqualMultiTpPlan } from "@nexus/shared";
@@ -246,7 +247,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
-      const timeframe = config.timeframe ?? "15m";
+      const timeframe =
+        config.timeframe ?? modePreferredTimeframe(mode);
 
       // Strategy TF candles → mode (TREND/SCALP/…) decides BUY/SELL
       const candles = await this.market.getCandles(

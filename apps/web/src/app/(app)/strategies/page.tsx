@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useAccounts, useStrategies } from "@/lib/hooks";
 import type { Strategy, TradingAccount } from "@/lib/types";
-import { StrategyMode } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe } from "@nexus/domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -223,7 +223,7 @@ function buildConfiguration(d: AccountDraft) {
   const volume =
     Number.isFinite(lot) && lot > 0 ? String(lot) : "0.01";
   return {
-    timeframe: "15m",
+    timeframe: modePreferredTimeframe(d.mode),
     riskPercent: Number(d.riskPercent) || 0.5,
     useRiskPercent: d.sizeMode === "RISK",
     volume,
@@ -533,10 +533,13 @@ export default function StrategiesPage() {
                   >
                     {STRATEGY_MODES.map((m) => (
                       <option key={m} value={m}>
-                        {m}
+                        {m} · {modePreferredTimeframe(m)}
                       </option>
                     ))}
                   </Select>
+                  <p className="mt-1 text-[11px] text-white/35">
+                    TF = {modePreferredTimeframe(draft.mode)} (kā jālasa tirgus šim režīmam)
+                  </p>
                 </Field>
 
                 <Field label="Exit versija">

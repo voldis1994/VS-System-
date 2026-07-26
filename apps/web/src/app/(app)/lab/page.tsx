@@ -35,6 +35,11 @@ type LabTrade = {
 
 type LabResult = {
   mode: string;
+  timeframe?: string;
+  readRole?: string;
+  truth?: string;
+  bars?: number;
+  candleSource?: string;
   trades: number;
   netProfit: number;
   winRate: number;
@@ -49,6 +54,7 @@ type LabResponse = {
   symbol: string;
   symbolIn: string;
   timeframe: string;
+  timeframeMode?: string;
   candleSource: string;
   bars: number;
   windowFrom?: string;
@@ -90,7 +96,7 @@ export default function StrategyLabPage() {
   const accountList = useMemo(() => accounts ?? [], [accounts]);
   const [accountId, setAccountId] = useState("");
   const [symbol, setSymbol] = useState("GOLD");
-  const [timeframe, setTimeframe] = useState("15m");
+  const [timeframe, setTimeframe] = useState("auto");
   const [mode, setMode] = useState<string>(StrategyMode.SCALPING);
   const [compareAll, setCompareAll] = useState(true);
   const [lotSize, setLotSize] = useState("0.1");
@@ -137,7 +143,8 @@ export default function StrategyLabPage() {
           mode,
           compareAll,
           timeframe,
-          days: timeframe === "1m" ? 1 : 3,
+          days:
+            timeframe === "1m" ? 1 : timeframe === "5m" ? 2 : timeframe === "auto" ? undefined : 3,
           volume: lotSize,
           atrStopMult: Number(atrStopMult) || 1.0,
           stopDistancePips: stopDistancePips
@@ -178,11 +185,9 @@ export default function StrategyLabPage() {
     <div className="space-y-4 vs-fade-up">
       <Panel title="Strategy Lab">
         <p className="max-w-3xl text-sm text-white/55">
-          Ielādē ~3 dienu <span className="text-accent">15m</span> sveces
-          (kā LIVE), izvēlies režīmu vai salīdzini visus — redzi outcome ar
-          TP / BE / Trailing. Rezultāts ={" "}
-          <span className="text-accent">nauda</span> konta valūtā. SL/TP =
-          ATR× vai pips (bez slepena shrink).
+          Katrs režīms uz <span className="text-accent">savu TF</span> (auto):
+          struktūra 15m, scalp/MM/news 1m, grid 5m — + 1m timing kur vajag.
+          Rezultāts = <span className="text-accent">nauda</span> konta valūtā.
         </p>
       </Panel>
 
@@ -240,10 +245,11 @@ export default function StrategyLabPage() {
                 value={timeframe}
                 onChange={(e) => setTimeframe(e.target.value)}
               >
-                <option value="15m">15m (LIVE default)</option>
-                <option value="5m">5m</option>
-                <option value="1m">1m (scalp)</option>
-                <option value="1h">1h</option>
+                <option value="auto">Auto (per mode truth)</option>
+                <option value="15m">Force 15m</option>
+                <option value="5m">Force 5m</option>
+                <option value="1m">Force 1m</option>
+                <option value="1h">Force 1h</option>
               </Select>
             </Field>
 
@@ -402,7 +408,7 @@ export default function StrategyLabPage() {
               Run lab on 1m history
             </Button>
             <p className="text-[11px] text-white/35">
-              Default 15m ≈ LIVE. Capital max ~1000 bars. Vajag CONNECTED kontu.
+              Auto = katram mode īstais TF. Capital max ~1000 bars. Vajag CONNECTED.
             </p>
           </div>
         </Panel>
@@ -447,6 +453,7 @@ export default function StrategyLabPage() {
                     <thead className="text-[11px] uppercase tracking-wide text-white/35">
                       <tr>
                         <th className="py-2 pr-3">Mode</th>
+                        <th className="py-2 pr-3">TF</th>
                         <th className="py-2 pr-3">Trades</th>
                         <th className="py-2 pr-3">Net ({currency})</th>
                         <th className="py-2 pr-3">WR%</th>
@@ -469,6 +476,9 @@ export default function StrategyLabPage() {
                               {data.best?.mode === r.mode ? (
                                 <Badge className="ml-2">BEST</Badge>
                               ) : null}
+                            </td>
+                            <td className="py-2 pr-3 font-mono text-white/50">
+                              {r.timeframe ?? data.timeframe}
                             </td>
                             <td className="py-2 pr-3 font-mono text-white/70">
                               {r.trades}
@@ -496,6 +506,15 @@ export default function StrategyLabPage() {
 
               {active ? (
                 <Panel title={`Detail · ${active.mode}`}>
+                  {active.truth ? (
+                    <p className="mb-3 text-[12px] text-white/45">
+                      <span className="font-mono text-accent">
+                        {active.timeframe ?? "—"}
+                      </span>
+                      {active.readRole ? ` · ${active.readRole}` : ""} —{" "}
+                      {active.truth}
+                    </p>
+                  ) : null}
                   {active.trades === 0 ? (
                     <div className="mb-3 rounded-md border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-100/90">
                       <div className="font-medium">0 treidu — režīms nav “bojāts”</div>

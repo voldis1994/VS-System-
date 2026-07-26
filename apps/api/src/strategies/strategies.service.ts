@@ -6,6 +6,11 @@ import {
   ErrorCodes,
   StrategyMode,
   StrategyStatus,
+  modePreferredTimeframe,
+  modeMarketProfile,
+  modeUses1mTiming,
+  tfMinutes,
+  type StrategyTimeframe,
 } from "@nexus/domain";
 import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
@@ -370,20 +375,17 @@ export class StrategiesService {
       throw new AppError(ErrorCodes.VALIDATION_FAILED, "symbol required", HttpStatus.BAD_REQUEST);
     }
     const symbol = resolveCapitalEpic(symbolIn);
-    // Match LIVE default (15m). 1m still allowed for SCALPING labs.
-    const timeframeRaw = String(body.timeframe ?? "15m").toLowerCase();
-    const timeframe =
-      timeframeRaw === "1m" || timeframeRaw === "5m" || timeframeRaw === "15m" || timeframeRaw === "1h"
-        ? timeframeRaw
-        : "15m";
-    const tfMinutes =
-      timeframe === "1m" ? 1 : timeframe === "5m" ? 5 : timeframe === "1h" ? 60 : 15;
-    // Enough bars for indicators (≥80) + ~2–5 sessions on 15m
-    const days = Math.max(0.5, Math.min(7, Number(body.days ?? (timeframe === "1m" ? 1 : 3))));
-    const wantBars = Math.min(
-      1000,
-      Math.max(120, Math.round((days * 24 * 60) / tfMinutes)),
-    );
+    // "auto" = each mode on its truthful TF (1m scalp/MM/news, 15m structure, …)
+    const timeframeRaw = String(body.timeframe ?? "auto").toLowerCase();
+    const fixedTf: StrategyTimeframe | null =
+      timeframeRaw === "auto" || timeframeRaw === ""
+        ? null
+        : timeframeRaw === "1m" ||
+            timeframeRaw === "5m" ||
+            timeframeRaw === "15m" ||
+            timeframeRaw === "1h"
+          ? timeframeRaw
+          : "15m";
 
     let account: {
       id: string;
@@ -416,46 +418,81 @@ export class StrategiesService {
       }
     }
 
-    const candles = await this.market.getCandles(symbol, timeframe, wantBars, {
-      accountId: account?.id,
-    });
-    const candleSource = this.market.getCandleSource(symbol, timeframe);
-    if (candles.length < 100) {
-      throw new AppError(
-        ErrorCodes.VALIDATION_FAILED,
-        `Not enough ${timeframe} candles for ${symbol} (${candles.length}). Connect Capital + Sync, then retry.`,
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
-    // 1m micro confirm when Lab TF > 1m (parity with LIVE)
-    let candles1m:
-      | Array<{
-          open: unknown;
-          high: unknown;
-          low: unknown;
-          close: unknown;
-          volume?: unknown;
-          openTime?: Date | string;
-          closeTime?: Date | string;
-        }>
-      | undefined;
-    if (timeframe !== "1m") {
-      const m1Want = Math.min(1000, Math.max(200, Math.round(days * 24 * 60)));
-      candles1m = await this.market.getCandles(symbol, "1m", m1Want, {
-        accountId: account?.id,
-      });
-    }
-
     const currency = account?.baseCurrency ?? "USD";
     const startingEquity = Math.max(
       100,
       Number(account?.equity ?? 10_000) || 10_000,
     );
 
+    type CandleRow = {
+      open: unknown;
+      high: unknown;
+      low: unknown;
+      close: unknown;
+      volume?: unknown;
+      openTime?: Date | string;
+      closeTime?: Date | string;
+    };
+
+    const candleCache = new Map<
+      string,
+      { candles: CandleRow[]; source: string; days: number }
+    >();
+
+    const loadTf = async (tf: StrategyTimeframe) => {
+      const cached = candleCache.get(tf);
+      if (cached) return cached;
+      const days = Math.max(
+        0.5,
+        Math.min(7, Number(body.days ?? (tf === "1m" ? 1 : tf === "5m" ? 2 : 3))),
+      );
+      const want = Math.min(
+        1000,
+        Math.max(120, Math.round((days * 24 * 60) / tfMinutes(tf))),
+      );
+      const candles = (await this.market.getCandles(symbol, tf, want, {
+        accountId: account?.id,
+      })) as CandleRow[];
+      const source = this.market.getCandleSource(symbol, tf);
+      if (candles.length < 100) {
+        throw new AppError(
+          ErrorCodes.VALIDATION_FAILED,
+          `Not enough ${tf} candles for ${symbol} (${candles.length}). Connect Capital + Sync, then retry.`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      const entry = { candles, source, days };
+      candleCache.set(tf, entry);
+      return entry;
+    };
+
+    const modes: StrategyMode[] = body.compareAll
+      ? (Object.values(StrategyMode) as StrategyMode[])
+      : [
+          (Object.values(StrategyMode) as string[]).includes(String(body.mode))
+            ? (body.mode as StrategyMode)
+            : StrategyMode.SCALPING,
+        ];
+
+    // Warm primary TF (single-mode fixed, or first mode native)
+    const primaryTf =
+      fixedTf ??
+      modePreferredTimeframe(modes[0] ?? StrategyMode.SCALPING);
+    await loadTf(primaryTf);
+    // Always warm 1m when any mode needs timing confirm or is native 1m
+    const needs1m = modes.some(
+      (m) => modeUses1mTiming(m) || modePreferredTimeframe(m) === "1m",
+    );
+    if (needs1m) {
+      try {
+        await loadTf("1m");
+      } catch {
+        // 1m optional for pure 15m if Capital truncates — structure modes still run
+      }
+    }
+
     const { runStrategyBacktest } = await import("./backtest-harness");
-    const config = {
-      timeframe,
+    const baseConfig = {
       sessionFilter: body.sessionFilter === true,
       minScore: typeof body.minScore === "number" ? body.minScore : undefined,
       atrStopMult: Number(body.atrStopMult ?? 1.0),
@@ -491,26 +528,21 @@ export class StrategiesService {
       startingEquity,
     };
 
-    const modes: StrategyMode[] = body.compareAll
-      ? (Object.values(StrategyMode) as StrategyMode[])
-      : [
-          (Object.values(StrategyMode) as string[]).includes(String(body.mode))
-            ? (body.mode as StrategyMode)
-            : StrategyMode.SCALPING,
-        ];
-
-    const first = candles[0];
-    const last = candles[candles.length - 1];
-    const from = first && "openTime" in first ? first.openTime : undefined;
-    const to = last && "closeTime" in last ? last.closeTime : last && "openTime" in last ? (last as { openTime?: Date }).openTime : undefined;
-
-    const results = modes.map((mode) => {
+    const results = [];
+    for (const mode of modes) {
+      const profile = modeMarketProfile(mode);
+      const tf = fixedTf ?? profile.preferredTimeframe;
+      const pack = await loadTf(tf);
+      const m1 =
+        profile.uses1mTiming && tf !== "1m"
+          ? candleCache.get("1m")?.candles
+          : undefined;
       const run = runStrategyBacktest({
         mode,
         symbol,
-        candles,
-        candles1m,
-        config,
+        candles: pack.candles,
+        candles1m: m1,
+        config: { ...baseConfig, timeframe: tf },
       });
       const exitBreakdown = run.trades.reduce(
         (acc, t) => {
@@ -519,8 +551,24 @@ export class StrategiesService {
         },
         {} as Record<string, number>,
       );
-      return {
+      const first = pack.candles[0];
+      const last = pack.candles[pack.candles.length - 1];
+      const from = first && "openTime" in first ? first.openTime : undefined;
+      const to =
+        last && "closeTime" in last
+          ? last.closeTime
+          : last && "openTime" in last
+            ? last.openTime
+            : undefined;
+      results.push({
         mode,
+        timeframe: tf,
+        readRole: profile.readRole,
+        truth: profile.truth,
+        bars: pack.candles.length,
+        candleSource: pack.source,
+        windowFrom: from,
+        windowTo: to,
         trades: run.trades.length,
         netProfit: Number(run.netProfit.toFixed(2)),
         winRate: Number((run.winRate * 100).toFixed(1)),
@@ -540,18 +588,30 @@ export class StrategiesService {
           barsHeld: t.barsHeld,
           time: t.time,
         })),
-      };
-    });
+      });
+    }
 
     results.sort((a, b) => b.netProfit - a.netProfit);
+
+    const primary = candleCache.get(primaryTf)!;
+    const first = primary.candles[0];
+    const last = primary.candles[primary.candles.length - 1];
+    const from = first && "openTime" in first ? first.openTime : undefined;
+    const to =
+      last && "closeTime" in last
+        ? last.closeTime
+        : last && "openTime" in last
+          ? last.openTime
+          : undefined;
 
     const payload = {
       engine: "VS_PRO_V10",
       symbol,
       symbolIn,
-      timeframe,
-      candleSource,
-      bars: candles.length,
+      timeframe: fixedTf ?? "auto",
+      timeframeMode: fixedTf ? "fixed" : "native_per_mode",
+      candleSource: primary.source,
+      bars: primary.candles.length,
       windowFrom: from,
       windowTo: to,
       windowHours: Number(
@@ -575,17 +635,19 @@ export class StrategiesService {
             equity: Number(account.equity),
           }
         : null,
-      config,
+      config: { ...baseConfig, timeframe: fixedTf ?? "auto" },
       compareAll: Boolean(body.compareAll),
       results,
       best: results[0] ?? null,
       zeroTradesHint:
         "0 treidu ≠ režīms bojāts — filtri turēja HOLD (score / sveces / sesija). Skaties skipped iemeslus zemāk.",
       note:
-        candleSource === "sim"
+        primary.source === "sim"
           ? "SIM candles — connect Capital for real history"
-          : `PnL in ${currency} · ${timeframe} (LIVE parity) · ~${wantBars} bars`,
-      parity: "runtime_signal+sl_tp_be_trail+multi_tp+money+15m",
+          : fixedTf
+            ? `PnL in ${currency} · fixed ${fixedTf}`
+            : `PnL in ${currency} · each mode on native TF (1m timing / 15m structure)`,
+      parity: "runtime_signal+sl_tp_be_trail+multi_tp+money+native_tf",
     };
 
     await this.audit.record({
@@ -596,10 +658,11 @@ export class StrategiesService {
       resourceId: symbol,
       after: {
         symbol,
-        bars: candles.length,
+        bars: primary.candles.length,
         modes: modes.length,
         best: payload.best?.mode,
         bestPnl: payload.best?.netProfit,
+        timeframeMode: payload.timeframeMode,
       },
       correlationId,
     });

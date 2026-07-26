@@ -1,5 +1,11 @@
 import { StrategyMode } from "@nexus/domain";
 
+/**
+ * VS_PRO mode engine.
+ * Preferred TF / market-reading truth lives in @nexus/domain mode-profile
+ * (structure on 15m, scalp/MM/news on 1m, grid on 5m + optional 1m timing).
+ */
+
 export type Signal = "BUY" | "SELL" | "CLOSE" | "HOLD";
 
 export type CandleLike = {
