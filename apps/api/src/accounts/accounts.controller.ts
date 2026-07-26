@@ -89,6 +89,31 @@ export class AccountsController {
     );
   }
 
+  @Get(":id/capital-accounts")
+  @RequirePermissions("accounts:read")
+  listCapitalAccounts(
+    @Param("id") id: string,
+    @Req() req: Request & { user: AuthUser },
+  ) {
+    return this.accounts.listCapitalSubAccounts(req.user.organizationId, id);
+  }
+
+  @Post(":id/bind-capital")
+  @RequirePermissions("accounts:manage")
+  bindCapital(
+    @Param("id") id: string,
+    @Body() body: { externalAccountId?: string },
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.accounts.bindCapitalSubAccount(
+      req.user.organizationId,
+      req.user.userId,
+      id,
+      String(body.externalAccountId ?? ""),
+      req.correlationId ?? "unknown",
+    );
+  }
+
   @Post(":id/credentials")
   @RequirePermissions("accounts:manage")
   updateCredentials(

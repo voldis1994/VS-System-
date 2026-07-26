@@ -477,10 +477,8 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         return adapter as CapitalComAdapter;
       }
     }
-    // If a specific account was requested but not Capital/connected, fall back
-    if (accountId) {
-      return this.getCapitalAdapter(organizationId, undefined);
-    }
+    // If a specific account was requested but not Capital/connected — fail closed
+    // (do NOT silently use another Capital account's session)
     return null;
   }
 

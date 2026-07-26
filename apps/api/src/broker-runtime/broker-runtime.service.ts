@@ -34,6 +34,7 @@ export class BrokerRuntimeService implements OnModuleInit {
     leverage: number;
     balance: Prisma.Decimal | string;
     baseCurrency: string;
+    externalAccountId?: string | null;
     brokerStateJson?: Prisma.JsonValue | null;
   }): Promise<BrokerAdapter> {
     const existing = this.adapters.get(account.id);
@@ -42,10 +43,26 @@ export class BrokerRuntimeService implements OnModuleInit {
       if (account.provider === "CAPITAL") {
         try {
           const health = await existing.healthCheck();
-          if (health.healthy) return existing;
+          const bound = String(
+            (health.details?.externalAccountId as string | undefined) ?? "",
+          );
+          const want = String(account.externalAccountId ?? "");
+          // Reconnect when unhealthy OR pinned CFD sub-account drifted / changed
+          if (
+            health.healthy &&
+            (!want || !bound || bound === want)
+          ) {
+            return existing;
+          }
         } catch {
-          this.adapters.delete(account.id);
+          // fall through to reconnect
         }
+        try {
+          await existing.disconnect();
+        } catch {
+          // ignore
+        }
+        this.adapters.delete(account.id);
       } else {
         return existing;
       }
@@ -67,6 +84,7 @@ export class BrokerRuntimeService implements OnModuleInit {
       startingBalance: String(account.balance),
       baseCurrency: account.baseCurrency,
       credentials: resolvedCredentials,
+      externalAccountId: account.externalAccountId ?? undefined,
     });
 
     if (

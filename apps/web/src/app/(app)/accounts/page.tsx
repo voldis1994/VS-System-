@@ -35,6 +35,18 @@ export default function AccountsPage() {
   const [fixPassword, setFixPassword] = useState("");
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [bindId, setBindId] = useState<string | null>(null);
+  const [capitalSubs, setCapitalSubs] = useState<
+    Array<{
+      accountId: string;
+      accountName: string;
+      preferred?: boolean;
+      currency?: string;
+      balance?: number;
+      profitLoss?: number;
+    }>
+  >([]);
+  const [bindValue, setBindValue] = useState("");
 
   async function createAccount() {
     if (provider === "CAPITAL" && !demo && !riskAccepted) {
@@ -113,6 +125,63 @@ export default function AccountsPage() {
       toast.error(msg, { duration: 12000 });
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function openCapitalBind(id: string, current?: string | null) {
+    setBusyId(id);
+    setBindId(id);
+    setFixCredsId(null);
+    setRenameId(null);
+    try {
+      const res = await api<{
+        externalAccountId?: string | null;
+        accounts: Array<{
+          accountId: string;
+          accountName: string;
+          preferred?: boolean;
+          currency?: string;
+          balance?: number;
+          profitLoss?: number;
+        }>;
+      }>(`/accounts/${id}/capital-accounts`, { token: token! });
+      setCapitalSubs(res.accounts ?? []);
+      setBindValue(
+        current ||
+          res.externalAccountId ||
+          res.accounts?.find((x) => x.preferred)?.accountId ||
+          res.accounts?.[0]?.accountId ||
+          "",
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load Capital accounts");
+      setBindId(null);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function saveCapitalBind(id: string) {
+    if (!bindValue) {
+      toast.error("Izvēlies Capital CFD kontu");
+      return;
+    }
+    setBusyId(id);
+    try {
+      await api(`/accounts/${id}/bind-capital`, {
+        method: "POST",
+        token: token!,
+        body: JSON.stringify({ externalAccountId: bindValue }),
+      });
+      toast.success("Capital CFD konts piesaistīts — Sync opens/PnL");
+      setBindId(null);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["positions"] });
+      void qc.invalidateQueries({ queryKey: ["analytics-overview"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Bind failed");
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -452,7 +521,48 @@ export default function AccountsPage() {
                           Fl {formatPnl(a.floatingPnl)}
                         </span>
                         <span>Lev 1:{a.leverage}</span>
+                        {a.provider === "CAPITAL" && a.externalAccountId ? (
+                          <span title="Capital CFD sub-account">
+                            CFD {a.externalAccountId}
+                          </span>
+                        ) : null}
                       </div>
+                      {bindId === a.id ? (
+                        <div className="mt-2 flex flex-wrap items-end gap-2">
+                          <Field label="Capital CFD konts (opens / PnL)">
+                            <Select
+                              value={bindValue}
+                              onChange={(e) => setBindValue(e.target.value)}
+                            >
+                              <option value="">— choose —</option>
+                              {capitalSubs.map((c) => (
+                                <option key={c.accountId} value={c.accountId}>
+                                  {c.accountName}
+                                  {c.preferred ? " · preferred" : ""} ·{" "}
+                                  {c.accountId}
+                                  {c.profitLoss != null
+                                    ? ` · Fl ${Number(c.profitLoss).toFixed(2)}`
+                                    : ""}
+                                </option>
+                              ))}
+                            </Select>
+                          </Field>
+                          <Button
+                            size="sm"
+                            loading={busyId === a.id}
+                            onClick={() => void saveCapitalBind(a.id)}
+                          >
+                            Bind + Sync
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setBindId(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {renameId !== a.id ? (
@@ -463,9 +573,22 @@ export default function AccountsPage() {
                             setRenameId(a.id);
                             setRenameValue(a.name);
                             setFixCredsId(null);
+                            setBindId(null);
                           }}
                         >
                           Rename
+                        </Button>
+                      ) : null}
+                      {a.provider === "CAPITAL" && a.connectionStatus === "CONNECTED" ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          loading={busyId === a.id && bindId === a.id}
+                          onClick={() =>
+                            void openCapitalBind(a.id, a.externalAccountId)
+                          }
+                        >
+                          Capital CFD
                         </Button>
                       ) : null}
                       {a.connectionStatus !== "CONNECTED" ? (

@@ -6,6 +6,8 @@ export interface BrokerConnectionConfig {
   leverage?: number;
   startingBalance?: string;
   baseCurrency?: string;
+  /** Capital CFD sub-account id — pin session to this account */
+  externalAccountId?: string;
 }
 
 export interface ConnectionResult {
@@ -207,4 +209,21 @@ export interface BrokerAdapter {
 
   /** Paper/mock only: inject market prices for simulation */
   updateMarketPrices?(prices: Record<string, { bid: string; ask: string }>): void;
+
+  /** Capital: list CFD/Spreadbet sub-accounts on this login */
+  listCapitalAccounts?(): Promise<
+    Array<{
+      accountId: string;
+      accountName: string;
+      accountType?: string;
+      currency?: string;
+      preferred?: boolean;
+      balance?: number;
+      profitLoss?: number;
+      available?: number;
+    }>
+  >;
+
+  /** Capital: pin session to a CFD sub-account and persist target */
+  bindCapitalAccount?(externalAccountId: string): Promise<string>;
 }

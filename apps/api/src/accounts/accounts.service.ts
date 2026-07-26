@@ -69,7 +69,11 @@ export class AccountsService {
           // fall through
         }
       }
-      refreshed.push(account);
+      refreshed.push({
+        ...account,
+        floatingPnl:
+          (account as { floatingPnl?: string }).floatingPnl ?? "0",
+      });
     }
     return refreshed;
   }
@@ -290,29 +294,84 @@ export class AccountsService {
     const state = await adapter.getAccountState();
     const positions = await adapter.getOpenPositions({ force: true });
     const orders = await adapter.getOpenOrders();
-    // Close local ghosts after broker SL/TP (otherwise strategies stay blocked)
+    // Import Capital opens into DB so dashboard / positions UI see them
     const liveIds = new Set(
-      positions.map((p) => p.brokerPositionId).filter(Boolean),
+      positions.map((p) => p.brokerPositionId).filter(Boolean) as string[],
     );
+    for (const bp of positions) {
+      if (!bp.brokerPositionId) continue;
+      const existing = await this.prisma.position.findFirst({
+        where: {
+          accountId: id,
+          brokerPositionId: bp.brokerPositionId,
+          status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+        },
+      });
+      if (existing) {
+        await this.prisma.position.update({
+          where: { id: existing.id },
+          data: {
+            currentPrice: bp.currentPrice,
+            unrealizedPnl: bp.unrealizedPnl,
+            volume: bp.volume,
+            stopLoss: bp.stopLoss ?? null,
+            takeProfit: bp.takeProfit ?? null,
+            status: "OPEN",
+          },
+        });
+      } else {
+        await this.prisma.position.create({
+          data: {
+            organizationId,
+            accountId: id,
+            brokerPositionId: bp.brokerPositionId,
+            symbol: bp.symbol,
+            direction: bp.direction as never,
+            volume: bp.volume,
+            initialVolume: bp.volume,
+            averageEntry: bp.averageEntry,
+            currentPrice: bp.currentPrice,
+            stopLoss: bp.stopLoss ?? null,
+            takeProfit: bp.takeProfit ?? null,
+            unrealizedPnl: bp.unrealizedPnl,
+            realizedPnl: bp.realizedPnl ?? "0",
+            commission: bp.commission ?? "0",
+            swap: bp.swap ?? "0",
+            status: "OPEN",
+            source: "SYSTEM",
+            openedAt: bp.openedAt ? new Date(bp.openedAt) : new Date(),
+          },
+        });
+      }
+    }
+    // Close local ghosts after broker SL/TP (only when broker returned a real snapshot)
     const localOpen = await this.prisma.position.findMany({
       where: {
         accountId: id,
         status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
       },
     });
-    for (const p of localOpen) {
-      if (!p.brokerPositionId || liveIds.has(p.brokerPositionId)) continue;
-      await this.prisma.position.update({
-        where: { id: p.id },
-        data: {
-          status: "CLOSED",
-          closedAt: p.closedAt ?? new Date(),
-          unrealizedPnl: "0",
-          volume: "0",
-        },
-      });
+    if (positions.length > 0 || localOpen.length === 0) {
+      for (const p of localOpen) {
+        if (!p.brokerPositionId || liveIds.has(p.brokerPositionId)) continue;
+        await this.prisma.position.update({
+          where: { id: p.id },
+          data: {
+            status: "CLOSED",
+            closedAt: p.closedAt ?? new Date(),
+            unrealizedPnl: "0",
+            volume: "0",
+          },
+        });
+      }
     }
     await this.brokers.persistState(id);
+    const resolvedExternal =
+      (typeof adapter.healthCheck === "function"
+        ? ((await adapter.healthCheck()).details?.externalAccountId as
+            | string
+            | undefined)
+        : undefined) ?? account.externalAccountId;
     const updated = await this.prisma.tradingAccount.update({
       where: { id },
       data: {
@@ -322,6 +381,9 @@ export class AccountsService {
         usedMargin: state.usedMargin,
         marginLevel: state.marginLevel,
         connectionStatus: "CONNECTED",
+        ...(resolvedExternal
+          ? { externalAccountId: String(resolvedExternal) }
+          : {}),
       },
     });
     await this.prisma.accountSnapshot.create({
@@ -341,10 +403,97 @@ export class AccountsService {
       action: "ACCOUNT_SYNCED",
       resourceType: "TradingAccount",
       resourceId: id,
-      after: { state, openPositions: positions.length, openOrders: orders.length },
+      after: {
+        state,
+        openPositions: positions.length,
+        openOrders: orders.length,
+        externalAccountId: updated.externalAccountId,
+      },
       correlationId,
     });
-    return { account: updated, positions, orders, reconciliation: { status: "OK" } };
+    return {
+      account: { ...updated, floatingPnl: state.floatingPnl },
+      positions,
+      orders,
+      reconciliation: { status: "OK", imported: positions.length },
+    };
+  }
+
+  /** List Capital CFD/Spreadbet sub-accounts for binding. */
+  async listCapitalSubAccounts(organizationId: string, id: string) {
+    const account = await this.get(organizationId, id);
+    if (account.provider !== "CAPITAL") {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Only Capital.com accounts have CFD sub-accounts",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const adapter =
+      this.brokers.get(id) ?? (await this.brokers.connectAccount(account));
+    if (typeof adapter.listCapitalAccounts !== "function") {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Broker does not support Capital sub-account list",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const accounts = await adapter.listCapitalAccounts();
+    return {
+      externalAccountId: account.externalAccountId,
+      accounts,
+    };
+  }
+
+  /** Pin VS account to a Capital CFD sub-account, then sync opens/PnL. */
+  async bindCapitalSubAccount(
+    organizationId: string,
+    actorId: string,
+    id: string,
+    externalAccountId: string,
+    correlationId: string,
+  ) {
+    const account = await this.get(organizationId, id);
+    if (account.provider !== "CAPITAL") {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Only Capital.com accounts can bind a CFD sub-account",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const target = String(externalAccountId ?? "").trim();
+    if (!target) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "externalAccountId required",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const adapter =
+      this.brokers.get(id) ?? (await this.brokers.connectAccount(account));
+    if (typeof adapter.bindCapitalAccount !== "function") {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Broker does not support Capital bind",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    await adapter.bindCapitalAccount(target);
+    await this.prisma.tradingAccount.update({
+      where: { id },
+      data: { externalAccountId: target, connectionStatus: "CONNECTED" },
+    });
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "ACCOUNT_CAPITAL_BOUND",
+      resourceType: "TradingAccount",
+      resourceId: id,
+      after: { externalAccountId: target },
+      correlationId,
+    });
+    // Pull opens + equity for the newly bound CFD account
+    return this.sync(organizationId, actorId, id, correlationId);
   }
 
   async lock(

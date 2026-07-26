@@ -128,9 +128,33 @@ export class PositionsService {
       byAccount.set(p.accountId, list);
     }
 
+    // Capital accounts with ZERO local opens still need a broker pull (import)
+    const capitalAccounts = await this.prisma.tradingAccount.findMany({
+      where: {
+        organizationId,
+        provider: "CAPITAL",
+        connectionStatus: "CONNECTED",
+        archivedAt: null,
+      },
+      select: { id: true },
+    });
+    for (const a of capitalAccounts) {
+      if (!byAccount.has(a.id)) byAccount.set(a.id, []);
+    }
+
     for (const [accountId, accountPositions] of byAccount) {
-      const adapter = this.brokers.get(accountId);
-      if (!adapter) continue;
+      let adapter = this.brokers.get(accountId);
+      if (!adapter) {
+        const acc = await this.prisma.tradingAccount.findFirst({
+          where: { id: accountId, organizationId, archivedAt: null },
+        });
+        if (!acc) continue;
+        try {
+          adapter = await this.brokers.connectAccount(acc);
+        } catch {
+          continue;
+        }
+      }
       let live: Awaited<ReturnType<typeof adapter.getOpenPositions>>;
       try {
         live = await adapter.getOpenPositions({ force: true });
@@ -155,8 +179,10 @@ export class PositionsService {
           .filter((x) => x.brokerPositionId)
           .map((x) => [x.brokerPositionId!, x]),
       );
+      const seenLocal = new Set<string>();
       for (const p of accountPositions) {
         if (!p.brokerPositionId) continue;
+        seenLocal.add(p.brokerPositionId);
         const match = liveById.get(p.brokerPositionId);
         if (match) {
           await this.prisma.position.update({
@@ -170,7 +196,7 @@ export class PositionsService {
               status: match.status as never,
             },
           });
-        } else {
+        } else if (live.length > 0 || (this.emptyBrokerSnapshots.get(accountId) ?? 0) >= 3) {
           await this.prisma.position.update({
             where: { id: p.id },
             data: {
@@ -181,6 +207,32 @@ export class PositionsService {
             },
           });
         }
+      }
+      // Import broker-only opens (opened on Capital outside VS / wrong-session before)
+      for (const bp of live) {
+        if (!bp.brokerPositionId || seenLocal.has(bp.brokerPositionId)) continue;
+        await this.prisma.position.create({
+          data: {
+            organizationId,
+            accountId,
+            brokerPositionId: bp.brokerPositionId,
+            symbol: bp.symbol,
+            direction: bp.direction as never,
+            volume: bp.volume,
+            initialVolume: bp.volume,
+            averageEntry: bp.averageEntry,
+            currentPrice: bp.currentPrice,
+            stopLoss: bp.stopLoss ?? null,
+            takeProfit: bp.takeProfit ?? null,
+            unrealizedPnl: bp.unrealizedPnl,
+            realizedPnl: bp.realizedPnl ?? "0",
+            commission: bp.commission ?? "0",
+            swap: bp.swap ?? "0",
+            status: "OPEN",
+            source: "SYSTEM",
+            openedAt: bp.openedAt ? new Date(bp.openedAt) : new Date(),
+          },
+        });
       }
     }
 

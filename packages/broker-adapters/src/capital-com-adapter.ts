@@ -64,7 +64,10 @@ export class CapitalComAdapter implements BrokerAdapter {
   private accountId = "";
   private leverage = 100;
   private currency = "USD";
+  /** Currently active Capital session account (may drift after re-auth). */
   private externalAccountId = "";
+  /** Desired Capital CFD sub-account — always re-bind after session create. */
+  private targetExternalAccountId = "";
   private readonly processed = new Map<string, BrokerOrderResponse>();
 
   async connect(config: BrokerConnectionConfig): Promise<ConnectionResult> {
@@ -77,6 +80,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     this.password = String(creds.password ?? "").trim();
     const demo = this.resolveDemoFlag(creds.demo);
     this.baseUrl = demo ? DEMO_BASE : LIVE_BASE;
+    this.targetExternalAccountId = String(config.externalAccountId ?? "").trim();
 
     if (!this.apiKey || !this.identifier || !this.password) {
       throw new Error(
@@ -108,27 +112,20 @@ export class CapitalComAdapter implements BrokerAdapter {
         "",
     );
 
-    if (preferred) {
-      this.externalAccountId = preferred.accountId;
-      // Only switch when Capital is on a different financial account
-      if (
-        preferred.accountId &&
-        String(preferred.accountId) !== currentAccountId
-      ) {
-        try {
-          await this.request("PUT", "/api/v1/session", {
-            accountId: preferred.accountId,
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // Already on this account — treat as success
-          if (!msg.includes("error.not-different.accountId")) {
-            throw err;
-          }
-        }
-      }
+    // Pin to stored CFD sub-account when set; otherwise Capital preferred
+    const desired =
+      this.targetExternalAccountId ||
+      preferred?.accountId ||
+      currentAccountId ||
+      "";
+
+    if (desired) {
+      this.targetExternalAccountId = desired;
+      await this.switchSessionAccount(desired);
+      this.externalAccountId = desired;
     } else if (currentAccountId) {
       this.externalAccountId = currentAccountId;
+      this.targetExternalAccountId = currentAccountId;
     }
 
     this.connected = true;
@@ -138,7 +135,8 @@ export class CapitalComAdapter implements BrokerAdapter {
       message: demo
         ? "Capital.com DEMO connected"
         : "Capital.com LIVE connected",
-      externalAccountId: this.externalAccountId || `CAPITAL-${config.accountId.slice(0, 8)}`,
+      externalAccountId:
+        this.externalAccountId || `CAPITAL-${config.accountId.slice(0, 8)}`,
     };
   }
 
@@ -161,13 +159,18 @@ export class CapitalComAdapter implements BrokerAdapter {
     const started = Date.now();
     try {
       await this.ensureSession();
+      await this.ensureActiveAccount();
       await this.request("GET", "/api/v1/session");
       this.lastHeartbeatAt = toUtcIso();
       return {
         healthy: this.connected,
         latencyMs: Date.now() - started,
         lastHeartbeatAt: this.lastHeartbeatAt,
-        details: { provider: "CAPITAL", externalAccountId: this.externalAccountId },
+        details: {
+          provider: "CAPITAL",
+          externalAccountId: this.externalAccountId,
+          targetExternalAccountId: this.targetExternalAccountId,
+        },
       };
     } catch (err) {
       return {
@@ -179,8 +182,48 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
   }
 
+  async listCapitalAccounts() {
+    await this.ensureSession();
+    const accountsRes = await this.request<{
+      accounts?: Array<{
+        accountId: string;
+        accountName?: string;
+        accountType?: string;
+        preferred?: boolean;
+        currency?: string;
+        balance?: {
+          balance?: number;
+          available?: number;
+          profitLoss?: number;
+        };
+      }>;
+    }>("GET", "/api/v1/accounts");
+    return (accountsRes.accounts ?? []).map((a) => ({
+      accountId: a.accountId,
+      accountName: a.accountName ?? a.accountId,
+      accountType: a.accountType,
+      currency: a.currency,
+      preferred: Boolean(a.preferred),
+      balance: a.balance?.balance,
+      profitLoss: a.balance?.profitLoss,
+      available: a.balance?.available,
+    }));
+  }
+
+  async bindCapitalAccount(externalAccountId: string): Promise<string> {
+    const id = String(externalAccountId ?? "").trim();
+    if (!id) throw new Error("externalAccountId required");
+    await this.ensureSession();
+    this.targetExternalAccountId = id;
+    await this.switchSessionAccount(id);
+    this.externalAccountId = id;
+    this.invalidatePositionsCache();
+    return id;
+  }
+
   async getAccountState(): Promise<BrokerAccountState> {
     await this.ensureSession();
+    await this.ensureActiveAccount();
 
     // GET /session often has no accountInfo — balance lives on GET /accounts
     const accountsRes = await this.request<{
@@ -198,7 +241,9 @@ export class CapitalComAdapter implements BrokerAdapter {
     }>("GET", "/api/v1/accounts");
 
     const list = accountsRes.accounts ?? [];
+    const target = this.targetExternalAccountId || this.externalAccountId;
     const selected =
+      list.find((a) => a.accountId === target) ??
       list.find((a) => a.accountId === this.externalAccountId) ??
       list.find((a) => a.preferred) ??
       list[0];
@@ -223,16 +268,15 @@ export class CapitalComAdapter implements BrokerAdapter {
           bal = session.accountInfo;
         }
         currency = session.currencyIsoCode ?? currency;
-        if (session.currentAccountId) {
-          this.externalAccountId = session.currentAccountId;
-        }
       } catch {
         // keep accounts data
       }
     }
 
-    if (selected?.accountId) {
+    // Never silently retarget to preferred — keep pinned CFD account
+    if (selected?.accountId && !this.targetExternalAccountId) {
       this.externalAccountId = selected.accountId;
+      this.targetExternalAccountId = selected.accountId;
     }
     this.currency = currency || this.currency;
 
@@ -606,6 +650,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       return cached.data;
     }
     await this.ensureSession();
+    await this.ensureActiveAccount();
     const res = await this.request<{
       positions?: Array<{
         position?: {
@@ -1167,11 +1212,20 @@ export class CapitalComAdapter implements BrokerAdapter {
     this.invalidatePositionsCache();
     try {
       const body = (await res.json()) as { accountId?: string };
-      if (body.accountId) {
+      if (body.accountId && !this.targetExternalAccountId) {
         this.externalAccountId = body.accountId;
       }
     } catch {
       // body optional
+    }
+    // Re-pin CFD sub-account after every fresh CST (session defaults to login preferred)
+    if (this.targetExternalAccountId) {
+      try {
+        await this.switchSessionAccount(this.targetExternalAccountId);
+        this.externalAccountId = this.targetExternalAccountId;
+      } catch {
+        // will retry on ensureActiveAccount
+      }
     }
   }
 
@@ -1234,6 +1288,45 @@ export class CapitalComAdapter implements BrokerAdapter {
     } catch {
       await this.createSession();
     }
+  }
+
+  /** Switch Capital session to the pinned CFD sub-account when needed. */
+  private async switchSessionAccount(accountId: string): Promise<void> {
+    const desired = String(accountId ?? "").trim();
+    if (!desired) return;
+    try {
+      const session = await this.request<{
+        accountId?: string;
+        currentAccountId?: string;
+      }>("GET", "/api/v1/session");
+      const current = String(
+        session.currentAccountId ?? session.accountId ?? this.externalAccountId ?? "",
+      );
+      if (current && current === desired) {
+        this.externalAccountId = desired;
+        return;
+      }
+    } catch {
+      // proceed to PUT
+    }
+    try {
+      await this.request("PUT", "/api/v1/session", { accountId: desired });
+      this.externalAccountId = desired;
+      this.invalidatePositionsCache();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("error.not-different.accountId")) {
+        this.externalAccountId = desired;
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private async ensureActiveAccount(): Promise<void> {
+    const desired = this.targetExternalAccountId || this.externalAccountId;
+    if (!desired) return;
+    await this.switchSessionAccount(desired);
   }
 
   private async waitConfirm(dealReference: string): Promise<{

@@ -17,6 +17,7 @@ export type TradingAccount = {
   connectionStatus: string;
   liveTradingEnabled: boolean;
   isMaster?: boolean;
+  externalAccountId?: string | null;
   dayStartEquity?: string;
   peakEquity?: string;
   createdAt?: string;
