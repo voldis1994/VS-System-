@@ -529,7 +529,7 @@ export function evaluateStrategyMode(
           i.rsi < 34 &&
           i.stochK < 25 &&
           i.stochK > i.stochKPrev &&
-          i.pctB < 0 &&
+          i.pctB <= 0 &&
           atrFalling,
         58,
         "buy",
@@ -541,7 +541,7 @@ export function evaluateStrategyMode(
           i.rsi > 66 &&
           i.stochK > 75 &&
           i.stochK < i.stochKPrev &&
-          i.pctB > 1 &&
+          i.pctB >= 1 &&
           atrFalling,
         58,
         "sell",
