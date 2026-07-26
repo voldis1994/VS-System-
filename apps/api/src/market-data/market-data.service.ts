@@ -108,7 +108,12 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async getCandles(symbol: string, timeframe = "1h", limit = 200) {
+  async getCandles(
+    symbol: string,
+    timeframe = "1h",
+    limit = 200,
+    opts?: { accountId?: string },
+  ) {
     const resolved = resolveCapitalEpic(symbol);
     const key = `${resolved}:${timeframe}`;
     const resolution = timeframeToCapitalResolution(timeframe);
@@ -122,7 +127,7 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         : Math.min(Math.max(limit, 55), 500);
 
     // Prefer Capital historical prices when a CONNECTED adapter exists
-    const adapter = await this.getCapitalAdapter();
+    const adapter = await this.getCapitalAdapter(undefined, opts?.accountId);
     if (adapter && typeof adapter.getHistoricalPrices === "function") {
       const cached = this.candleFetchCache.get(key);
       if (
@@ -442,6 +447,7 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
 
   private async getCapitalAdapter(
     organizationId?: string,
+    accountId?: string,
   ): Promise<CapitalComAdapter | null> {
     const accounts = await this.prisma.tradingAccount.findMany({
       where: {
@@ -449,8 +455,9 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         connectionStatus: "CONNECTED",
         archivedAt: null,
         ...(organizationId ? { organizationId } : {}),
+        ...(accountId ? { id: accountId } : {}),
       },
-      take: 5,
+      take: accountId ? 1 : 5,
     });
     for (const account of accounts) {
       let adapter = this.brokers.get(account.id);
@@ -469,6 +476,10 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
       ) {
         return adapter as CapitalComAdapter;
       }
+    }
+    // If a specific account was requested but not Capital/connected, fall back
+    if (accountId) {
+      return this.getCapitalAdapter(organizationId, undefined);
     }
     return null;
   }

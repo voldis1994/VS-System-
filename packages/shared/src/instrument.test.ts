@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatInstrumentPrice,
+  instrumentMoneyPnl,
   instrumentPipSize,
   minProtectiveDistance,
   trailingArmThreshold,
@@ -58,5 +59,55 @@ describe("trailingArmThreshold", () => {
 describe("formatInstrumentPrice", () => {
   it("formats GOLD to 2dp", () => {
     expect(formatInstrumentPrice("GOLD", 2345.678)).toBe("2345.68");
+  });
+});
+
+describe("instrumentMoneyPnl", () => {
+  it("prices GOLD in money (~$100 per $1 × 1.0 lot)", () => {
+    expect(
+      instrumentMoneyPnl({
+        symbol: "GOLD",
+        direction: "BUY",
+        entry: 2300,
+        exit: 2310,
+        volumeLots: 0.1,
+      }),
+    ).toBeCloseTo(100, 6);
+  });
+
+  it("prices FX in quote currency (100k notional)", () => {
+    expect(
+      instrumentMoneyPnl({
+        symbol: "EURUSD",
+        direction: "BUY",
+        entry: 1.1,
+        exit: 1.101,
+        volumeLots: 0.1,
+      }),
+    ).toBeCloseTo(10, 6);
+  });
+
+  it("inverts SELL correctly", () => {
+    expect(
+      instrumentMoneyPnl({
+        symbol: "GOLD",
+        direction: "SELL",
+        entry: 2300,
+        exit: 2290,
+        volumeLots: 0.1,
+      }),
+    ).toBeCloseTo(100, 6);
+  });
+
+  it("returns 0 for invalid inputs", () => {
+    expect(
+      instrumentMoneyPnl({
+        symbol: "GOLD",
+        direction: "BUY",
+        entry: Number.NaN,
+        exit: 2300,
+        volumeLots: 0.1,
+      }),
+    ).toBe(0);
   });
 });

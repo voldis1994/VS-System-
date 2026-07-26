@@ -6,8 +6,9 @@ import { Field, Input, Select } from "@/components/ui/input";
 import { Panel, Stat } from "@/components/ui/panel";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { useAccounts } from "@/lib/hooks";
 import { StrategyMode } from "@nexus/domain";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 const MODES = Object.values(StrategyMode);
@@ -53,15 +54,41 @@ type LabResponse = {
   windowFrom?: string;
   windowTo?: string;
   windowHours: number;
+  currency?: string;
+  moneyUnit?: string;
+  startingEquity?: number;
+  zeroTradesHint?: string;
   note?: string;
   compareAll?: boolean;
+  account?: {
+    id: string;
+    name: string;
+    baseCurrency: string;
+    accountType: string;
+    provider: string;
+    connectionStatus: string;
+    equity: number;
+  } | null;
   best: LabResult | null;
   results: LabResult[];
   config: Record<string, unknown>;
 };
 
+function money(n: number, currency = "USD") {
+  const abs = Math.abs(n);
+  const formatted = abs.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const sign = n < 0 ? "-" : "";
+  return `${sign}${formatted} ${currency}`;
+}
+
 export default function StrategyLabPage() {
   const token = useAuthStore((s) => s.accessToken);
+  const { data: accounts } = useAccounts();
+  const accountList = useMemo(() => accounts ?? [], [accounts]);
+  const [accountId, setAccountId] = useState("");
   const [symbol, setSymbol] = useState("GOLD");
   const [mode, setMode] = useState<string>(StrategyMode.SCALPING);
   const [compareAll, setCompareAll] = useState(true);
@@ -80,6 +107,17 @@ export default function StrategyLabPage() {
   const [data, setData] = useState<LabResponse | null>(null);
   const [selectedMode, setSelectedMode] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!accountId && accountList.length > 0) {
+      const preferred =
+        accountList.find((a) => a.provider === "CAPITAL" && a.connectionStatus === "CONNECTED") ??
+        accountList[0];
+      if (preferred) setAccountId(preferred.id);
+    }
+  }, [accountList, accountId]);
+
+  const currency = data?.currency ?? data?.account?.baseCurrency ?? "USD";
+
   async function run() {
     if (!token) return;
     setRunning(true);
@@ -91,6 +129,7 @@ export default function StrategyLabPage() {
         token,
         body: JSON.stringify({
           symbol,
+          accountId: accountId || undefined,
           mode,
           compareAll,
           days: 1,
@@ -110,10 +149,11 @@ export default function StrategyLabPage() {
       });
       setData(res);
       setSelectedMode(res.best?.mode ?? mode);
+      const ccy = res.currency ?? "USD";
       toast.success(
         res.compareAll
-          ? `Lab: labākā ${res.best?.mode} · ${res.best?.netProfit ?? 0}`
-          : `Lab: ${res.results[0]?.trades ?? 0} trades`,
+          ? `Lab: ${res.best?.mode} · ${money(res.best?.netProfit ?? 0, ccy)}`
+          : `Lab: ${res.results[0]?.trades ?? 0} trades · ${money(res.results[0]?.netProfit ?? 0, ccy)}`,
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Lab failed");
@@ -131,13 +171,31 @@ export default function StrategyLabPage() {
         <p className="max-w-3xl text-sm text-white/55">
           Ielādē pēdējās ~1 dienas <span className="text-accent">1m</span>{" "}
           sveces (Capital), izvēlies režīmu vai salīdzini visus — redzi outcome
-          ar TP / BE / Trailing (tā pati loģika kā LIVE).
+          ar TP / BE / Trailing. Rezultāts ={" "}
+          <span className="text-accent">nauda</span> konta valūtā.
         </p>
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Setup" className="lg:col-span-1">
           <div className="space-y-3">
+            <Field label="Account">
+              <Select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+              >
+                <option value="">— choose account —</option>
+                {accountList.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} · {a.provider} · {a.accountType} · {a.baseCurrency}
+                    {a.connectionStatus === "CONNECTED" ? " · ON" : ""}
+                  </option>
+                ))}
+              </Select>
+              <p className="mt-1 text-[11px] text-white/35">
+                Equity un valūta no konta; Capital konts = reālās 1m sveces.
+              </p>
+            </Field>
             <Field label="Symbol">
               <div className="flex gap-2">
                 <Select
@@ -319,14 +377,15 @@ export default function StrategyLabPage() {
                   hint={data.note}
                 />
                 <Stat
-                  label="Best net"
-                  value={String(data.best?.netProfit ?? 0)}
-                  hint={`${data.best?.trades ?? 0} trades`}
+                  label={`Best net (${currency})`}
+                  value={money(data.best?.netProfit ?? 0, currency)}
+                  hint={`${data.best?.trades ?? 0} trades · start ${money(data.startingEquity ?? 0, currency)}`}
+                  tone={(data.best?.netProfit ?? 0) >= 0 ? "profit" : "loss"}
                 />
                 <Stat
                   label="Best WR"
                   value={`${data.best?.winRate ?? 0}%`}
-                  hint={`DD ${data.best?.maxDrawdown ?? 0}`}
+                  hint={`DD ${money(data.best?.maxDrawdown ?? 0, currency)}`}
                 />
               </div>
 
@@ -337,9 +396,9 @@ export default function StrategyLabPage() {
                       <tr>
                         <th className="py-2 pr-3">Mode</th>
                         <th className="py-2 pr-3">Trades</th>
-                        <th className="py-2 pr-3">Net</th>
+                        <th className="py-2 pr-3">Net ({currency})</th>
                         <th className="py-2 pr-3">WR%</th>
-                        <th className="py-2">Max DD</th>
+                        <th className="py-2">Max DD ({currency})</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -367,13 +426,13 @@ export default function StrategyLabPage() {
                                 r.netProfit >= 0 ? "text-profit" : "text-loss"
                               }`}
                             >
-                              {r.netProfit}
+                              {money(r.netProfit, currency)}
                             </td>
                             <td className="py-2 pr-3 font-mono text-white/70">
                               {r.winRate}
                             </td>
                             <td className="py-2 font-mono text-white/50">
-                              {r.maxDrawdown}
+                              {money(r.maxDrawdown, currency)}
                             </td>
                           </tr>
                         );
@@ -385,6 +444,27 @@ export default function StrategyLabPage() {
 
               {active ? (
                 <Panel title={`Detail · ${active.mode}`}>
+                  {active.trades === 0 ? (
+                    <div className="mb-3 rounded-md border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-100/90">
+                      <div className="font-medium">0 treidu — režīms nav “bojāts”</div>
+                      <p className="mt-1 text-[12px] text-amber-100/70">
+                        {data.zeroTradesHint ??
+                          "Šajā 1m logā filtri turēja HOLD (score / sveces / sesija). Skaties skipped zemāk."}
+                      </p>
+                      {active.skippedTop?.length ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {active.skippedTop.map((s) => (
+                            <span
+                              key={s.reason}
+                              className="rounded border border-amber-400/20 px-2 py-0.5 font-mono text-[11px]"
+                            >
+                              {s.reason}:{s.count}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="mb-3 flex flex-wrap gap-2 text-[11px] text-white/45">
                     {Object.entries(active.exitBreakdown).map(([k, v]) => (
                       <span
@@ -402,7 +482,7 @@ export default function StrategyLabPage() {
                           <th className="py-2 pr-2">Side</th>
                           <th className="py-2 pr-2">Entry</th>
                           <th className="py-2 pr-2">Exit</th>
-                          <th className="py-2 pr-2">PnL</th>
+                          <th className="py-2 pr-2">PnL ({currency})</th>
                           <th className="py-2 pr-2">Reason</th>
                           <th className="py-2">Bars</th>
                         </tr>
@@ -438,7 +518,7 @@ export default function StrategyLabPage() {
                                   t.pnl >= 0 ? "text-profit" : "text-loss"
                                 }`}
                               >
-                                {t.pnl}
+                                {money(t.pnl, currency)}
                               </td>
                               <td className="py-1.5 pr-2 text-white/50">
                                 {t.exitReason}

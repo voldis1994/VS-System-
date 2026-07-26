@@ -342,6 +342,7 @@ export class StrategiesService {
   ) {
     const body = (raw ?? {}) as {
       symbol?: string;
+      accountId?: string;
       mode?: string;
       compareAll?: boolean;
       days?: number;
@@ -370,7 +371,40 @@ export class StrategiesService {
     // Capital max ~1000 1m bars (~16h). Request up to that for ~1 day window.
     const wantBars = Math.min(1000, Math.max(200, Math.round(days * 24 * 60)));
 
-    const candles = await this.market.getCandles(symbol, "1m", wantBars);
+    let account: {
+      id: string;
+      name: string;
+      baseCurrency: string;
+      equity: unknown;
+      accountType: string;
+      provider: string;
+      connectionStatus: string;
+    } | null = null;
+    if (body.accountId) {
+      account = await this.prisma.tradingAccount.findFirst({
+        where: { id: body.accountId, organizationId, archivedAt: null },
+        select: {
+          id: true,
+          name: true,
+          baseCurrency: true,
+          equity: true,
+          accountType: true,
+          provider: true,
+          connectionStatus: true,
+        },
+      });
+      if (!account) {
+        throw new AppError(
+          ErrorCodes.VALIDATION_FAILED,
+          "Account not found",
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    }
+
+    const candles = await this.market.getCandles(symbol, "1m", wantBars, {
+      accountId: account?.id,
+    });
     const candleSource = this.market.getCandleSource(symbol, "1m");
     if (candles.length < 100) {
       throw new AppError(
@@ -379,6 +413,12 @@ export class StrategiesService {
         HttpStatus.BAD_REQUEST,
       );
     }
+
+    const currency = account?.baseCurrency ?? "USD";
+    const startingEquity = Math.max(
+      100,
+      Number(account?.equity ?? 10_000) || 10_000,
+    );
 
     const { runStrategyBacktest } = await import("./backtest-harness");
     const config = {
@@ -411,6 +451,7 @@ export class StrategiesService {
       oneTradeOnly: true,
       closeOnlyNoFlip: false,
       volume: body.volume ?? "0.1",
+      startingEquity,
     };
 
     const modes: StrategyMode[] = body.compareAll
@@ -482,15 +523,31 @@ export class StrategiesService {
           3_600_000
         ).toFixed(2),
       ),
+      currency,
+      moneyUnit: currency,
+      startingEquity: Number(startingEquity.toFixed(2)),
+      account: account
+        ? {
+            id: account.id,
+            name: account.name,
+            baseCurrency: account.baseCurrency,
+            accountType: account.accountType,
+            provider: account.provider,
+            connectionStatus: account.connectionStatus,
+            equity: Number(account.equity),
+          }
+        : null,
       config,
       compareAll: Boolean(body.compareAll),
       results,
       best: results[0] ?? null,
+      zeroTradesHint:
+        "0 treidu ≠ režīms bojāts — filtri turēja HOLD (score / sveces / sesija). Skaties skipped iemeslus zemāk.",
       note:
         candleSource === "sim"
           ? "SIM candles — connect Capital for real history"
-          : `Capital/DB 1m · up to ~${wantBars} bars (broker max ~1000)`,
-      parity: "runtime_signal+sl_tp_be_trail+multi_tp",
+          : `PnL in ${currency} · Capital/DB 1m · ~${wantBars} bars max`,
+      parity: "runtime_signal+sl_tp_be_trail+multi_tp+money",
     };
 
     await this.audit.record({

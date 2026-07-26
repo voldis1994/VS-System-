@@ -6,6 +6,7 @@ import { StrategyMode } from "@nexus/domain";
 import {
   breakEvenStop,
   buildEqualMultiTpPlan,
+  instrumentMoneyPnl,
   instrumentPipSize,
   minProtectiveDistance,
   multiTpHit,
@@ -45,6 +46,8 @@ export type BacktestConfig = {
   oneTradeOnly?: boolean;
   closeOnlyNoFlip?: boolean;
   volume?: string;
+  /** Starting equity for money DD / equity curve (account currency) */
+  startingEquity?: number;
 };
 
 export type BacktestTrade = {
@@ -174,7 +177,8 @@ export function runStrategyBacktest(input: {
   const bars = input.candles.map(asCandle);
   const bars1m = (input.candles1m ?? []).map(asCandle);
 
-  let equity = 10_000;
+  let equity = Math.max(100, Number(cfg.startingEquity ?? 10_000) || 10_000);
+  const startEquity = equity;
   let peak = equity;
   let maxDd = 0;
   const trades: BacktestTrade[] = [];
@@ -184,11 +188,14 @@ export function runStrategyBacktest(input: {
     skipped[k] = (skipped[k] ?? 0) + 1;
   };
 
-  const pointValue = 100_000; // relative PnL scale (lot × price delta)
-  const pnlOf = (dir: "BUY" | "SELL", entry: number, exit: number, vol: number) => {
-    const delta = dir === "BUY" ? exit - entry : entry - exit;
-    return delta * pointValue * vol;
-  };
+  const pnlOf = (dir: "BUY" | "SELL", entry: number, exit: number, vol: number) =>
+    instrumentMoneyPnl({
+      symbol,
+      direction: dir,
+      entry,
+      exit,
+      volumeLots: vol,
+    });
 
   for (let i = 80; i < bars.length; i++) {
     const slice = bars.slice(0, i + 1);
@@ -527,7 +534,7 @@ export function runStrategyBacktest(input: {
   return {
     engine: "VS_PRO_V10",
     trades,
-    netProfit: equity - 10_000,
+    netProfit: equity - startEquity,
     winRate: trades.length ? wins.length / trades.length : 0,
     maxDrawdown: maxDd,
     equityCurveEnd: equity,

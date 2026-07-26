@@ -65,3 +65,39 @@ export function formatInstrumentPrice(symbol: string, price: number | string): s
   if (/OIL|WTI|BRENT/.test(s)) return n.toFixed(2);
   return n.toFixed(5);
 }
+
+/**
+ * Approximate realized PnL in account quote currency (usually USD on Capital CFDs).
+ * Uses standard contract sizes so Lab results are money units, not abstract scores.
+ */
+export function instrumentMoneyPnl(input: {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  entry: number;
+  exit: number;
+  volumeLots: number;
+}): number {
+  const entry = Number(input.entry);
+  const exit = Number(input.exit);
+  const lots = Number(input.volumeLots);
+  if (![entry, exit, lots].every((n) => Number.isFinite(n)) || lots === 0) {
+    return 0;
+  }
+  const delta = input.direction === "BUY" ? exit - entry : entry - exit;
+  const s = String(input.symbol ?? "").toUpperCase();
+
+  // Metals (Capital CFD): ~$1 per $0.01 move per 0.01 lot ⇒ $100 per $1 × 1.0 lot
+  if (/XAU|GOLD/.test(s)) return delta * 100 * lots;
+  if (/XAG|SILVER/.test(s)) return delta * 50 * lots;
+
+  // Crypto / oil / indices — $1 per 1.0 price point per 1.0 lot (CFD approx)
+  if (/BTC|BITCOIN|ETH|ETHER|CRYPTO/.test(s)) return delta * lots;
+  if (/OIL|WTI|BRENT|NATGAS|GAS/.test(s)) return delta * 10 * lots;
+  if (/US100|NAS100|US500|SPX|GER40|DE40|UK100|WALL.?ST|DAX/.test(s)) {
+    return delta * lots;
+  }
+
+  // FX: 100_000 notional per 1.0 lot → PnL in quote currency
+  // USDJPY etc. still reported in quote terms (JPY); Lab labels account currency.
+  return delta * 100_000 * lots;
+}
