@@ -132,10 +132,10 @@ export function resolveEntryWithCandleFlip(
     const oppAgreesMicro =
       (opposite === "BUY" && microBias === "bull") ||
       (opposite === "SELL" && microBias === "bear");
+    // Require clear TF agreement (not flat) — matches UI copy
     const oppAgreesTf =
       (opposite === "BUY" && tfBias === "bull") ||
-      (opposite === "SELL" && tfBias === "bear") ||
-      tfBias === "flat";
+      (opposite === "SELL" && tfBias === "bear");
     if (oppCheck.ok && oppAgreesMicro && oppAgreesTf) {
       return {
         signal: opposite,

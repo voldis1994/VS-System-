@@ -208,18 +208,24 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         ? new Date(existing[0].openTime).getTime()
         : 0;
       const fresh = Date.now() - newest < timeframeStepMs(timeframe) * 3;
-      // Fresh Capital-persisted bars OK; very stale rows are likely old sim — regenerate only if no adapter
-      if (fresh || !adapter) {
-        this.candleSourceByKey.set(key, fresh ? "db" : "sim");
+      // Sim candles are no longer persisted — fresh DB rows are Capital history.
+      // Keep them on transient Capital fetch failures (do not wipe).
+      if (fresh) {
+        this.candleSourceByKey.set(key, "db");
         return existing.reverse();
       }
-      // Stale DB with adapter that failed above — wipe and fall through to sim last resort
-      await this.prisma.candle.deleteMany({
-        where: { symbol: resolved, timeframe },
-      });
+      if (!adapter) {
+        this.candleSourceByKey.set(key, "sim");
+        // fall through to in-memory sim
+      } else {
+        // Very stale DB with adapter that failed above — wipe and regenerate UI-only sim
+        await this.prisma.candle.deleteMany({
+          where: { symbol: resolved, timeframe },
+        });
+      }
     }
 
-    if (resolved !== symbol) {
+    if (resolved !== symbol && !adapter) {
       const alt = await this.prisma.candle.findMany({
         where: { symbol, timeframe },
         orderBy: { openTime: "desc" },
@@ -564,23 +570,7 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         closeTime: new Date(openTime.getTime() + stepMs),
       };
       candles.push(candle);
-      await this.prisma.candle.upsert({
-        where: {
-          symbol_timeframe_openTime: {
-            symbol,
-            timeframe,
-            openTime,
-          },
-        },
-        create: candle,
-        update: {
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
-          volume: candle.volume,
-        },
-      });
+      // Do NOT persist sim candles — they polluted DB and bypassed live sim_candles guards
     }
     return candles;
   }

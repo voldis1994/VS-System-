@@ -268,18 +268,18 @@ export function evaluateStrategyMode(
   minScore: number,
   sessionFilter: boolean,
   opts?: { hasOpenBuy?: boolean; hasOpenSell?: boolean },
-): { signal: Signal; score: number; gate?: string; bias: string } {
+): { signal: Signal; score: number; gate?: string; bias: string; buyScore: number; sellScore: number } {
   const sessionOk = !sessionFilter || isLiquidSessionUtc();
   if (!sessionOk) {
-    return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat" };
+    return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat", buyScore: 0, sellScore: 0 };
   }
 
   const atrRatio = i.atrSlow > 0 ? i.atr / i.atrSlow : 1;
   if (atrRatio < 0.45) {
-    return { signal: "HOLD", score: 0, gate: "atr_dead", bias: "flat" };
+    return { signal: "HOLD", score: 0, gate: "atr_dead", bias: "flat", buyScore: 0, sellScore: 0 };
   }
   if (atrRatio > 3.0) {
-    return { signal: "HOLD", score: 0, gate: "atr_spike", bias: "flat" };
+    return { signal: "HOLD", score: 0, gate: "atr_spike", bias: "flat", buyScore: 0, sellScore: 0 };
   }
 
   const bullStack =
@@ -327,10 +327,10 @@ export function evaluateStrategyMode(
 
   // Soft exhaust close
   if (i.rsi > 78 && bearStack) {
-    return { signal: "CLOSE", score: 70, gate: "exhaust_long", bias: "bear" };
+    return { signal: "CLOSE", score: 70, gate: "exhaust_long", bias: "bear", buyScore: 0, sellScore: 70 };
   }
   if (i.rsi < 22 && bullStack) {
-    return { signal: "CLOSE", score: 70, gate: "exhaust_short", bias: "bull" };
+    return { signal: "CLOSE", score: 70, gate: "exhaust_short", bias: "bull", buyScore: 70, sellScore: 0 };
   }
 
   let buy = 0;
@@ -579,15 +579,16 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.RANGE: {
+      // Band touch allowed — noBreakout's strict inside-band check made RANGE unreachable
+      const rangeWidthOk = i.bbWidth <= i.bbWidthAvg * 1.15;
       pass(
         i.adx <= 20 &&
           rangeSupport &&
-          i.price <= i.bbLower &&
+          rangeWidthOk &&
           i.rsi < 38 &&
           i.stochK < 30 &&
           i.stochK > i.stochKPrev &&
-          ema21Flat &&
-          noBreakout,
+          ema21Flat,
         58,
         "buy",
         "range_long",
@@ -595,17 +596,16 @@ export function evaluateStrategyMode(
       pass(
         i.adx <= 20 &&
           rangeResist &&
-          i.price >= i.bbUpper &&
+          rangeWidthOk &&
           i.rsi > 62 &&
           i.stochK > 70 &&
           i.stochK < i.stochKPrev &&
-          ema21Flat &&
-          noBreakout,
+          ema21Flat,
         58,
         "sell",
         "range_short",
       );
-      if (i.adx > 20 || !noBreakout) gate = "not_range";
+      if (i.adx > 20 || !rangeWidthOk) gate = "not_range";
       break;
     }
     case StrategyMode.CUSTOM: {
@@ -637,19 +637,23 @@ export function evaluateStrategyMode(
           score: Math.max(buy, sell),
           gate: midRangeHold ? "mid_range" : "invalidation",
           bias: "flat",
+          buyScore: buy,
+          sellScore: sell,
         };
       }
       if (buy >= minScore && buy > sell + 10) {
-        return { signal: "BUY", score: buy, gate: "custom_long", bias: "bull" };
+        return { signal: "BUY", score: buy, gate: "custom_long", bias: "bull", buyScore: buy, sellScore: sell };
       }
       if (sell >= minScore && sell > buy + 10) {
-        return { signal: "SELL", score: sell, gate: "custom_short", bias: "bear" };
+        return { signal: "SELL", score: sell, gate: "custom_short", bias: "bear", buyScore: buy, sellScore: sell };
       }
       return {
         signal: "HOLD",
         score: Math.max(buy, sell),
         gate: Math.abs(buy - sell) < 10 ? "edge_low" : "score_low",
         bias: buy === sell ? "flat" : buy > sell ? "bull" : "bear",
+        buyScore: buy,
+        sellScore: sell,
       };
     }
     case StrategyMode.GRID: {
@@ -693,7 +697,7 @@ export function evaluateStrategyMode(
         i.price > i.bbUpper &&
         i.price > i.ema21 + 2 * i.atr
       ) {
-        return { signal: "CLOSE", score: 65, gate: "dca_exit", bias: "bear" };
+        return { signal: "CLOSE", score: 65, gate: "dca_exit", bias: "bear", buyScore: buy, sellScore: sell };
       }
       break;
     }
@@ -701,9 +705,13 @@ export function evaluateStrategyMode(
       applyMidHold = false;
       const macdUp = i.macdHist > 0 && i.macdHist >= i.macdHistPrev;
       const macdDown = i.macdHist < 0 && i.macdHist <= i.macdHistPrev;
+      // Capital often has vol=0 — use ATR expansion as volume proxy
+      const newsVolOk = i.hasVolumeData
+        ? i.volumeStrong
+        : atrRising && atrRatio >= 1.15;
       pass(
         i.gapUpAtr >= 0.5 &&
-          i.volumeStrong &&
+          newsVolOk &&
           i.adx > 25 &&
           i.plusDi > i.minusDi &&
           macdUp &&
@@ -715,7 +723,7 @@ export function evaluateStrategyMode(
       );
       pass(
         i.gapDownAtr >= 0.5 &&
-          i.volumeStrong &&
+          newsVolOk &&
           i.adx > 25 &&
           i.minusDi > i.plusDi &&
           macdDown &&
@@ -725,14 +733,14 @@ export function evaluateStrategyMode(
         "sell",
         "news_short",
       );
-      if (!i.volumeStrong) gate = "volume_low";
+      if (!newsVolOk) gate = "volume_low";
       else if (i.gapUpAtr < 0.5 && i.gapDownAtr < 0.5) gate = "no_gap";
       break;
     }
     case StrategyMode.SESSION: {
       applyMidHold = false;
       if (!isLiquidSessionUtc()) {
-        return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat" };
+        return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat", buyScore: 0, sellScore: 0 };
       }
       pass(
         (i.hasVolumeData ? i.volumeOk : true) &&
@@ -790,6 +798,8 @@ export function evaluateStrategyMode(
           score: 0,
           gate: !noBreakout ? "breakout" : i.adx > 20 ? "adx_high" : "atr_spike",
           bias: "flat",
+          buyScore: 0,
+          sellScore: 0,
         };
       }
       pass(
@@ -819,16 +829,18 @@ export function evaluateStrategyMode(
       buy = Math.min(100, cBuy);
       sell = Math.min(100, cSell);
       if (buy >= 55 && buy > sell + 10) {
-        return { signal: "BUY", score: buy, gate: "custom_long", bias: "bull" };
+        return { signal: "BUY", score: buy, gate: "custom_long", bias: "bull", buyScore: buy, sellScore: sell };
       }
       if (sell >= 55 && sell > buy + 10) {
-        return { signal: "SELL", score: sell, gate: "custom_short", bias: "bear" };
+        return { signal: "SELL", score: sell, gate: "custom_short", bias: "bear", buyScore: buy, sellScore: sell };
       }
       return {
         signal: "HOLD",
         score: Math.max(buy, sell),
         gate: "score_low",
         bias: "flat",
+        buyScore: buy,
+        sellScore: sell,
       };
     }
   }
@@ -839,6 +851,8 @@ export function evaluateStrategyMode(
       score: Math.max(buy, sell),
       gate: "mid_range",
       bias: "flat",
+      buyScore: buy,
+      sellScore: sell,
     };
   }
 
@@ -846,16 +860,18 @@ export function evaluateStrategyMode(
   sell = Math.max(0, Math.min(100, sell));
 
   if (buy >= minScore && buy >= sell + 3) {
-    return { signal: "BUY", score: buy, gate, bias: "bull" };
+    return { signal: "BUY", score: buy, gate, bias: "bull", buyScore: buy, sellScore: sell };
   }
   if (sell >= minScore && sell >= buy + 3) {
-    return { signal: "SELL", score: sell, gate, bias: "bear" };
+    return { signal: "SELL", score: sell, gate, bias: "bear", buyScore: buy, sellScore: sell };
   }
   return {
     signal: "HOLD",
     score: Math.max(buy, sell),
     gate: Math.max(buy, sell) > 0 ? "score_low" : gate,
     bias: buy === sell ? "flat" : buy > sell ? "bull" : "bear",
+    buyScore: buy,
+    sellScore: sell,
   };
 }
 

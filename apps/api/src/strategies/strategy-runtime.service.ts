@@ -312,7 +312,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         candleDirectionFilter: true,
       };
 
-      if (candleSource === "sim" || m1Source === "sim") {
+      if (
+        candleSource === "sim" ||
+        m1Source === "sim" ||
+        candleSource === "unknown" ||
+        m1Source === "unknown"
+      ) {
         lastStatus = {
           ...lastStatus,
           signal: scored.signal,
@@ -380,6 +385,24 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
+      // Flip only if opposite side independently clears mode minScore
+      if (resolved.flipped) {
+        const oppScore =
+          resolved.signal === "BUY" ? scored.buyScore : scored.sellScore;
+        if (oppScore < minScore) {
+          lastStatus = {
+            ...lastStatus,
+            signal: scored.signal,
+            skip: resolved.skip ?? "candle_filter",
+            reason: `flip_blocked_opp_score_${oppScore}<${minScore}`,
+            gate: "flip_no_confluence",
+            buyScore: scored.buyScore,
+            sellScore: scored.sellScore,
+          };
+          continue;
+        }
+      }
+
       const signal: Signal = resolved.signal;
       lastStatus = {
         ...lastStatus,
@@ -390,72 +413,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         flipped: resolved.flipped,
         flippedFrom: resolved.from,
         reason: resolved.flipped ? resolved.reason : undefined,
+        buyScore: scored.buyScore,
+        sellScore: scored.sellScore,
       };
-
-      const fingerprint = `${strategy.id}:${brokerSymbol}:${signal}`;
-      const key = `${strategy.id}:${brokerSymbol}`;
 
       // NOTE: do NOT early-return on any open trade — that blocked BUY↔SELL flips
       // (oneTradeOnly still enforced below: close opposite, then open; wait if same side).
-
-      // Flat after SL/close — allow same-direction re-entry (fingerprint used to block forever)
-      {
-        let anyOpen = false;
-        for (const accountId of accountIds) {
-          const c = await this.prisma.position.count({
-            where: {
-              organizationId: strategy.organizationId,
-              accountId,
-              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
-              OR: [{ symbol: brokerSymbol }, { symbol }],
-            },
-          });
-          if (c > 0) {
-            anyOpen = true;
-            break;
-          }
-        }
-        if (!anyOpen) {
-          this.lastFingerprint.delete(key);
-        }
-      }
-
-      const lastAt = this.lastSignalAt.get(key) ?? 0;
-      const cooldownLeftMs = cooldownMs - (Date.now() - lastAt);
-      if (cooldownLeftMs > 0) {
-        lastStatus = {
-          ...lastStatus,
-          symbol: brokerSymbol,
-          signal,
-          skip: "cooldown",
-          cooldownSec: Math.ceil(cooldownLeftMs / 1000),
-        };
-        continue;
-      }
-      if (this.lastFingerprint.get(key) === fingerprint) {
-        // Prefer clear status when a same-side trade is already open
-        let openSame = 0;
-        for (const accountId of accountIds) {
-          openSame += await this.prisma.position.count({
-            where: {
-              organizationId: strategy.organizationId,
-              accountId,
-              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
-              direction: signal,
-              OR: [{ symbol: brokerSymbol }, { symbol }],
-            },
-          });
-        }
-        lastStatus = {
-          ...lastStatus,
-          symbol: brokerSymbol,
-          signal,
-          skip: openSame > 0 ? "waiting_open_close" : "same_signal",
-          reason: openSame > 0 ? "same_side_open" : undefined,
-          openTrades: openSame > 0 ? openSame : undefined,
-        };
-        continue;
-      }
 
       lastStatus = {
         ...lastStatus,
@@ -482,10 +445,61 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      let acted = false;
-      let placedOk = false;
+      let _acted = false;
+      void _acted;
 
       for (const accountId of accountIds) {
+        const fingerprint = `${strategy.id}:${accountId}:${brokerSymbol}:${signal}`;
+        const key = `${strategy.id}:${accountId}:${brokerSymbol}`;
+
+        // Flat after SL/close on this account — allow same-direction re-entry
+        const openCount = await this.prisma.position.count({
+          where: {
+            organizationId: strategy.organizationId,
+            accountId,
+            status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+            OR: [{ symbol: brokerSymbol }, { symbol }],
+          },
+        });
+        if (openCount === 0) {
+          this.lastFingerprint.delete(key);
+        }
+
+        const lastAt = this.lastSignalAt.get(key) ?? 0;
+        const cooldownLeftMs = cooldownMs - (Date.now() - lastAt);
+        if (cooldownLeftMs > 0) {
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            signal,
+            skip: "cooldown",
+            cooldownSec: Math.ceil(cooldownLeftMs / 1000),
+            accountId,
+          };
+          continue;
+        }
+        if (this.lastFingerprint.get(key) === fingerprint) {
+          const openSame = await this.prisma.position.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+              direction: signal,
+              OR: [{ symbol: brokerSymbol }, { symbol }],
+            },
+          });
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            signal,
+            skip: openSame > 0 ? "waiting_open_close" : "same_signal",
+            reason: openSame > 0 ? "same_side_open" : undefined,
+            openTrades: openSame > 0 ? openSame : undefined,
+            accountId,
+          };
+          continue;
+        }
+
         // Account-wide open positions (not only this strategyId) — avoid double entries
         const openOnAccount = await this.prisma.position.findMany({
           where: {
@@ -525,7 +539,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               { clientRequestId: newId() },
               correlationId,
             );
-            acted = true;
+            _acted = true;
           }
           if (closeOnlyNoFlip) {
             lastStatus = {
@@ -730,8 +744,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               }`,
               severity: "SUCCESS",
             });
-            acted = true;
-            placedOk = true;
+            _acted = true;
+            this.lastSignalAt.set(key, Date.now());
+            this.lastFingerprint.set(key, fingerprint);
             lastStatus = {
               ...lastStatus,
               placed: true,
@@ -766,12 +781,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           });
           lastStatus = { ...lastStatus, placed: false, error: msg };
         }
-      }
-
-      // Cooldown only after successful place — close-only must not delay flip retry
-      if (placedOk) {
-        this.lastSignalAt.set(key, Date.now());
-        this.lastFingerprint.set(key, fingerprint);
       }
     }
 

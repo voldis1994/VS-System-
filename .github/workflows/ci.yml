@@ -43,7 +43,8 @@ jobs:
       - run: pnpm --filter @nexus/shared test
       - run: pnpm --filter @nexus/domain test
       - run: pnpm --filter @nexus/broker-adapters test
-      - run: pnpm --filter @nexus/api prisma generate
+      - run: pnpm --filter @nexus/api prisma:generate
       - run: pnpm --filter @nexus/api exec prisma migrate deploy
       - run: pnpm --filter @nexus/api exec tsc -p tsconfig.json --noEmit
       - run: pnpm --filter @nexus/web typecheck
+      - run: pnpm --filter @nexus/worker typecheck

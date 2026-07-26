@@ -21,6 +21,9 @@ import { AppError } from "../common/errors/app-error";
 
 @Injectable()
 export class PositionsService {
+  /** Consecutive empty broker snapshots per account — avoid forever-ghosts */
+  private emptyBrokerSnapshots = new Map<string, number>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly brokers: BrokerRuntimeService,
@@ -66,12 +69,21 @@ export class PositionsService {
       const liveIds = new Set(
         live.map((x) => x.brokerPositionId).filter(Boolean),
       );
-      // Empty snapshot is ambiguous (API glitch) — do not mass-close
+      // Empty snapshot is ambiguous (API glitch) — require 3 consecutive empties
       if (live.length === 0 && positions.length > 0) {
+        const n = (this.emptyBrokerSnapshots.get(accId) ?? 0) + 1;
+        this.emptyBrokerSnapshots.set(accId, n);
+        if (n < 3) {
+          console.warn(
+            `reconcileClosedAgainstBroker ${accId}: empty broker list (${n}/3) — skip ghost close`,
+          );
+          continue;
+        }
         console.warn(
-          `reconcileClosedAgainstBroker ${accId}: empty broker list — skip ghost close`,
+          `reconcileClosedAgainstBroker ${accId}: empty broker list ×${n} — closing local ghosts`,
         );
-        continue;
+      } else {
+        this.emptyBrokerSnapshots.set(accId, 0);
       }
       for (const p of positions) {
         if (!p.brokerPositionId) continue;
@@ -119,6 +131,19 @@ export class PositionsService {
         live = await adapter.getOpenPositions({ force: true });
       } catch {
         continue;
+      }
+      // Same empty-snapshot guard as reconcile — UI list must not mass-close
+      if (live.length === 0 && accountPositions.length > 0) {
+        const n = (this.emptyBrokerSnapshots.get(accountId) ?? 0) + 1;
+        this.emptyBrokerSnapshots.set(accountId, n);
+        if (n < 3) {
+          console.warn(
+            `positions.list ${accountId}: empty broker list (${n}/3) — skip ghost close`,
+          );
+          continue;
+        }
+      } else {
+        this.emptyBrokerSnapshots.set(accountId, 0);
       }
       const liveById = new Map(
         live
@@ -303,11 +328,37 @@ export class PositionsService {
       data: { status: "CLOSING" },
     });
 
-    const result = await adapter.partialClosePosition({
-      brokerPositionId: position.brokerPositionId,
-      volume: input.volume,
-      clientRequestId: input.clientRequestId,
-    });
+    let result: Awaited<ReturnType<typeof adapter.partialClosePosition>>;
+    try {
+      result = await adapter.partialClosePosition({
+        brokerPositionId: position.brokerPositionId,
+        volume: input.volume,
+        clientRequestId: input.clientRequestId,
+      });
+    } catch (err) {
+      // Restore OPEN so strategies are not blocked forever in CLOSING
+      try {
+        const live = await adapter.getOpenPositions({ force: true });
+        const stillOpen = live.some(
+          (x) => x.brokerPositionId === position.brokerPositionId,
+        );
+        await this.prisma.position.update({
+          where: { id },
+          data: {
+            status: stillOpen ? "OPEN" : "CLOSED",
+            closedAt: stillOpen ? null : new Date(),
+            volume: stillOpen ? position.volume : "0",
+            unrealizedPnl: stillOpen ? position.unrealizedPnl : "0",
+          },
+        });
+      } catch {
+        await this.prisma.position.update({
+          where: { id },
+          data: { status: "OPEN" },
+        });
+      }
+      throw err;
+    }
 
     const updated = await this.prisma.position.update({
       where: { id },
@@ -380,10 +431,44 @@ export class PositionsService {
       data: { status: "CLOSING" },
     });
 
-    const result = await adapter.closePosition({
-      brokerPositionId: position.brokerPositionId,
-      clientRequestId: input.clientRequestId,
-    });
+    let result: Awaited<ReturnType<typeof adapter.closePosition>>;
+    try {
+      result = await adapter.closePosition({
+        brokerPositionId: position.brokerPositionId,
+        clientRequestId: input.clientRequestId,
+      });
+    } catch (err) {
+      try {
+        const live = await adapter.getOpenPositions({ force: true });
+        const stillOpen = live.some(
+          (x) => x.brokerPositionId === position.brokerPositionId,
+        );
+        if (!stillOpen) {
+          // Idempotent: already gone on broker
+          result = {
+            averageClosePrice: String(position.currentPrice ?? position.averageEntry),
+            realizedPnl: "0",
+            commission: "0",
+            closedVolume: String(position.volume),
+            remainingVolume: "0",
+            positionClosed: true,
+          };
+        } else {
+          await this.prisma.position.update({
+            where: { id },
+            data: { status: "OPEN" },
+          });
+          throw err;
+        }
+      } catch (inner) {
+        if (inner === err) throw err;
+        await this.prisma.position.update({
+          where: { id },
+          data: { status: "OPEN" },
+        });
+        throw err;
+      }
+    }
 
     const updated = await this.prisma.position.update({
       where: { id },
@@ -469,9 +554,13 @@ export class PositionsService {
       correlationId,
       { silent: opts?.silent },
     );
-    // BE sends stopLevel which clears Capital native trail — re-arm trail if still enabled
+    // BE sends stopLevel which clears Capital native trail — re-arm only if trail was already armed
     let trailRearmed = false;
-    if (position.trailingEnabled && position.trailingDistance) {
+    if (
+      position.trailingEnabled &&
+      position.trailingDistance &&
+      position.trailingActivatedAt
+    ) {
       try {
         await this.modifySlTp(
           organizationId,
@@ -488,7 +577,7 @@ export class PositionsService {
         );
         trailRearmed = true;
       } catch {
-        // fall through — clear activated so autoManage can retry
+        // fall through — clear activated so autoManage can retry after arm threshold
       }
     }
     const final = await this.prisma.position.update({
@@ -497,10 +586,12 @@ export class PositionsService {
         breakEvenActivatedAt: new Date(),
         breakEvenEnabled: true,
         stopLoss: newSl,
-        // If re-arm failed, allow autoManage to arm again next tick
+        // Keep armed timestamp only if re-arm succeeded; otherwise null → autoManage waits for threshold
         trailingActivatedAt: trailRearmed
-          ? position.trailingActivatedAt ?? new Date()
-          : null,
+          ? position.trailingActivatedAt
+          : position.trailingActivatedAt && position.trailingEnabled
+            ? null
+            : position.trailingActivatedAt,
       },
     });
     await this.events.publish({
@@ -807,23 +898,48 @@ export class PositionsService {
   ) {
     const position = await this.get(organizationId, id);
     if (!body.enabled) {
-      // Clear Capital native trail → leave a fixed SL at current candidate / existing
+      // Clear Capital native trail → leave a fixed SL (never loosen vs live stop)
       const account = await this.prisma.tradingAccount.findFirst({
         where: { id: position.accountId },
         select: { provider: true },
       });
       if (account?.provider === "CAPITAL" && position.brokerPositionId) {
-        const keepSl =
-          position.stopLoss != null
-            ? String(position.stopLoss)
-            : position.currentPrice != null && position.trailingDistance != null
-              ? trailingStopCandidate(
-                  position.direction as "BUY" | "SELL",
-                  String(position.currentPrice),
-                  String(position.trailingDistance),
-                  null,
-                )
-              : undefined;
+        const adapter = this.brokers.get(position.accountId);
+        let liveSl =
+          position.stopLoss != null ? String(position.stopLoss) : null;
+        let mark =
+          position.currentPrice != null ? String(position.currentPrice) : null;
+        if (adapter) {
+          try {
+            const live = await adapter.getOpenPositions({ force: true });
+            const match = live.find(
+              (x) => x.brokerPositionId === position.brokerPositionId,
+            );
+            if (match?.stopLoss) liveSl = String(match.stopLoss);
+            if (match?.currentPrice) mark = String(match.currentPrice);
+          } catch {
+            // use local
+          }
+        }
+        const candidate =
+          mark != null && position.trailingDistance != null
+            ? trailingStopCandidate(
+                position.direction as "BUY" | "SELL",
+                mark,
+                String(position.trailingDistance),
+                liveSl,
+              )
+            : liveSl;
+        // Prefer the tighter of live SL and candidate so we never loosen
+        let keepSl = candidate ?? liveSl;
+        if (keepSl && liveSl) {
+          const dir = position.direction as "BUY" | "SELL";
+          if (dir === "BUY") {
+            keepSl = d(keepSl).gte(d(liveSl)) ? keepSl : liveSl;
+          } else {
+            keepSl = d(keepSl).lte(d(liveSl)) ? keepSl : liveSl;
+          }
+        }
         if (keepSl) {
           try {
             await this.modifySlTp(
@@ -834,8 +950,11 @@ export class PositionsService {
               correlationId,
               { silent: true },
             );
-          } catch {
-            // still disable locally
+          } catch (err) {
+            throw new AppError(
+              ErrorCodes.VALIDATION_FAILED,
+              `Trail OFF failed on broker: ${err instanceof Error ? err.message : err}`,
+            );
           }
         }
       }

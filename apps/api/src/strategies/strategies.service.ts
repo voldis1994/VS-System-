@@ -7,6 +7,7 @@ import {
   StrategyStatus,
 } from "@nexus/domain";
 import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d } from "@nexus/shared";
+import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -146,12 +147,14 @@ export class StrategiesService {
     this.runtime.resetSignals(id);
 
     const accountIds = (updated.assignedAccountIds as string[]) ?? [];
+    const assignedSymbols = (updated.assignedSymbols as string[]) ?? [];
     for (const accountId of accountIds) {
       await this.applyExitFlagsToOpenPositions(
         organizationId,
         accountId,
         configurationJson,
         updated.id,
+        assignedSymbols,
       );
     }
 
@@ -220,14 +223,22 @@ export class StrategiesService {
     const { computeIndicators, evaluateStrategyMode, modeMinScore } =
       await import("./strategy-engine");
     const symbols = (strategy.assignedSymbols as string[]) ?? ["EURUSD"];
-    const symbol = symbols[0] ?? "EURUSD";
+    const rawSymbol = symbols[0] ?? "EURUSD";
+    const symbol = resolveCapitalEpic(rawSymbol);
     const cfg = (strategy.configurationJson ?? {}) as { timeframe?: string };
     const timeframe = cfg.timeframe ?? "15m";
-    const candles = await this.prisma.candle.findMany({
+    let candles = await this.prisma.candle.findMany({
       where: { symbol, timeframe },
       orderBy: { openTime: "asc" },
       take: 800,
     });
+    if (candles.length < 100 && rawSymbol !== symbol) {
+      candles = await this.prisma.candle.findMany({
+        where: { symbol: rawSymbol, timeframe },
+        orderBy: { openTime: "asc" },
+        take: 800,
+      });
+    }
     let equity = 10000;
     let peak = equity;
     let maxDd = 0;
@@ -446,6 +457,7 @@ export class StrategiesService {
         input.accountId,
         configuration,
         strategy.id,
+        input.assignedSymbols,
       );
       return { action: "save", accountId: input.accountId, strategy };
     }
@@ -459,19 +471,32 @@ export class StrategiesService {
     return { action: "start", accountId: input.accountId, strategy: started };
   }
 
-  /** Push BE/Trail/TP from strategy config onto already-open account positions. */
+  /** Push BE/Trail/TP from strategy config onto already-open positions for this strategy/symbols. */
   private async applyExitFlagsToOpenPositions(
     organizationId: string,
     accountId: string,
     config: Record<string, unknown>,
     strategyId: string,
+    assignedSymbols?: string[],
   ) {
-    const open = await this.prisma.position.findMany({
+    const symbols = (assignedSymbols ?? []).flatMap((s) => {
+      const u = s.toUpperCase();
+      return [u, s];
+    });
+    const openAll = await this.prisma.position.findMany({
       where: {
         organizationId,
         accountId,
         status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
       },
+    });
+    const open = openAll.filter((pos) => {
+      if (pos.strategyId === strategyId) return true;
+      if (pos.strategyId && pos.strategyId !== strategyId) return false;
+      if (symbols.length === 0) return false;
+      return symbols.some(
+        (s) => pos.symbol.toUpperCase() === s.toUpperCase(),
+      );
     });
     if (open.length === 0) return;
 
@@ -484,6 +509,9 @@ export class StrategiesService {
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
 
     for (const pos of open) {
+      // Never overwrite manual trades that belong to another strategy
+      if (pos.strategyId && pos.strategyId !== strategyId) continue;
+
       const entry = Number(pos.averageEntry);
       const pip = instrumentPipSize(pos.symbol);
       const minDist = minProtectiveDistance(pos.symbol, entry);
@@ -501,15 +529,17 @@ export class StrategiesService {
           breakEvenOffset: beEnabled ? beOff.toFixed(8) : null,
           trailingEnabled: trailEnabled,
           trailingDistance: trailEnabled ? trail.toFixed(8) : null,
+          // Delayed arm — do not set trailingActivatedAt; autoManage arms after threshold
+          ...(trailEnabled ? {} : { trailingActivatedAt: null }),
         },
       });
 
-      // Push SL/TP to Capital for open positions
+      // Push fixed SL/TP only — never enable Capital native trail here (bypasses arm delay)
       try {
         const dir = pos.direction as "BUY" | "SELL";
         let stopLoss = pos.stopLoss ? String(pos.stopLoss) : null;
         if (!stopLoss && Number.isFinite(entry) && entry > 0) {
-          const slDist = Math.max(minDist * 0.85, entry * 0.0005);
+          const slDist = Math.max(minDist, entry * 0.0005);
           stopLoss = formatInstrumentPrice(
             pos.symbol,
             dir === "BUY"
@@ -535,21 +565,15 @@ export class StrategiesService {
           takeProfit = null;
         }
 
-        if (stopLoss || takeProfit !== undefined || trailEnabled) {
+        if (stopLoss || takeProfit !== undefined) {
           await this.positions.modifySlTp(
             organizationId,
             "system",
             pos.id,
-            trailEnabled
-              ? {
-                  trailingStop: true,
-                  stopDistance: trail.toFixed(8),
-                  takeProfit: tpEnabled ? takeProfit : null,
-                }
-              : {
-                  stopLoss: stopLoss ?? undefined,
-                  takeProfit,
-                },
+            {
+              stopLoss: stopLoss ?? undefined,
+              takeProfit,
+            },
             `apply-exit-${strategyId}`,
             { silent: true },
           );

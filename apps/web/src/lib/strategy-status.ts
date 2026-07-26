@@ -1,4 +1,4 @@
-/** Shared VS_PRO_V2 deployment status helpers (dashboard + strategies). */
+/** Shared VS_PRO_V10 deployment status helpers (dashboard + strategies). */
 
 export type DeploymentState = {
   lastTickAt?: string;
@@ -11,6 +11,7 @@ export type DeploymentState = {
   openTrades?: number;
   cooldownSec?: number;
   score?: number;
+  minScore?: number;
   gate?: string;
   engine?: string;
   bias?: string;
@@ -40,11 +41,15 @@ export function deploymentHint(d: DeploymentState): string | null {
   if (d.skip === "sell_vs_bullish") {
     return `SELL bloķēts pret bullish — ja BUY arī neder, gaida.`;
   }
+  if (d.gate === "flip_no_confluence") {
+    return "Flip bloķēts — pretējai pusei nav mode confluence.";
+  }
   if (d.flipped && (d.signal === "BUY" || d.signal === "SELL")) {
     return `Flip ${d.flippedFrom ?? "?"}→${d.signal} (sveces bloķēja ${d.flippedFrom ?? "?"}).`;
   }
   if (d.skip === "quality_wait" || d.gate === "score_low") {
-    return `Stratēģija gaida setup — score ${d.score ?? 0} (${d.gate ?? "…"}).`;
+    const bar = d.minScore && d.minScore > 0 ? d.minScore : 55;
+    return `Stratēģija gaida setup — score ${d.score ?? 0}/${bar}+ (${d.gate ?? "…"}).`;
   }
   if (d.gate === "mid_range") {
     return "Mid-range zona — HOLD (mazāk trokšņa).";
@@ -110,7 +115,8 @@ export function deploymentHint(d: DeploymentState): string | null {
     return `Signāls ${d.signal} — gatavojas / izpilda.`;
   }
   if (d.signal === "HOLD" && typeof d.score === "number") {
-    return `HOLD · score ${d.score}/48+.`;
+    const bar = d.minScore && d.minScore > 0 ? d.minScore : 55;
+    return `HOLD · score ${d.score}/${bar}+.`;
   }
   if (d.signal === "CLOSE") return "Close signāls.";
   return null;
@@ -126,6 +132,7 @@ export function deploymentTone(
     d.skip === "quality_wait" ||
     d.gate === "score_low" ||
     d.gate === "mid_range" ||
+    d.gate === "flip_no_confluence" ||
     d.skip === "micro_timing" ||
     d.skip === "micro_conflict" ||
     d.skip === "buy_vs_bearish" ||
@@ -138,7 +145,7 @@ export function deploymentTone(
   return "idle";
 }
 
-export function scorePercent(score: number | undefined, bar = 48): number {
+export function scorePercent(score: number | undefined, bar = 55): number {
   if (score == null || !Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round((score / bar) * 100)));
 }

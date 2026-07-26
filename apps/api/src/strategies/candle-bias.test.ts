@@ -65,4 +65,9 @@ describe("candle bias + direction filter", () => {
     expect(r.signal).toBeNull();
     expect(r.reason).toMatch(/wait_1m/);
   });
+
+  it("no flip when TF flat even if 1m agrees", () => {
+    const r = resolveEntryWithCandleFlip("BUY", "flat", "bear");
+    expect(r.signal).toBeNull();
+  });
 });

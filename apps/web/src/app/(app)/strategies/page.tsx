@@ -185,11 +185,21 @@ function buildConfiguration(d: AccountDraft) {
     atrTpMult: Number(d.atrTpMult) || 2.2,
     takeProfitEnabled: d.tpEnabled,
     breakEvenEnabled: d.beEnabled,
-    breakEvenActivationPips: Number(d.beActivationPips) || 10,
-    breakEvenOffsetPips: Number(d.beOffsetPips) || 1,
+    breakEvenActivationPips: Number.isFinite(Number(d.beActivationPips))
+      ? Number(d.beActivationPips)
+      : 10,
+    breakEvenOffsetPips: Number.isFinite(Number(d.beOffsetPips))
+      ? Number(d.beOffsetPips)
+      : 1,
     trailingEnabled: d.trailEnabled,
-    trailingDistancePips: Number(d.trailPips) || 15,
-    trailingActivationPips: Number(d.trailActPips) || Number(d.trailPips) || 15,
+    trailingDistancePips: Number.isFinite(Number(d.trailPips))
+      ? Number(d.trailPips)
+      : 15,
+    trailingActivationPips: Number.isFinite(Number(d.trailActPips))
+      ? Number(d.trailActPips)
+      : Number.isFinite(Number(d.trailPips))
+        ? Number(d.trailPips)
+        : 15,
     exitVersion: d.exitVersion,
     minAdx: 14,
     cooldownSeconds: 30,
