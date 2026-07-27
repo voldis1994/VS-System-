@@ -52,6 +52,14 @@ const MODES = [
 
 const LOTS = ["0.01", "0.02", "0.05", "0.1", "0.2", "0.5"] as const;
 
+/** Safe baseline every client can restore if they misconfigured settings. */
+const CLIENT_DEFAULTS = {
+  mode: StrategyMode.TREND as string,
+  lotSize: "0.01",
+  exit: "SCALP" as ExitVersion,
+  epic: "GOLD",
+};
+
 const EXITS: Record<
   ExitVersion,
   {
@@ -328,6 +336,44 @@ export default function ClientPortalPage() {
     }
   }
 
+  async function resetToDefaults() {
+    if (!token || !server) return;
+    setBusy(true);
+    setError(null);
+    setStatusMsg(null);
+    const d = CLIENT_DEFAULTS;
+    setMode(d.mode);
+    setLotSize(d.lotSize);
+    setExit(d.exit);
+    setEpic(d.epic);
+    setMarketQ("");
+    const body = {
+      mode: d.mode,
+      assignedSymbols: [d.epic],
+      configuration: buildConfig({ lotSize: d.lotSize, exit: d.exit }),
+    };
+    try {
+      if (strategy?.status === "RUNNING") {
+        await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
+          method: "POST",
+          token,
+          body: JSON.stringify({ ...body, action: "stop" }),
+        });
+      }
+      await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ ...body, action: "save" }),
+      });
+      setStatusMsg("Default režīms atjaunots");
+      await loadSession(token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Neizdevās atjaunot default");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!server || showServer) {
     return (
       <div className={`${shell} px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2.75rem,env(safe-area-inset-top))]`}>
@@ -550,6 +596,18 @@ export default function ClientPortalPage() {
 
         {error ? <p className="text-[13px] text-[#c97a8a]">{error}</p> : null}
         {statusMsg ? <p className="text-[13px] text-[#9dceb4]">{statusMsg}</p> : null}
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void resetToDefaults()}
+          className="mt-1 w-full border border-[#3a4d62] bg-[#0c1219] py-3.5 text-[11px] font-semibold tracking-[0.2em] text-[#c5d4e3] disabled:opacity-40"
+        >
+          DEFAULT
+        </button>
+        <p className="text-center text-[10px] leading-relaxed text-[#5c6d80]">
+          TREND · GOLD · 0.01 · Scalp — aptur un atjauno sākuma režīmu
+        </p>
 
         <div className="grid grid-cols-3 gap-1.5 pt-1">
           <button
