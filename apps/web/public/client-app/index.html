@@ -3,136 +3,50 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — Client Mockup</title>
+  <title>VS System — 1:1 Mockup</title>
   <style>
     :root {
-      --bg: #07090c;
       --teal: #00ffc2;
       --muted: rgba(244, 247, 246, 0.55);
-      --phone-w: 390px;
-      --phone-h: 844px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       min-height: 100%;
-      background:
-        radial-gradient(1000px 520px at 50% -8%, rgba(0, 255, 194, 0.09), transparent 55%),
-        var(--bg);
+      background: #0a0c0f;
       color: #f4f7f6;
       font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     }
     .stage {
       min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 22px 14px 36px;
-      gap: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 20px 12px 28px;
     }
     .hint {
-      max-width: 420px;
       text-align: center;
       color: var(--muted);
       font-size: 13px;
-      line-height: 1.45;
+      line-height: 1.4;
+      max-width: 360px;
     }
     .hint strong { color: var(--teal); }
-    .phone {
-      width: min(100%, var(--phone-w));
-      height: min(92vh, var(--phone-h));
-      aspect-ratio: 390 / 844;
-      border-radius: 44px;
-      background: #000;
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      box-shadow: 0 40px 110px rgba(0, 0, 0, 0.7);
-      position: relative;
-      overflow: hidden;
+    .frame {
+      width: min(100%, 420px);
+      line-height: 0;
     }
-    .screen {
-      position: absolute;
-      inset: 0;
+    .frame img {
       width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: center top;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.28s ease;
+      height: auto;
+      display: none;
+      border-radius: 8px;
       user-select: none;
       -webkit-user-drag: none;
-    }
-    .screen.on {
-      opacity: 1;
-      pointer-events: auto;
-    }
-    .hotspots {
-      position: absolute;
-      inset: 0;
-      z-index: 5;
-    }
-    .hot {
-      position: absolute;
-      border: 0;
-      background: transparent;
       cursor: pointer;
-      border-radius: 18px;
     }
-    .hot:focus-visible {
-      outline: 2px solid rgba(0, 255, 194, 0.65);
-      outline-offset: 2px;
-    }
-    /* Face ID screen → unlock */
-    #hs-faceid .hot-unlock {
-      left: 10%;
-      right: 10%;
-      bottom: 9%;
-      height: 9%;
-    }
-    #hs-faceid .hot-scan {
-      left: 22%;
-      right: 22%;
-      top: 34%;
-      height: 28%;
-      border-radius: 28px;
-    }
-    /* Home → positions/chart */
-    #hs-home .hot-positions {
-      left: 6%;
-      right: 6%;
-      bottom: 8%;
-      height: 9.5%;
-    }
-    #hs-home .hot-profile {
-      left: 4%;
-      top: 7%;
-      width: 28%;
-      height: 8%;
-    }
-    /* Chart → profile / back home */
-    #hs-chart .hot-back {
-      left: 2%;
-      top: 7%;
-      width: 12%;
-      height: 6%;
-    }
-    #hs-chart .hot-settings {
-      right: 2%;
-      bottom: 2%;
-      width: 20%;
-      height: 9%;
-    }
-    /* Profile tabs */
-    #hs-profile .hot-dash {
-      left: 0;
-      bottom: 2%;
-      width: 20%;
-      height: 10%;
-    }
-    #hs-profile .hot-positions {
-      left: 20%;
-      bottom: 2%;
-      width: 20%;
-      height: 10%;
-    }
+    .frame img.on { display: block; }
     .nav {
       display: flex;
       gap: 8px;
@@ -140,8 +54,8 @@
       justify-content: center;
     }
     .nav button {
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.03);
       color: var(--muted);
       border-radius: 999px;
       padding: 9px 14px;
@@ -157,14 +71,14 @@
     @media (max-width: 480px) {
       .stage { padding: 0; gap: 0; }
       .hint, .nav { display: none; }
-      .phone {
+      .frame { width: 100%; min-height: 100vh; min-height: 100dvh; }
+      .frame img {
         width: 100%;
         height: 100vh;
         height: 100dvh;
+        object-fit: contain;
+        background: #000;
         border-radius: 0;
-        border: 0;
-        box-shadow: none;
-        aspect-ratio: auto;
       }
     }
   </style>
@@ -172,32 +86,15 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>1:1 client mockup</strong> — sākotnējais HUD Face ID dizains.<br />
-      Spied ekrānā vai pogās zemāk, lai pārslēgtu skatus.
+      <strong>1:1 mockup</strong> — tieši šis dizains, bez ekstra rāmja.<br />
+      Spied attēlu = nākamais ekrāns.
     </p>
 
-    <div class="phone" id="phone">
-      <img class="screen on" id="scr-faceid" src="./screens/faceid.png" alt="Face ID lock" />
-      <img class="screen" id="scr-home" src="./screens/home.png" alt="Home equity" />
-      <img class="screen" id="scr-chart" src="./screens/chart.png" alt="Chart positions" />
-      <img class="screen" id="scr-profile" src="./screens/profile.png" alt="Client profile" />
-
-      <div class="hotspots" id="hs-faceid">
-        <button class="hot hot-scan" data-go="home" aria-label="Unlock with Face ID"></button>
-        <button class="hot hot-unlock" data-go="home" aria-label="Face ID or Passcode"></button>
-      </div>
-      <div class="hotspots" id="hs-home" hidden>
-        <button class="hot hot-profile" data-go="profile" aria-label="Open profile"></button>
-        <button class="hot hot-positions" data-go="chart" aria-label="Open positions"></button>
-      </div>
-      <div class="hotspots" id="hs-chart" hidden>
-        <button class="hot hot-back" data-go="home" aria-label="Back to home"></button>
-        <button class="hot hot-settings" data-go="profile" aria-label="Open settings"></button>
-      </div>
-      <div class="hotspots" id="hs-profile" hidden>
-        <button class="hot hot-dash" data-go="home" aria-label="Dashboard"></button>
-        <button class="hot hot-positions" data-go="chart" aria-label="Positions"></button>
-      </div>
+    <div class="frame" id="frame">
+      <img class="on" id="img-faceid" src="./screens/faceid.png" alt="VS System Face ID" />
+      <img id="img-home" src="./screens/home.png" alt="VS System Home" />
+      <img id="img-chart" src="./screens/chart.png" alt="VS System Chart" />
+      <img id="img-profile" src="./screens/profile.png" alt="VS System Profile" />
     </div>
 
     <div class="nav" id="nav">
@@ -209,31 +106,29 @@
   </div>
 
   <script>
-    const screens = ["faceid", "home", "chart", "profile"];
-    let current = "faceid";
+    const order = ["faceid", "home", "chart", "profile"];
+    let i = 0;
 
     function show(id) {
-      if (!screens.includes(id)) return;
-      current = id;
-      for (const s of screens) {
-        document.getElementById("scr-" + s).classList.toggle("on", s === id);
-        const hs = document.getElementById("hs-" + s);
-        if (hs) hs.hidden = s !== id;
+      const idx = order.indexOf(id);
+      if (idx < 0) return;
+      i = idx;
+      for (const s of order) {
+        document.getElementById("img-" + s).classList.toggle("on", s === id);
       }
       document.querySelectorAll("#nav button").forEach((b) => {
         b.classList.toggle("on", b.dataset.go === id);
       });
     }
 
-    document.getElementById("phone").addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-go]");
-      if (!btn) return;
-      show(btn.dataset.go);
+    document.getElementById("frame").addEventListener("click", () => {
+      show(order[(i + 1) % order.length]);
     });
     document.getElementById("nav").addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-go]");
-      if (!btn) return;
-      show(btn.dataset.go);
+      const b = e.target.closest("[data-go]");
+      if (!b) return;
+      e.stopPropagation();
+      show(b.dataset.go);
     });
   </script>
 </body>
