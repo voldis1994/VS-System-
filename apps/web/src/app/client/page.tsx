@@ -178,10 +178,10 @@ export default function ClientPortalPage() {
   const [strategy, setStrategy] = useState<PortalStrategy | null>(null);
   const [openPositions, setOpenPositions] = useState(0);
 
-  const [mode, setMode] = useState<string>(StrategyMode.TREND);
-  const [lotSize, setLotSize] = useState("0.01");
-  const [exit, setExit] = useState<ExitVersion>("SCALP");
-  const [epic, setEpic] = useState("GOLD");
+  const [mode, setMode] = useState<string>(CLIENT_DEFAULTS.mode);
+  const [lotSize, setLotSize] = useState(CLIENT_DEFAULTS.lotSize);
+  const [exit, setExit] = useState<ExitVersion>(CLIENT_DEFAULTS.exit);
+  const [epic, setEpic] = useState(CLIENT_DEFAULTS.epic);
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [marketQ, setMarketQ] = useState("");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
