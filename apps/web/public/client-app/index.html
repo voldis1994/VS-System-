@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — Real Face Contour</title>
+  <title>VS System — Face Avatar</title>
   <style>
     :root {
       --teal: #00ffc2;
@@ -40,13 +40,12 @@
     .screen {
       position: absolute; inset: 0; display: none; flex-direction: column;
       padding: 58px 16px 88px;
-      background: radial-gradient(700px 320px at 85% -5%, rgba(0,255,194,.14), transparent 50%), #050608;
+      background: radial-gradient(700px 360px at 50% 35%, rgba(0,255,194,.1), transparent 55%), #050608;
     }
     .screen.active { display: flex; }
 
     .brand { font-size: 52px; font-weight: 800; letter-spacing: -.06em; line-height: .85; }
     .brand span { display: block; font-size: 11px; letter-spacing: .42em; margin-top: 6px; color: var(--muted); }
-
     .top-meta {
       display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; align-items: flex-start;
     }
@@ -55,43 +54,40 @@
     .stats { text-align: right; font-size: 10px; line-height: 1.65; color: var(--muted); }
     .stats b { color: #fff; }
 
-    .view {
-      position: relative; flex: 1; margin: 14px 0 12px; border-radius: 22px; overflow: hidden;
-      border: 1px solid rgba(0,255,194,.25);
-      background: #000;
+    /* Avatar stage — no video, no frame */
+    .avatar-stage {
+      position: relative;
+      flex: 1;
       min-height: 280px;
+      margin: 8px 0 10px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
     }
-    .view video, .view canvas {
-      position: absolute; inset: 0; width: 100%; height: 100%;
-      object-fit: cover; transform: scaleX(-1);
+    .avatar-stage.dash { min-height: 220px; flex: 0 0 220px; }
+    .avatar-stage canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
     }
-    .view canvas { z-index: 2; }
-    .view video { z-index: 1; filter: brightness(.55) contrast(1.1) saturate(.7); }
-    .corners { position: absolute; inset: 14px; z-index: 3; pointer-events: none; }
-    .c { position: absolute; width: 28px; height: 28px; border: 2px solid var(--teal); }
-    .c.tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
-    .c.tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
-    .c.bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
-    .c.br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
-    .streak {
-      position: absolute; left: -20%; top: 40%; width: 140%; height: 2px; z-index: 3; pointer-events: none;
-      background: linear-gradient(90deg, transparent, var(--teal), transparent);
-      transform: rotate(-28deg); opacity: .55; animation: streak 2.6s ease-in-out infinite;
-    }
-    @keyframes streak {
-      0%,100% { opacity: .2; transform: rotate(-28deg) translateY(-40px); }
-      50% { opacity: .9; transform: rotate(-28deg) translateY(40px); }
+    /* hidden camera — tracking only, never shown */
+    .hidden-cam {
+      position: absolute;
+      width: 1px; height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      overflow: hidden;
     }
 
     .perm {
       position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
-      background: rgba(0,0,0,.72); padding: 20px; text-align: center;
+      text-align: center; padding: 20px;
     }
     .perm button {
       margin-top: 12px; border: 0; background: var(--teal); color: #031410;
       font-weight: 800; padding: 12px 18px; border-radius: 999px; cursor: pointer; width: min(100%, 240px);
     }
-    .cam-status { font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 8px; }
+    .cam-status { font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 4px; }
     .cam-status.on { color: var(--teal); }
 
     .unlock-btn {
@@ -103,17 +99,16 @@
 
     .hello { font-size: 12px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
     .equity { font-size: 42px; font-weight: 800; letter-spacing: -.04em; }
-    .equity-row { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 10px; }
+    .equity-row { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 8px; }
     .pill {
       font-size: 11px; padding: 6px 10px; border-radius: 999px; color: var(--teal);
       background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.25);
     }
-    .dash-view { height: 230px; margin-bottom: 10px; }
     .chart-wrap {
       flex: 1; min-height: 120px; border-radius: 16px; border: 1px solid var(--line);
       overflow: hidden; margin-bottom: 10px; background: rgba(255,255,255,.02);
     }
-    .chart-wrap canvas { width: 100%; height: 100%; display: block; transform: none !important; }
+    .chart-wrap canvas { width: 100%; height: 100%; display: block; }
     .mini-card {
       border: 1px solid var(--line); border-radius: 16px; padding: 12px;
       display: flex; justify-content: space-between; background: rgba(255,255,255,.03); cursor: pointer;
@@ -152,6 +147,10 @@
       opacity: 0; transition: .25s; z-index: 60; pointer-events: none; white-space: nowrap;
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .waiting {
+      position: absolute; color: var(--muted); font-size: 12px; letter-spacing: .08em;
+      text-transform: uppercase; pointer-events: none;
+    }
     @media (max-width: 480px) {
       .stage { padding: 0; } .hint { display: none; }
       .phone { width: 100%; height: 100vh; height: 100dvh; border-radius: 0; border: 0; box-shadow: none; }
@@ -162,14 +161,19 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>Īstā sejas kontūra</strong> — MediaPipe zīmē wireframe uz Tavas sejas no kameras.<br />
-      Atļauj kameru, tad kustini galvu.
+      <strong>Avatar mode</strong> — kamera tikai trackingam.<br />
+      Redzams tikai wireframe avatārs, bez atspulga un bez rāmja.
     </p>
 
     <div class="phone">
       <div class="notch"></div>
-      <div class="status"><span id="clock">9:41</span><span>FACE MESH</span></div>
+      <div class="status"><span id="clock">9:41</span><span>AVATAR</span></div>
       <div class="toast" id="toast">…</div>
+
+      <!-- hidden camera feed -->
+      <div class="hidden-cam">
+        <video id="cam" playsinline autoplay muted></video>
+      </div>
 
       <section class="screen active" id="lock">
         <div class="brand">VS<span>SYSTEM</span></div>
@@ -183,18 +187,13 @@
         </div>
         <div class="cam-status" id="camStatus">Gaida kameru…</div>
 
-        <div class="view" id="lockView">
-          <video id="camLock" playsinline autoplay muted></video>
-          <canvas id="meshLock"></canvas>
-          <div class="corners">
-            <div class="c tl"></div><div class="c tr"></div>
-            <div class="c bl"></div><div class="c br"></div>
-          </div>
-          <div class="streak"></div>
+        <div class="avatar-stage" id="lockStage">
+          <canvas id="avatarLock"></canvas>
+          <div class="waiting" id="waitLock">Avatar</div>
           <div class="perm" id="permBox">
             <div>
-              Ieslēdz kameru, lai redzētu<br /><strong style="color:var(--teal)">īsto sejas kontūru</strong>
-              <br /><button id="startCam">Start Face Mesh</button>
+              Kameras atspulgs netiks rādīts —<br />tikai <strong style="color:var(--teal)">sejas avatārs</strong>
+              <br /><button id="startCam">Start Avatar</button>
             </div>
           </div>
         </div>
@@ -203,19 +202,14 @@
       </section>
 
       <section class="screen" id="home">
-        <div class="hello">Labdien, Anna · live face</div>
+        <div class="hello">Labdien, Anna · avatar</div>
         <div class="equity-row">
           <div class="equity" id="equity">€8,240</div>
-          <div class="pill">MESH · ON</div>
+          <div class="pill">AVATAR · LIVE</div>
         </div>
-        <div class="view dash-view" id="dashView">
-          <video id="camDash" playsinline autoplay muted></video>
-          <canvas id="meshDash"></canvas>
-          <div class="corners">
-            <div class="c tl"></div><div class="c tr"></div>
-            <div class="c bl"></div><div class="c br"></div>
-          </div>
-          <div class="streak"></div>
+        <div class="avatar-stage dash" id="dashStage">
+          <canvas id="avatarDash"></canvas>
+          <div class="waiting" id="waitDash">Avatar</div>
         </div>
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
         <div class="mini-card" data-go="positions">
@@ -247,7 +241,7 @@
         <div class="hello">Private client</div>
         <div class="mono-ak">AK</div>
         <div class="row"><span>Name</span><b>Anna K.</b></div>
-        <div class="row"><span>Face mesh</span><b style="color:var(--teal)">REAL CONTOUR</b></div>
+        <div class="row"><span>Face</span><b style="color:var(--teal)">AVATAR ONLY</b></div>
         <div class="row"><span>Strategy</span><b>SCALPING · US100</b></div>
         <button class="lock-again" id="lockAgain">Lock</button>
       </section>
@@ -265,7 +259,6 @@
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
 
-    // Face oval + feature contours (MediaPipe indices) — real face outline like the mockup
     const OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
     const LIP_OUT = [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185];
     const LIP_IN = [78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191];
@@ -273,8 +266,6 @@
     const RIGHT_EYE = [263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466];
     const LEFT_BROW = [70,63,105,66,107,55,65,52,53,46];
     const RIGHT_BROW = [300,293,334,296,336,285,295,282,283,276];
-    const NOSE = [168,6,197,195,5,4,1,19,94,2,164,0,11,12,13,14,15,16,17,18,200,199,175];
-    // Tessellation-ish cheek/mesh lines for “wireframe face” look
     const MESH_LINES = [
       [234,93,132,58,172,136,150,149,176,148,152],
       [454,323,361,288,397,365,379,378,400,377,152],
@@ -283,103 +274,128 @@
       [33,133,362,263],
       [61,291],
       [1,4,5,195,197,6,168,8,9,151,10],
-      [234,127,162,21,54,103,67,109,10,338,297,332,284,251,389,356,454],
     ];
 
     let landmarker = null;
     let stream = null;
     let unlocked = false;
     let lastVideoTime = -1;
-    const camLock = $("#camLock");
-    const camDash = $("#camDash");
-    const meshLock = $("#meshLock");
-    const meshDash = $("#meshDash");
-    const ctxLock = meshLock.getContext("2d");
-    const ctxDash = meshDash.getContext("2d");
+    const cam = $("#cam");
+    const cLock = $("#avatarLock");
+    const cDash = $("#avatarDash");
+    const ctxL = cLock.getContext("2d");
+    const ctxD = cDash.getContext("2d");
 
     function showToast(m) {
       const t = $("#toast");
       t.textContent = m; t.classList.add("show");
-      setTimeout(() => t.classList.remove("show"), 1500);
+      setTimeout(() => t.classList.remove("show"), 1400);
     }
     function setScreen(id) {
       $$(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
       $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
-      resizeMeshes();
+      resizeAvatars();
+    }
+    function resizeAvatars() {
+      for (const [stage, canvas] of [
+        [$("#lockStage"), cLock],
+        [$("#dashStage"), cDash],
+      ]) {
+        const w = stage.clientWidth, h = stage.clientHeight;
+        if (!w || !h) continue;
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = w + "px";
+        canvas.style.height = h + "px";
+        canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
     }
 
-    function fitCanvas(video, canvas) {
-      const w = video.clientWidth || video.videoWidth;
-      const h = video.clientHeight || video.videoHeight;
-      if (!w || !h) return;
-      const dpr = Math.min(devicePixelRatio || 1, 2);
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
-      canvas.style.width = w + "px";
-      canvas.style.height = h + "px";
-      const ctx = canvas.getContext("2d");
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    /** Map landmarks into a centered avatar box (no camera mirror). */
+    function toAvatarPoints(lm, w, h) {
+      let minX = 1, maxX = 0, minY = 1, maxY = 0;
+      for (const i of OVAL) {
+        const p = lm[i];
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+      const bw = Math.max(maxX - minX, 0.05);
+      const bh = Math.max(maxY - minY, 0.05);
+      const size = Math.min(w, h) * 0.78;
+      const scale = size / Math.max(bw, bh);
+      // mirror X so head turns feel natural (like looking in avatar space)
+      const cx = w / 2;
+      const cy = h / 2 + h * 0.02;
+      const midX = (minX + maxX) / 2;
+      const midY = (minY + maxY) / 2;
+
+      return lm.map((p) => ({
+        x: cx - (p.x - midX) * scale,
+        y: cy + (p.y - midY) * scale,
+      }));
     }
 
-    function resizeMeshes() {
-      fitCanvas(camLock, meshLock);
-      fitCanvas(camDash, meshDash);
-    }
-
-    function drawPath(ctx, lm, idx, w, h, close = true) {
-      if (!idx.length) return;
+    function drawPath(ctx, pts, idx, close = true) {
       ctx.beginPath();
       idx.forEach((i, n) => {
-        const p = lm[i];
-        const x = p.x * w;
-        const y = p.y * h;
-        n ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        const p = pts[i];
+        n ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y);
       });
       if (close) ctx.closePath();
       ctx.stroke();
     }
 
-    function drawMesh(ctx, lm, w, h) {
+    function drawAvatar(ctx, lm, w, h) {
       ctx.clearRect(0, 0, w, h);
       if (!lm) return;
+      const pts = toAvatarPoints(lm, w, h);
 
-      // soft glow underlay
+      // ambient glow disc behind avatar
       ctx.save();
-      ctx.strokeStyle = "rgba(0,255,194,0.25)";
-      ctx.lineWidth = 3.5;
+      const g = ctx.createRadialGradient(w/2, h/2, 10, w/2, h/2, Math.min(w,h)*0.42);
+      g.addColorStop(0, "rgba(0,255,194,0.12)");
+      g.addColorStop(1, "rgba(0,255,194,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(w/2, h/2, Math.min(w,h)*0.42, 0, Math.PI*2);
+      ctx.fill();
+
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
-      drawPath(ctx, lm, OVAL, w, h, true);
 
-      // main teal contour
+      // soft underlay
+      ctx.strokeStyle = "rgba(0,255,194,0.22)";
+      ctx.lineWidth = 4;
+      drawPath(ctx, pts, OVAL, true);
+
+      // main contour
+      ctx.shadowColor = "rgba(0,255,194,0.85)";
+      ctx.shadowBlur = 14;
       ctx.strokeStyle = "#00ffc2";
-      ctx.lineWidth = 1.35;
-      ctx.shadowColor = "rgba(0,255,194,0.75)";
-      ctx.shadowBlur = 10;
-      drawPath(ctx, lm, OVAL, w, h, true);
+      ctx.lineWidth = 1.5;
+      drawPath(ctx, pts, OVAL, true);
 
-      ctx.lineWidth = 1.1;
-      ctx.shadowBlur = 6;
-      drawPath(ctx, lm, LEFT_EYE, w, h, true);
-      drawPath(ctx, lm, RIGHT_EYE, w, h, true);
-      drawPath(ctx, lm, LEFT_BROW, w, h, false);
-      drawPath(ctx, lm, RIGHT_BROW, w, h, false);
-      drawPath(ctx, lm, LIP_OUT, w, h, true);
-      ctx.lineWidth = 0.8;
-      drawPath(ctx, lm, LIP_IN, w, h, true);
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 1.15;
+      drawPath(ctx, pts, LEFT_EYE, true);
+      drawPath(ctx, pts, RIGHT_EYE, true);
+      drawPath(ctx, pts, LEFT_BROW, false);
+      drawPath(ctx, pts, RIGHT_BROW, false);
+      drawPath(ctx, pts, LIP_OUT, true);
+      ctx.lineWidth = 0.85;
+      drawPath(ctx, pts, LIP_IN, true);
 
-      // wireframe density like mockup
-      ctx.strokeStyle = "rgba(0,255,194,0.45)";
-      ctx.lineWidth = 0.7;
       ctx.shadowBlur = 0;
-      for (const line of MESH_LINES) drawPath(ctx, lm, line, w, h, false);
+      ctx.strokeStyle = "rgba(0,255,194,0.4)";
+      ctx.lineWidth = 0.7;
+      for (const line of MESH_LINES) drawPath(ctx, pts, line, false);
 
-      // landmark dots on key points (subtle)
       ctx.fillStyle = "#00ffc2";
-      for (const i of [1, 33, 263, 61, 291, 10, 152]) {
-        const p = lm[i];
+      for (const i of [1, 33, 263, 61, 291]) {
+        const p = pts[i];
         ctx.beginPath();
-        ctx.arc(p.x * w, p.y * h, 1.6, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
@@ -404,44 +420,43 @@
     }
 
     async function startCamera() {
-      $("#camStatus").textContent = "Ielādē face model…";
+      $("#camStatus").textContent = "Ielādē model…";
       try {
         if (!landmarker) await initLandmarker();
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 960 } },
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
           audio: false,
         });
-        camLock.srcObject = stream;
-        camDash.srcObject = stream;
-        await camLock.play();
-        await camDash.play().catch(() => {});
+        cam.srcObject = stream;
+        await cam.play();
         $("#permBox").style.display = "none";
         $("#unlockBtn").style.display = "flex";
-        $("#camStatus").textContent = "Live · īstā sejas kontūra";
+        $("#camStatus").textContent = "Avatar live · bez atspulga";
         $("#camStatus").classList.add("on");
-        showToast("Face contour ON");
-        resizeMeshes();
+        $("#waitLock").style.display = "none";
+        $("#waitDash").style.display = "none";
+        showToast("Avatar ON");
+        resizeAvatars();
         loop();
       } catch (e) {
         console.error(e);
-        $("#camStatus").textContent = "Atļauj kameru browserī";
+        $("#camStatus").textContent = "Atļauj kameru";
         showToast("Camera permission needed");
       }
     }
 
     function loop() {
       requestAnimationFrame(loop);
-      if (!landmarker || camLock.readyState < 2) return;
-      if (camLock.currentTime === lastVideoTime) return;
-      lastVideoTime = camLock.currentTime;
-
-      const res = landmarker.detectForVideo(camLock, performance.now());
+      if (!landmarker || cam.readyState < 2) return;
+      if (cam.currentTime === lastVideoTime) return;
+      lastVideoTime = cam.currentTime;
+      const res = landmarker.detectForVideo(cam, performance.now());
       const lm = res.faceLandmarks?.[0] || null;
 
-      const wL = camLock.clientWidth, hL = camLock.clientHeight;
-      const wD = camDash.clientWidth, hD = camDash.clientHeight;
-      if (wL && hL) drawMesh(ctxLock, lm, wL, hL);
-      if (unlocked && wD && hD) drawMesh(ctxDash, lm, wD, hD);
+      const wL = $("#lockStage").clientWidth, hL = $("#lockStage").clientHeight;
+      const wD = $("#dashStage").clientWidth, hD = $("#dashStage").clientHeight;
+      if (wL && hL) drawAvatar(ctxL, lm, wL, hL);
+      if (unlocked && wD && hD) drawAvatar(ctxD, lm, wD, hD);
     }
 
     $("#startCam").addEventListener("click", startCamera);
@@ -449,7 +464,7 @@
       unlocked = true;
       $("#tabs").classList.add("show");
       setScreen("home");
-      showToast("Dashboard · face mesh live");
+      showToast("Dashboard · avatar");
       startChart();
     });
     $("#lockAgain").addEventListener("click", () => {
@@ -462,9 +477,8 @@
       if (b) setScreen(b.dataset.tab);
     });
     $$("[data-go]").forEach((el) => el.addEventListener("click", () => setScreen(el.dataset.go)));
-    window.addEventListener("resize", resizeMeshes);
+    window.addEventListener("resize", resizeAvatars);
 
-    // clock + chart
     const tick = () => {
       $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     };
@@ -523,7 +537,7 @@
       }, 900);
     }
     window.addEventListener("resize", resizeChart);
-    seed(); requestAnimationFrame(resizeChart);
+    seed(); requestAnimationFrame(() => { resizeAvatars(); resizeChart(); });
   </script>
 </body>
 </html>
