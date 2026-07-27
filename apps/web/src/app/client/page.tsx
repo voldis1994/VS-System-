@@ -1,6 +1,6 @@
 "use client";
 
-import { StrategyMode } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe } from "@nexus/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
   apiBaseFromConfig,
@@ -59,6 +59,115 @@ const MODES = [
 ] as const;
 
 const LOTS = ["0.01", "0.02", "0.05", "0.1", "0.2", "0.5"] as const;
+
+/** Client-facing Latvian guide for every strategy mode. */
+const STRATEGY_GUIDE: Record<
+  string,
+  { summary: string; when: string; risk: string; tf: string }
+> = {
+  [StrategyMode.TREND]: {
+    summary: "Seko galvenajai tendencei — ieiet pēc atvilkuma, nevis pret trendu.",
+    when: "Labāk, kad tirgus skaidri iet uz augšu vai leju.",
+    risk: "Range dienās var dabūt viltus signālus.",
+    tf: "15m struktūra + 1m ieeja",
+  },
+  [StrategyMode.MOMENTUM]: {
+    summary: "Ķer spēcīgu izrāvienu / paātrinājumu, kad cena “aizskrien”.",
+    when: "Volatilitātes un ziņu impulsos.",
+    risk: "Vēla ieeja = pērc virsotni / pārdod dibenu.",
+    tf: "15m ekspansija + 1m timing",
+  },
+  [StrategyMode.PULLBACK]: {
+    summary: "Gaida atvilkumu trendā (pie EMA zonām) un tad turpina virzienu.",
+    when: "Stabilā trendā ar tīriem pullbackiem.",
+    risk: "Ja trends jau beidzies, pullback kļūst par apgriezienu.",
+    tf: "15m pull + 1m apstiprinājums",
+  },
+  [StrategyMode.BREAKOUT]: {
+    summary: "Gaida saspiešanu un izlaušanos no līmeņa / diapazona.",
+    when: "Pēc klusas konsolidācijas.",
+    risk: "Daudz false break — SL jābūt loģiskam.",
+    tf: "15m break + 1m apstiprinājums",
+  },
+  [StrategyMode.SCALPING]: {
+    summary: "Ātri, mazi gājieni uz 1m — biežākas darījumi, mazāks mērķis.",
+    when: "Aktīvās sesijās ar labu likviditāti.",
+    risk: "Spread un komisija “apēd” peļņu, ja lot/exit pārāk agresīvs.",
+    tf: "Native 1m",
+  },
+  [StrategyMode.MEAN_REVERSION]: {
+    summary: "Fade ekstremumus — gaida atgriešanos pie vidējā, nevis turpinājumu.",
+    when: "Klusā, zema ADX / sideways tirgū.",
+    risk: "Stiprā trendā mean-reversion sāp.",
+    tf: "15m ekstremumi",
+  },
+  [StrategyMode.REVERSAL]: {
+    summary: "Meklē apgriezienu pēc ekstremuma / divergences.",
+    when: "Pēc ilgstoša move un noguruma pazīmēm.",
+    risk: "Agri griezt pret trendu = lieli SL.",
+    tf: "15m divergences",
+  },
+  [StrategyMode.RANGE]: {
+    summary: "Tirgojas diapazonā: pirkt zemu, pārdot augstu robežās.",
+    when: "Skaidrs sideways ar definētām robežām.",
+    risk: "Breakout dienās range loģika sabrūk.",
+    tf: "15m range",
+  },
+};
+
+function tipModeSwitch(from: string, to: string): string[] {
+  if (from === to) return [];
+  const a = STRATEGY_GUIDE[from];
+  const b = STRATEGY_GUIDE[to];
+  const lines = [`Stratēģija ${from} → ${to}.`];
+  if (b) {
+    lines.push(b.summary);
+    lines.push(`Kad: ${b.when}`);
+    lines.push(`TF: ${b.tf} (sistēma lasa tirgu uz ${modePreferredTimeframe(to)}).`);
+    if (a && modePreferredTimeframe(from) !== modePreferredTimeframe(to)) {
+      lines.push(
+        `Timeframe mainās ${modePreferredTimeframe(from)} → ${modePreferredTimeframe(to)} — signāli būs citādi “biezi”.`,
+      );
+    }
+    lines.push(`Uzmanies: ${b.risk}`);
+  } else {
+    lines.push(`Režīms ${to} — TF ${modePreferredTimeframe(to)}.`);
+  }
+  return lines;
+}
+
+function tipLot(now: string, prev: string): string {
+  const n = Number(now);
+  const p = Number(prev);
+  if (!Number.isFinite(n) || !Number.isFinite(p) || n === p) {
+    return "Lot = darījuma izmērs. Mazākam kontam sāc ar 0.01. Lielāks lot = lielāka peļņa un zaudējums.";
+  }
+  const ratio = n / p;
+  if (n > p) {
+    return `Lot palielināts ${prev} → ${now} (×${fmtNum(ratio, 2)}). Risks un peļņa uz pipu arī ×${fmtNum(ratio, 2)} pret iepriekšējo.`;
+  }
+  return `Lot samazināts ${prev} → ${now}. Risks uz pipu mazāks — drošāks, bet peļņa arī mazāka.`;
+}
+
+function tipMarket(epic: string, label?: string): string {
+  const name = label || epic;
+  if (/gold|xau/i.test(epic) || /gold|xau/i.test(name)) {
+    return `${name}: augsta volatilitāte — SL/TP ATR× jūtami ietekmē rezultātu. Scalp + mazs lot bieži saprātīgāk.`;
+  }
+  if (/silver|xag/i.test(epic) || /silver|xag/i.test(name)) {
+    return `${name}: līdzīgi zeltam, bet citādāks pip — pārbaudi lot pirms START.`;
+  }
+  if (/usd|eur|gbp|jpy|aud|cad|chf|nzd/i.test(epic)) {
+    return `${name}: FX pāris — parasti mierīgāks par zeltu; exit var būt nedaudz plašāks.`;
+  }
+  if (/oil|brent|wti|usoil/i.test(epic) || /oil/i.test(name)) {
+    return `${name}: nafta — ziņu un sesiju jutīga; Trail/BE noder runner dienās.`;
+  }
+  if (/us500|nas|spx|ger|uk100|index/i.test(epic) || /index|wall/i.test(name)) {
+    return `${name}: indekss — bieži seko sesijām; Trend/Momentum derīgāki nekā tīrs Range.`;
+  }
+  return `${name} (${epic}): pārliecinies, ka epic sakrīt ar to, ko redzi Capital kontā.`;
+}
 
 /** Safe baseline every client can restore if they misconfigured settings. */
 const CLIENT_DEFAULTS = {
@@ -240,11 +349,16 @@ async function portalApi<T>(
   return data as T;
 }
 
-function buildConfig(input: { lotSize: string; exit: ExitVersion; params: ExitParams }) {
+function buildConfig(input: {
+  lotSize: string;
+  exit: ExitVersion;
+  params: ExitParams;
+  mode: string;
+}) {
   const e = EXITS[input.exit];
   const p = input.params;
   return {
-    timeframe: "M5",
+    timeframe: modePreferredTimeframe(input.mode),
     riskPercent: 0.5,
     useRiskPercent: false,
     volume: input.lotSize,
@@ -339,7 +453,10 @@ export default function ClientPortalPage() {
   const [openPositions, setOpenPositions] = useState(0);
 
   const [mode, setMode] = useState<string>(CLIENT_DEFAULTS.mode);
+  const [prevMode, setPrevMode] = useState<string>(CLIENT_DEFAULTS.mode);
+  const [modeSwitchTips, setModeSwitchTips] = useState<string[]>([]);
   const [lotSize, setLotSize] = useState(CLIENT_DEFAULTS.lotSize);
+  const [prevLot, setPrevLot] = useState(CLIENT_DEFAULTS.lotSize);
   const [exit, setExit] = useState<ExitVersion>(CLIENT_DEFAULTS.exit);
   const [exitParams, setExitParams] = useState<ExitParams>(() => paramsFromExit(CLIENT_DEFAULTS.exit));
   const [prevParams, setPrevParams] = useState<ExitParams>(() => paramsFromExit(CLIENT_DEFAULTS.exit));
@@ -348,6 +465,17 @@ export default function ClientPortalPage() {
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [marketQ, setMarketQ] = useState("");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  const selectedMarket = useMemo(
+    () => markets.find((m) => m.epic === epic),
+    [markets, epic],
+  );
+  const marketTip = useMemo(
+    () => tipMarket(epic, selectedMarket?.label || selectedMarket?.name),
+    [epic, selectedMarket],
+  );
+  const modeGuide = STRATEGY_GUIDE[mode];
+  const lotTip = useMemo(() => tipLot(lotSize, prevLot), [lotSize, prevLot]);
 
   useEffect(() => {
     const cfg = loadServerConfig();
@@ -414,10 +542,15 @@ export default function ClientPortalPage() {
       setOpenPositions(session.openPositions);
       if (session.strategy) {
         setMode(session.strategy.mode);
+        setPrevMode(session.strategy.mode);
+        setModeSwitchTips([]);
         const syms = (session.strategy.assignedSymbols as string[]) ?? [];
         if (syms[0]) setEpic(syms[0]);
         const cfg = session.strategy.configuration ?? {};
-        if (typeof cfg.volume === "string") setLotSize(cfg.volume);
+        if (typeof cfg.volume === "string") {
+          setLotSize(cfg.volume);
+          setPrevLot(cfg.volume);
+        }
         const nextExit: ExitVersion =
           cfg.exitVersion === "SWING" || cfg.exitVersion === "RUNNER" || cfg.exitVersion === "SCALP"
             ? cfg.exitVersion
@@ -509,7 +642,7 @@ export default function ClientPortalPage() {
           mode,
           assignedSymbols: [epic],
           action,
-          configuration: buildConfig({ lotSize, exit, params: exitParams }),
+          configuration: buildConfig({ lotSize, exit, params: exitParams, mode }),
         }),
       });
       setStatusMsg(action === "stop" ? "Apturēts" : action === "save" ? "Saglabāts" : "Palaists");
@@ -519,6 +652,17 @@ export default function ClientPortalPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function applyMode(next: string) {
+    setModeSwitchTips(tipModeSwitch(mode, next));
+    setPrevMode(mode);
+    setMode(next);
+  }
+
+  function applyLot(next: string) {
+    setPrevLot(lotSize);
+    setLotSize(next);
   }
 
   function applyExitVersion(next: ExitVersion) {
@@ -544,7 +688,10 @@ export default function ClientPortalPage() {
     const d = CLIENT_DEFAULTS;
     const params = paramsFromExit(d.exit);
     setMode(d.mode);
+    setPrevMode(d.mode);
+    setModeSwitchTips([]);
     setLotSize(d.lotSize);
+    setPrevLot(d.lotSize);
     setExit(d.exit);
     setExitParams(params);
     setPrevParams(params);
@@ -554,7 +701,7 @@ export default function ClientPortalPage() {
     const body = {
       mode: d.mode,
       assignedSymbols: [d.epic],
-      configuration: buildConfig({ lotSize: d.lotSize, exit: d.exit, params }),
+      configuration: buildConfig({ lotSize: d.lotSize, exit: d.exit, params, mode: d.mode }),
     };
     try {
       if (strategy?.status === "RUNNING") {
@@ -740,6 +887,7 @@ export default function ClientPortalPage() {
               </option>
             ))}
           </select>
+          <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{marketTip}</p>
         </section>
 
         <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
@@ -747,14 +895,42 @@ export default function ClientPortalPage() {
           <select
             className="w-full border border-[#243041] bg-[#06090d] px-3 py-3 text-[13px]"
             value={mode}
-            onChange={(e) => setMode(e.target.value)}
+            onChange={(e) => applyMode(e.target.value)}
           >
             {MODES.map((m) => (
               <option key={m} value={m}>
-                {m}
+                {m} · {modePreferredTimeframe(m)}
               </option>
             ))}
           </select>
+          {modeGuide ? (
+            <div className="mt-2 space-y-1.5">
+              <p className="text-[11px] leading-snug text-[#c5d4e3]">{modeGuide.summary}</p>
+              <p className="text-[11px] leading-snug text-[#7d8fa3]">
+                Kad: {modeGuide.when}
+              </p>
+              <p className="text-[11px] leading-snug text-[#7d8fa3]">
+                TF: {modeGuide.tf} · sistēma: {modePreferredTimeframe(mode)}
+              </p>
+              <p className="text-[11px] leading-snug text-[#9a8a7a]">
+                Uzmanies: {modeGuide.risk}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">
+              Režīms {mode} — TF {modePreferredTimeframe(mode)}.
+            </p>
+          )}
+          {modeSwitchTips.length > 0 && prevMode !== mode ? (
+            <div className="mt-2 space-y-1.5 border border-[#243041] bg-[#0c1219] px-3 py-2.5">
+              <p className="text-[9px] tracking-[0.22em] text-[#8aa0b8]">KAS MAINĪJĀS</p>
+              {modeSwitchTips.map((t, i) => (
+                <p key={i} className="text-[11px] leading-snug text-[#9aabbc]">
+                  {t}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </section>
 
         <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
@@ -764,7 +940,7 @@ export default function ClientPortalPage() {
               <button
                 key={l}
                 type="button"
-                onClick={() => setLotSize(l)}
+                onClick={() => applyLot(l)}
                 className={`border py-2.5 font-mono text-[13px] ${
                   lotSize === l
                     ? "border-[#9eb6cc] bg-[#141c26] text-[#e8eef5]"
@@ -775,6 +951,7 @@ export default function ClientPortalPage() {
               </button>
             ))}
           </div>
+          <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{lotTip}</p>
         </section>
 
         <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
@@ -800,8 +977,8 @@ export default function ClientPortalPage() {
           {exitSwitchTips.length > 0 ? (
             <div className="mt-2 space-y-1.5 border border-[#243041] bg-[#0c1219] px-3 py-2.5">
               <p className="text-[9px] tracking-[0.22em] text-[#8aa0b8]">KAS MAINĪJĀS</p>
-              {exitSwitchTips.map((t) => (
-                <p key={t} className="text-[11px] leading-snug text-[#9aabbc]">
+              {exitSwitchTips.map((t, i) => (
+                <p key={i} className="text-[11px] leading-snug text-[#9aabbc]">
                   {t}
                 </p>
               ))}
