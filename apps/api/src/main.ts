@@ -37,7 +37,24 @@ async function bootstrap() {
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cookieParser());
   app.enableCors({
-    origin: env.CORS_ORIGIN.split(","),
+    origin: (origin, callback) => {
+      const allowed = env.CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean);
+      if (!origin || allowed.includes(origin) || allowed.includes("*")) {
+        callback(null, true);
+        return;
+      }
+      // Phone client on LAN (PC as server)
+      if (
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) ||
+        /^https?:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/i.test(
+          origin,
+        )
+      ) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
     credentials: true,
   });
   app.setGlobalPrefix("api");

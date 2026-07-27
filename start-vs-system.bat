@@ -136,17 +136,24 @@ start "" http://localhost:3000/dashboard
 
 echo.
 echo ========================================
-echo   Gatavs  (command deck)
+echo   Gatavs  (command deck uz SAVA datora)
 echo   Dashboard:  http://localhost:3000/dashboard
 echo   Strategies: http://localhost:3000/strategies
 echo   API: http://localhost:4000/api/health
 echo.
-echo   Login: owner@nexus.pro
-echo   Pass:  NexusOwner123!
-echo   PIN:   123456
+echo   --- iPhone VS Client app ---
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
+  for /f "tokens=1" %%b in ("%%a") do (
+    echo   Atver telefonā: http://%%b:3000/client
+    echo   Add to Home Screen = VS Client app
+    goto :ip_done
+  )
+)
+:ip_done
+echo   ^(ja vairākas IP — izmanto Wi-Fi IPv4 no ipconfig^)
 echo.
-echo   Ja neredzi Command Deck ar VS System logo —
-echo   aizver VISUS CMD un palaid start-vs-system.bat velreiz + Ctrl+F5.
+echo   Login desk: owner@nexus.pro / NexusOwner123!
+echo   PIN desk:   123456
 echo ========================================
 pause
 exit /b 0

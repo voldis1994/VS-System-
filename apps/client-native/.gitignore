@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Capacitor generated (keep ios/ project; ignore pods/build)
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+ios/App/App/public/
+android/.gradle/
+android/app/build/
+android/build/
+www/icon-192.png

@@ -1,9 +1,11 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 /**
- * Native shell for VS Client.
- * Set CLIENT_APP_URL to your deployed HTTPS origin (e.g. https://app.example.com).
- * The WebView opens /client as a standalone phone app.
+ * Native shell for VS Client (iPhone).
+ *
+ * CLIENT_APP_URL = Tava Windows PC adrese, piem.:
+ *   export CLIENT_APP_URL="http://192.168.1.50:3000"
+ * WebView atver /client un runā pret to pašu serveri.
  */
 const serverUrl = (process.env.CLIENT_APP_URL || "").replace(/\/$/, "");
 
@@ -14,7 +16,8 @@ const config: CapacitorConfig = {
   server: serverUrl
     ? {
         url: `${serverUrl}/client`,
-        cleartext: serverUrl.startsWith("http://"),
+        cleartext: true,
+        allowNavigation: ["*"],
       }
     : undefined,
   plugins: {
