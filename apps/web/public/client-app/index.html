@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
   <title>VS System — 1:1 Mockup</title>
   <style>
-    :root {
-      --teal: #00ffc2;
-      --muted: rgba(244, 247, 246, 0.55);
-    }
+    :root { --teal: #00ffc2; --muted: rgba(244, 247, 246, 0.55); }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       min-height: 100%;
@@ -33,10 +30,7 @@
       max-width: 360px;
     }
     .hint strong { color: var(--teal); }
-    .frame {
-      width: min(100%, 420px);
-      line-height: 0;
-    }
+    .frame { width: min(100%, 420px); line-height: 0; }
     .frame img {
       width: 100%;
       height: auto;
@@ -45,14 +39,10 @@
       user-select: none;
       -webkit-user-drag: none;
       cursor: pointer;
+      background: #000;
     }
     .frame img.on { display: block; }
-    .nav {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
+    .nav { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
     .nav button {
       border: 1px solid rgba(255,255,255,.12);
       background: rgba(255,255,255,.03);
@@ -77,7 +67,6 @@
         height: 100vh;
         height: 100dvh;
         object-fit: contain;
-        background: #000;
         border-radius: 0;
       }
     }
@@ -86,15 +75,16 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>1:1 mockup</strong> — tieši šis dizains, bez ekstra rāmja.<br />
+      <strong>1:1 mockup</strong> — VS System client HUD.<br />
       Spied attēlu = nākamais ekrāns.
     </p>
 
     <div class="frame" id="frame">
-      <img class="on" id="img-faceid" src="./screens/faceid.png" alt="VS System Face ID" />
-      <img id="img-home" src="./screens/home.png" alt="VS System Home" />
-      <img id="img-chart" src="./screens/chart.png" alt="VS System Chart" />
-      <img id="img-profile" src="./screens/profile.png" alt="VS System Profile" />
+      <!-- Absolute CDN URLs so preview hosts (htmlpreview) resolve images -->
+      <img class="on" id="img-faceid" src="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/screens/faceid.png" alt="VS System Face ID" />
+      <img id="img-home" src="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/screens/home.png" alt="VS System Home" />
+      <img id="img-chart" src="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/screens/chart.png" alt="VS System Chart" />
+      <img id="img-profile" src="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/screens/profile.png" alt="VS System Profile" />
     </div>
 
     <div class="nav" id="nav">
@@ -108,7 +98,6 @@
   <script>
     const order = ["faceid", "home", "chart", "profile"];
     let i = 0;
-
     function show(id) {
       const idx = order.indexOf(id);
       if (idx < 0) return;
@@ -120,7 +109,6 @@
         b.classList.toggle("on", b.dataset.go === id);
       });
     }
-
     document.getElementById("frame").addEventListener("click", () => {
       show(order[(i + 1) % order.length]);
     });
