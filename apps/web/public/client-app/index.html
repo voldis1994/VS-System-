@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — Live Emoji Avatar</title>
+  <title>VS System — 3D Emoji Avatar</title>
   <style>
     :root {
       --teal: #00ffc2;
@@ -66,52 +66,72 @@
       margin: 6px 0 10px;
       display: grid;
       place-items: center;
-      perspective: 900px;
+      perspective: 1000px;
       overflow: hidden;
     }
-    .emo-stage.dash { flex: 0 0 220px; min-height: 220px; }
+    .emo-stage.dash { flex: 0 0 230px; min-height: 230px; }
 
     .emo-rig {
-      width: min(70%, 240px);
+      width: min(72%, 250px);
       aspect-ratio: 1;
       display: grid;
       place-items: center;
       transform-style: preserve-3d;
       will-change: transform;
-      filter: drop-shadow(0 18px 40px rgba(0,0,0,.45));
       transition: transform 0.05s linear;
+      position: relative;
+      z-index: 1;
     }
-    .emo-face {
-      font-size: clamp(96px, 28vw, 168px);
-      line-height: 1;
+
+    .emo-3d {
+      width: 88%;
+      height: 88%;
+      object-fit: contain;
       user-select: none;
-      transform: translateZ(40px);
-      transition: transform 0.25s ease, filter 0.25s ease;
-      animation: bob 2.8s ease-in-out infinite;
+      pointer-events: none;
+      transform: translateZ(48px);
+      filter: drop-shadow(0 22px 28px rgba(0,0,0,.55));
+      transition: opacity 0.2s ease, transform 0.2s ease, filter 0.2s ease;
+      animation: floaty 3s ease-in-out infinite;
     }
-    .emo-face.swap {
-      transform: translateZ(40px) scale(0.86);
-      filter: blur(2px);
-      opacity: 0.75;
+    .emo-3d.swap {
+      opacity: 0.35;
+      transform: translateZ(48px) scale(0.9);
+      filter: blur(3px) drop-shadow(0 22px 28px rgba(0,0,0,.55));
     }
-    @keyframes bob {
+
+    /* fake specular for 3D plastic feel */
+    .emo-shine {
+      position: absolute;
+      inset: 12%;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(255,255,255,.35) 0%, transparent 42%, transparent 100%);
+      mix-blend-mode: soft-light;
+      pointer-events: none;
+      transform: translateZ(60px);
+      opacity: 0.55;
+    }
+
+    @keyframes floaty {
       0%, 100% { translate: 0 0; }
-      50% { translate: 0 -6px; }
+      50% { translate: 0 -8px; }
     }
+
     .emo-glow {
       position: absolute;
-      width: 70%;
-      height: 70%;
+      width: 72%;
+      height: 72%;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(0,255,194,.18), transparent 65%);
+      background: radial-gradient(circle, rgba(0,255,194,.2), transparent 68%);
       pointer-events: none;
       z-index: 0;
+      filter: blur(2px);
     }
     .emo-stage.loss .emo-glow {
-      background: radial-gradient(circle, rgba(255,92,122,.2), transparent 65%);
+      background: radial-gradient(circle, rgba(255,92,122,.22), transparent 68%);
     }
     .emo-stage.think .emo-glow {
-      background: radial-gradient(circle, rgba(255,209,102,.18), transparent 65%);
+      background: radial-gradient(circle, rgba(255,209,102,.2), transparent 68%);
     }
 
     .mood-chip {
@@ -125,7 +145,7 @@
       padding: 6px 12px;
       border-radius: 999px;
       border: 1px solid rgba(0,255,194,.3);
-      background: rgba(0,0,0,.35);
+      background: rgba(0,0,0,.4);
       color: var(--teal);
       white-space: nowrap;
       z-index: 2;
@@ -153,6 +173,13 @@
       padding: 8px 6px;
       font-size: 11px;
       cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .demo-row button img {
+      width: 28px; height: 28px; object-fit: contain;
     }
     .demo-row button.on {
       color: #031410;
@@ -160,12 +187,12 @@
       border-color: var(--teal);
       font-weight: 700;
     }
-    .demo-row button[data-mood="loss"].on { background: var(--loss); border-color: var(--loss); }
+    .demo-row button[data-mood="loss"].on { background: var(--loss); border-color: var(--loss); color: #fff; }
     .demo-row button[data-mood="think"].on { background: #ffd166; border-color: #ffd166; }
 
     .perm {
       position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
-      text-align: center; padding: 20px; background: rgba(5,6,8,.72);
+      text-align: center; padding: 20px; background: rgba(5,6,8,.75);
     }
     .perm button {
       margin-top: 12px; border: 0; background: var(--teal); color: #031410;
@@ -189,7 +216,7 @@
       background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.25);
     }
     .chart-wrap {
-      flex: 1; min-height: 110px; border-radius: 16px; border: 1px solid var(--line);
+      flex: 1; min-height: 100px; border-radius: 16px; border: 1px solid var(--line);
       overflow: hidden; margin-bottom: 10px; background: rgba(255,255,255,.02);
     }
     .chart-wrap canvas { width: 100%; height: 100%; display: block; }
@@ -242,13 +269,13 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>Emoji avatar</strong> seko galvai.<br />
-      🤑 peļņa · 😢 mīnus · 🤔 meklē entry
+      <strong>Realistic 3D emoji</strong> (Fluent 3D) — seko galvai.<br />
+      Peļņa · Mīnus · Meklē entry
     </p>
 
     <div class="phone">
       <div class="notch"></div>
-      <div class="status"><span id="clock">9:41</span><span>EMOJI</span></div>
+      <div class="status"><span id="clock">9:41</span><span>3D EMOJI</span></div>
       <div class="toast" id="toast">…</div>
       <div class="hidden-cam"><video id="cam" playsinline autoplay muted></video></div>
 
@@ -257,27 +284,34 @@
         <div class="top-meta">
           <div class="client">Client<b>ANNA K · PRIVATE</b></div>
           <div class="stats">
-            EQUITY <b id="lockEq">+24.18%</b><br />
+            EQUITY <b>+24.18%</b><br />
             TRADES <b>37</b><br />
             STATUS <b id="lockStatus" style="color:var(--teal)">SECURE</b>
           </div>
         </div>
         <div class="cam-status" id="camStatus">Gaida kameru…</div>
         <div class="demo-row" id="moodDemo">
-          <button data-mood="profit" class="on">🤑 Profit</button>
-          <button data-mood="loss">😢 Minus</button>
-          <button data-mood="think">🤔 Entry</button>
+          <button data-mood="profit" class="on">
+            <img alt="" data-src="profit" />Profit
+          </button>
+          <button data-mood="loss">
+            <img alt="" data-src="loss" />Minus
+          </button>
+          <button data-mood="think">
+            <img alt="" data-src="think" />Entry
+          </button>
         </div>
 
         <div class="emo-stage" id="lockStage">
           <div class="emo-glow"></div>
           <div class="emo-rig" id="rigLock">
-            <div class="emo-face" id="emoLock">🤑</div>
+            <img class="emo-3d" id="emoLock" alt="mood" />
+            <div class="emo-shine"></div>
           </div>
           <div class="mood-chip" id="chipLock">Profit · profile OK</div>
           <div class="perm" id="permBox">
             <div>
-              Emoji kustās ar Tavu galvu<br />(bez kameras atspulga)
+              3D emoji kustās ar Tavu galvu<br />(bez kameras atspulga)
               <br /><button id="startCam">Start Face Track</button>
             </div>
           </div>
@@ -295,7 +329,8 @@
         <div class="emo-stage dash" id="dashStage">
           <div class="emo-glow"></div>
           <div class="emo-rig" id="rigDash">
-            <div class="emo-face" id="emoDash">🤑</div>
+            <img class="emo-3d" id="emoDash" alt="mood" />
+            <div class="emo-shine"></div>
           </div>
           <div class="mood-chip" id="chipDash">Profit · profile OK</div>
         </div>
@@ -329,7 +364,7 @@
         <div class="hello">Private client</div>
         <div class="mono-ak">AK</div>
         <div class="row"><span>Name</span><b>Anna K.</b></div>
-        <div class="row"><span>Mood avatar</span><b style="color:var(--teal)">LIVE EMOJI</b></div>
+        <div class="row"><span>Avatar</span><b style="color:var(--teal)">3D EMOJI LIVE</b></div>
         <div class="row"><span>Strategy</span><b>SCALPING · US100</b></div>
         <button class="lock-again" id="lockAgain">Lock</button>
       </section>
@@ -347,9 +382,17 @@
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
 
+    // Microsoft Fluent UI 3D emoji (realistic)
+    const CDN = "https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji@main/assets";
+    const IMG = {
+      profit: `${CDN}/Money-mouth%20face/3D/money-mouth_face_3d.png`,
+      loss: `${CDN}/Crying%20face/3D/crying_face_3d.png`,
+      think: `${CDN}/Thinking%20face/3D/thinking_face_3d.png`,
+    };
+
     const MOODS = {
       profit: {
-        emoji: "🤑",
+        img: IMG.profit,
         chip: "Profit · profile OK",
         stage: "profit",
         pill: "PROFIT",
@@ -357,7 +400,7 @@
         statusColor: "var(--teal)",
       },
       loss: {
-        emoji: "😢",
+        img: IMG.loss,
         chip: "Minus · drawdown",
         stage: "loss",
         pill: "MINUS",
@@ -365,7 +408,7 @@
         statusColor: "var(--loss)",
       },
       think: {
-        emoji: "🤔",
+        img: IMG.think,
         chip: "Meklē entry…",
         stage: "think",
         pill: "SCANNING",
@@ -374,12 +417,17 @@
       },
     };
 
+    // preload
+    Object.values(IMG).forEach((src) => { const i = new Image(); i.src = src; });
+    $$("#moodDemo img").forEach((img) => { img.src = IMG[img.dataset.src]; });
+
     let mood = "profit";
     let landmarker = null;
     let stream = null;
     let unlocked = false;
     let lastVideoTime = -1;
     let smooth = { yaw: 0, pitch: 0, roll: 0 };
+    let manualMood = true;
     const cam = $("#cam");
 
     function showToast(m) {
@@ -400,9 +448,9 @@
         const el = $("#" + id);
         el.classList.add("swap");
         setTimeout(() => {
-          el.textContent = m.emoji;
+          el.src = m.img;
           el.classList.remove("swap");
-        }, 120);
+        }, 140);
       }
       for (const stage of ["lockStage", "dashStage"]) {
         const el = $("#" + stage);
@@ -414,35 +462,39 @@
       $("#homePill").textContent = m.pill;
       $("#lockStatus").textContent = m.status;
       $("#lockStatus").style.color = m.statusColor;
-
-      $$("#moodDemo button").forEach((b) => {
-        b.classList.toggle("on", b.dataset.mood === mood);
-      });
-
-      if (toast) showToast(m.emoji + " " + m.chip);
+      $$("#moodDemo button").forEach((b) => b.classList.toggle("on", b.dataset.mood === mood));
+      if (toast) showToast(m.chip);
     }
 
     function applyPose(yaw, pitch, roll) {
-      const a = 0.38;
+      const a = 0.4;
       smooth.yaw += (yaw - smooth.yaw) * a;
       smooth.pitch += (pitch - smooth.pitch) * a;
       smooth.roll += (roll - smooth.roll) * a;
-      const ry = Math.max(-36, Math.min(36, smooth.yaw));
-      const rx = Math.max(-26, Math.min(26, smooth.pitch));
+      const ry = Math.max(-38, Math.min(38, smooth.yaw));
+      const rx = Math.max(-28, Math.min(28, smooth.pitch));
       const rz = Math.max(-16, Math.min(16, smooth.roll));
+      // stronger perspective feel for 3D asset
       const t = `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg)`;
       $("#rigLock").style.transform = t;
       $("#rigDash").style.transform = t;
+      // move shine with head for material feel
+      const shineX = 50 + ry * 0.6;
+      const shineY = 35 + rx * 0.5;
+      $$(".emo-shine").forEach((s) => {
+        s.style.background = `linear-gradient(135deg, rgba(255,255,255,.4) 0%, transparent 40%),
+          radial-gradient(circle at ${shineX}% ${shineY}%, rgba(255,255,255,.35), transparent 45%)`;
+      });
     }
 
     function poseFromLandmarks(lm) {
       const nose = lm[1], left = lm[33], right = lm[263], chin = lm[152], brow = lm[10];
       const midX = (left.x + right.x) / 2;
       const eyeDist = Math.hypot(right.x - left.x, right.y - left.y) || 0.01;
-      const yaw = ((midX - nose.x) / eyeDist) * 55;
+      const yaw = ((midX - nose.x) / eyeDist) * 58;
       const faceH = Math.hypot(chin.x - brow.x, chin.y - brow.y) || 0.01;
       const midY = (brow.y + chin.y) / 2;
-      const pitch = ((nose.y - midY) / faceH) * -70;
+      const pitch = ((nose.y - midY) / faceH) * -72;
       const roll = Math.atan2(right.y - left.y, right.x - left.x) * (180 / Math.PI);
       return { yaw, pitch, roll };
     }
@@ -477,7 +529,7 @@
         await cam.play();
         $("#permBox").style.display = "none";
         $("#unlockBtn").style.display = "flex";
-        $("#camStatus").textContent = "Emoji seko galvai";
+        $("#camStatus").textContent = "3D emoji seko galvai";
         $("#camStatus").classList.add("on");
         showToast("Face track ON");
         loop();
@@ -500,15 +552,6 @@
       }
     }
 
-    // Auto mood from simulated floating PnL when unlocked
-    function moodFromPnl(pnl) {
-      if (pnl <= -5) return "loss";
-      if (Math.abs(pnl) < 8 && Math.random() < 0.02) return "think"; // occasional scan feel
-      if (pnl > 15) return "profit";
-      if (pnl < 0) return "loss";
-      return mood === "think" ? "think" : "profit";
-    }
-
     $("#startCam").addEventListener("click", startCamera);
     $("#unlockBtn").addEventListener("click", () => {
       unlocked = true;
@@ -516,6 +559,7 @@
       setScreen("home");
       showToast("Dashboard");
       startChart();
+      setTimeout(() => { manualMood = false; }, 2500);
     });
     $("#lockAgain").addEventListener("click", () => {
       unlocked = false;
@@ -530,6 +574,7 @@
     $("#moodDemo").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-mood]");
       if (!b) return;
+      manualMood = true;
       setMood(b.dataset.mood);
     });
 
@@ -538,11 +583,10 @@
     };
     tick(); setInterval(tick, 10000);
 
-    // chart + live pnl drives emoji when auto
     const chart = $("#chart");
     const cctx = chart.getContext("2d");
     let prices = [];
-    let manualMood = true; // demo buttons set manual; after unlock can auto-switch lightly
+    let autoTimer = 0;
     function seed() {
       prices = []; let p = 21820;
       for (let i = 0; i < 50; i++) { p += (Math.random() - .45) * 12; prices.push(p); }
@@ -578,8 +622,6 @@
       });
       cctx.strokeStyle = "#00ffc2"; cctx.lineWidth = 2; cctx.stroke();
     }
-
-    let autoTimer = 0;
     function startChart() {
       seed(); resizeChart();
       setInterval(() => {
@@ -588,7 +630,6 @@
         if (prices.length > 50) prices.shift();
         drawChart();
         const base = 126.4 + (prices.at(-1) - 21820) * 0.08;
-        const t = (base >= 0 ? "+" : "") + "€" + Math.abs(base).toFixed(2);
         const signed = (base >= 0 ? "+" : "-") + "€" + Math.abs(base).toFixed(2);
         $("#floatPnl").textContent = signed;
         $("#floatPnl").className = base >= 0 ? "pnl-up" : "pnl-down";
@@ -598,23 +639,20 @@
         $("#posMeta").textContent =
           mood === "think" ? "Gaida entry…" : mood === "loss" ? "Floating minus" : "Trail ON · floating +";
 
-        // every ~4s nudge mood from pnl unless user just clicked demo
         autoTimer += 1;
         if (autoTimer % 5 === 0 && !manualMood) {
-          const next = base < -3 ? "loss" : base > 20 ? "profit" : (Math.random() < 0.35 ? "think" : mood);
+          const next = base < -3 ? "loss" : base > 20 ? "profit" : (Math.random() < 0.3 ? "think" : mood);
           if (next !== mood) setMood(next, { toast: false });
         }
       }, 900);
-
-      // after enter dashboard, allow auto mood from pnl
-      setTimeout(() => { manualMood = false; }, 2500);
     }
-
-    $("#moodDemo").addEventListener("click", () => { manualMood = true; });
 
     window.addEventListener("resize", resizeChart);
     seed();
     requestAnimationFrame(resizeChart);
+    // initial images
+    $("#emoLock").src = IMG.profit;
+    $("#emoDash").src = IMG.profit;
     setMood("profit", { toast: false });
   </script>
 </body>
