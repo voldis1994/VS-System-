@@ -575,9 +575,7 @@ export default function AccountsPage() {
                           {a.liveTradingEnabled ? "LIVE ON" : "LIVE OFF"}
                         </Badge>
                         {a.clientPortalEnabled ? (
-                          <Badge tone="accent">
-                            PIN {a.clientPortalCode ?? "ON"}
-                          </Badge>
+                          <Badge tone="accent">PIN ON</Badge>
                         ) : null}
                       </div>
                       <div className="mt-1 flex flex-wrap gap-3 font-mono text-xs text-white/50">
