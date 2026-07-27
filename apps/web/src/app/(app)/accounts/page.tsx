@@ -50,30 +50,40 @@ export default function AccountsPage() {
   const [portalCreds, setPortalCreds] = useState<{
     accountId: string;
     name: string;
-    code: string;
+    pin: string;
+  } | null>(null);
+  const [pinForm, setPinForm] = useState<{
+    accountId: string;
+    name: string;
     pin: string;
   } | null>(null);
 
-  async function issueClientPortal(accountId: string) {
-    setBusyId(accountId);
+  async function issueClientPortal() {
+    if (!pinForm) return;
+    const pin = pinForm.pin.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6,12}$/.test(pin)) {
+      toast.error("PIN: 6–12 burti vai cipari");
+      return;
+    }
+    setBusyId(pinForm.accountId);
     try {
       const res = await api<{
         accountId: string;
         name: string;
-        code: string;
         pin: string;
         note?: string;
-      }>(`/accounts/${accountId}/client-portal`, {
+      }>(`/accounts/${pinForm.accountId}/client-portal`, {
         method: "POST",
         token: token ?? undefined,
+        body: JSON.stringify({ pin }),
       });
+      setPinForm(null);
       setPortalCreds({
         accountId: res.accountId,
         name: res.name,
-        code: res.code,
         pin: res.pin,
       });
-      toast.success("Klienta PIN izveidots — saglabā tagad");
+      toast.success("Klienta PIN saglabāts");
       await qc.invalidateQueries({ queryKey: ["accounts"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Neizdevās");
@@ -671,9 +681,15 @@ export default function AccountsPage() {
                         size="sm"
                         variant="outline"
                         loading={busyId === a.id}
-                        onClick={() => void issueClientPortal(a.id)}
+                        onClick={() =>
+                          setPinForm({
+                            accountId: a.id,
+                            name: a.name,
+                            pin: "",
+                          })
+                        }
                       >
-                        {a.clientPortalEnabled ? "Jauns klienta PIN" : "Klienta PIN"}
+                        {a.clientPortalEnabled ? "Mainīt klienta PIN" : "Iestatīt klienta PIN"}
                       </Button>
                       {a.clientPortalEnabled ? (
                         <Button
@@ -777,33 +793,67 @@ export default function AccountsPage() {
         </Panel>
       </div>
 
+      {pinForm ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-xl border border-white/15 bg-bg p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white">Klienta PIN</h3>
+            <p className="mt-1 text-sm text-white/55">
+              {pinForm.name} — Tu pats norādi PIN un iedod klientam atsevišķi.
+              Login: <span className="text-accent">/client</span> → tikai šis PIN.
+            </p>
+            <Field label="PIN (6–12 burti/cipari)">
+              <Input
+                value={pinForm.pin}
+                onChange={(e) =>
+                  setPinForm((s) =>
+                    s
+                      ? {
+                          ...s,
+                          pin: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12),
+                        }
+                      : s,
+                  )
+                }
+                className="mt-1 font-mono tracking-widest"
+                placeholder="Piem. ANNA8472"
+                autoFocus
+                maxLength={12}
+              />
+            </Field>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setPinForm(null)}>
+                Atcelt
+              </Button>
+              <Button
+                loading={busyId === pinForm.accountId}
+                onClick={() => void issueClientPortal()}
+              >
+                Saglabāt PIN
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {portalCreds ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-md rounded-xl border border-accent/40 bg-bg p-5 shadow-2xl">
-            <h3 className="text-lg font-semibold text-white">Klienta piekļuve</h3>
-                <p className="mt-1 text-sm text-white/55">
-              {portalCreds.name} — saglabā PIN tagad. Klients instalē app no{" "}
-              <span className="text-accent">/client</span> (Add to Home Screen) vai ielogojas turpat.
+            <h3 className="text-lg font-semibold text-white">PIN gatavs</h3>
+            <p className="mt-1 text-sm text-white/55">
+              {portalCreds.name} — iedod klientam šo PIN (ne publicē chatā ar servera datiem, ja nevajag).
             </p>
-            <div className="mt-4 space-y-2 rounded-md border border-white/10 bg-white/[0.03] p-3 font-mono text-sm">
-              <div>
-                Kods: <strong className="text-accent">{portalCreds.code}</strong>
-              </div>
-              <div>
-                PIN: <strong className="text-accent">{portalCreds.pin}</strong>
-              </div>
+            <div className="mt-4 rounded-md border border-white/10 bg-white/[0.03] p-3 font-mono text-sm">
+              PIN: <strong className="text-accent tracking-widest">{portalCreds.pin}</strong>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button
                 variant="outline"
                 onClick={() => {
-                  void navigator.clipboard.writeText(
-                    `VS Client app\n1) Atver: ${window.location.origin}/client\n2) iPhone: Share → Add to Home Screen\n3) Kods: ${portalCreds.code}\n4) PIN: ${portalCreds.pin}`,
-                  );
-                  toast.success("Nokopēts");
+                  void navigator.clipboard.writeText(portalCreds.pin);
+                  toast.success("PIN nokopēts");
                 }}
               >
-                Kopēt
+                Kopēt PIN
               </Button>
               <Button onClick={() => setPortalCreds(null)}>Aizvērt</Button>
             </div>

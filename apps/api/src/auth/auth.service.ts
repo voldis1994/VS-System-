@@ -270,16 +270,16 @@ export class AuthService {
     return { ...tokens, requires2FA: false, user: this.publicUser(user) };
   }
 
-  /** Phone portal: code + PIN scoped to one trading account (desk issues credentials). */
+  /** Phone portal: single access PIN issued by desk (operator chooses it). */
   async loginClientPortal(
     raw: unknown,
     meta: { correlationId: string; ip?: string; ua?: string },
   ) {
     const input = ClientPortalLoginSchema.parse(raw);
-    const code = input.code.trim().toUpperCase();
+    const pin = input.pin.trim().toUpperCase();
     const account = await this.prisma.tradingAccount.findFirst({
       where: {
-        clientPortalCode: code,
+        clientPortalCode: pin,
         clientPortalEnabled: true,
         archivedAt: null,
       },
@@ -287,15 +287,15 @@ export class AuthService {
     if (!account?.clientPortalPinHash) {
       throw new AppError(
         ErrorCodes.AUTH_INVALID_CREDENTIALS,
-        "Invalid client code or PIN",
+        "Invalid PIN",
         HttpStatus.UNAUTHORIZED,
       );
     }
-    const ok = await argon2.verify(account.clientPortalPinHash, input.pin);
+    const ok = await argon2.verify(account.clientPortalPinHash, pin);
     if (!ok) {
       throw new AppError(
         ErrorCodes.AUTH_INVALID_CREDENTIALS,
-        "Invalid client code or PIN",
+        "Invalid PIN",
         HttpStatus.UNAUTHORIZED,
       );
     }
@@ -303,7 +303,7 @@ export class AuthService {
     const accessToken = this.jwt.sign(
       {
         sub: `client-portal:${account.id}`,
-        email: `client+${code}@portal.local`,
+        email: `client+${pin}@portal.local`,
         organizationId: account.organizationId,
         role: Role.VIEWER,
         tradingPinVerified: false,
@@ -320,7 +320,7 @@ export class AuthService {
       action: "CLIENT_PORTAL_LOGIN",
       resourceType: "TradingAccount",
       resourceId: account.id,
-      after: { clientPortalCode: code, actor: `client-portal:${account.id}` },
+      after: { actor: `client-portal:${account.id}` },
       sourceIp: meta.ip,
       userAgent: meta.ua,
       correlationId: meta.correlationId,
@@ -338,7 +338,6 @@ export class AuthService {
         equity: String(account.equity),
         balance: String(account.balance),
         connectionStatus: account.connectionStatus,
-        clientPortalCode: account.clientPortalCode,
       },
     };
   }

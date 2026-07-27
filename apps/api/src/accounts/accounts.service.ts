@@ -4,6 +4,7 @@ import {
   CreateAccountSchema,
   DomainEventType,
   ErrorCodes,
+  IssueClientPortalSchema,
   UpdateAccountCredentialsSchema,
 } from "@nexus/domain";
 import { loadEnv } from "@nexus/config";
@@ -820,31 +821,38 @@ export class AccountsService {
     return updated;
   }
 
-  /** Desk: generate client phone-portal code + PIN (shown once). */
+  /** Desk: set client access PIN (operator chooses; give to client separately). */
   async issueClientPortalAccess(
     organizationId: string,
     actorId: string,
     accountId: string,
+    raw: unknown,
     correlationId: string,
   ) {
+    const input = IssueClientPortalSchema.parse(raw ?? {});
+    const pin = input.pin.trim().toUpperCase();
     const account = await this.get(organizationId, accountId);
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let code = "";
-    for (let attempt = 0; attempt < 12; attempt++) {
-      code = Array.from({ length: 6 }, () =>
-        alphabet[Math.floor(Math.random() * alphabet.length)],
-      ).join("");
-      const clash = await this.prisma.tradingAccount.findFirst({
-        where: { clientPortalCode: code, NOT: { id: accountId } },
-      });
-      if (!clash) break;
+
+    const clash = await this.prisma.tradingAccount.findFirst({
+      where: {
+        clientPortalCode: pin,
+        clientPortalEnabled: true,
+        NOT: { id: accountId },
+      },
+    });
+    if (clash) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Šis PIN jau izmantots citam kontam — izvēlies citu",
+        HttpStatus.CONFLICT,
+      );
     }
-    const pin = String(Math.floor(100000 + Math.random() * 900000));
+
     const pinHash = await argon2.hash(pin);
     const updated = await this.prisma.tradingAccount.update({
       where: { id: accountId },
       data: {
-        clientPortalCode: code,
+        clientPortalCode: pin,
         clientPortalPinHash: pinHash,
         clientPortalEnabled: true,
         clientPortalIssuedAt: new Date(),
@@ -862,18 +870,17 @@ export class AccountsService {
       },
       after: {
         clientPortalEnabled: true,
-        clientPortalCode: code,
+        clientPortalCode: pin,
       },
       correlationId,
     });
     return {
       accountId,
       name: updated.name,
-      code,
       pin,
       enabled: true,
       issuedAt: updated.clientPortalIssuedAt,
-      note: "Saglabā PIN tagad — to vairs neparādīs. Klients ielogojas /client ar kodu + PIN.",
+      note: "Iedod šo PIN klientam atsevišķi. Login: /client → tikai PIN.",
     };
   }
 

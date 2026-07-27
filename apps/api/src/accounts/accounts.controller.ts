@@ -224,12 +224,14 @@ export class AccountsController {
   @RequirePermissions("accounts:manage")
   issueClientPortal(
     @Param("id") id: string,
+    @Body() body: unknown,
     @Req() req: Request & { user: AuthUser; correlationId?: string },
   ) {
     return this.accounts.issueClientPortalAccess(
       req.user.organizationId,
       req.user.userId,
       id,
+      body,
       req.correlationId ?? "unknown",
     );
   }

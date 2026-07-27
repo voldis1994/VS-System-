@@ -69,7 +69,7 @@ const EXITS: Record<
 > = {
   SCALP: {
     label: "Scalp",
-    hint: "TP · Break-even · Trailing",
+    hint: "TP · BE · Trail",
     tpEnabled: true,
     beEnabled: true,
     trailEnabled: true,
@@ -81,7 +81,7 @@ const EXITS: Record<
   },
   SWING: {
     label: "Swing",
-    hint: "TP · Break-even",
+    hint: "TP · BE",
     tpEnabled: true,
     beEnabled: true,
     trailEnabled: false,
@@ -93,7 +93,7 @@ const EXITS: Record<
   },
   RUNNER: {
     label: "Runner",
-    hint: "Break-even · Trailing",
+    hint: "BE · Trail",
     tpEnabled: false,
     beEnabled: true,
     trailEnabled: true,
@@ -121,9 +121,7 @@ async function portalApi<T>(
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
-  if (!res.ok) {
-    throw new Error(data.message || data.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
   return data as T;
 }
 
@@ -155,20 +153,22 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion }) {
   };
 }
 
+const shell =
+  "min-h-[100dvh] bg-[#05070a] text-[#e8eef5] [background-image:radial-gradient(1000px_520px_at_50%_-20%,rgba(140,170,200,.09),transparent_55%),linear-gradient(180deg,#070b10_0%,#05070a_100%)]";
+
 export default function ClientPortalPage() {
   const [server, setServer] = useState<ClientServerConfig | null>(null);
   const [serverDraft, setServerDraft] = useState<ClientServerConfig>(defaultServerConfig());
   const [testing, setTesting] = useState(false);
+  const [showServer, setShowServer] = useState(false);
 
   const [token, setToken] = useState<string | null>(null);
-  const [code, setCode] = useState("");
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<PortalAccount | null>(null);
   const [strategy, setStrategy] = useState<PortalStrategy | null>(null);
   const [openPositions, setOpenPositions] = useState(0);
-  const [showServer, setShowServer] = useState(false);
 
   const [mode, setMode] = useState<string>(StrategyMode.TREND);
   const [lotSize, setLotSize] = useState("0.01");
@@ -178,17 +178,12 @@ export default function ClientPortalPage() {
   const [marketQ, setMarketQ] = useState("");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  const apiBase = server ? apiBaseFromConfig(server) : "";
-
   useEffect(() => {
     const cfg = loadServerConfig();
     if (cfg) {
       setServer(cfg);
       setServerDraft(cfg);
-    } else {
-      const d = defaultServerConfig();
-      setServerDraft(d);
-    }
+    } else setServerDraft(defaultServerConfig());
     const saved = sessionStorage.getItem("vs_client_portal_token");
     if (saved) setToken(saved);
   }, []);
@@ -217,16 +212,15 @@ export default function ClientPortalPage() {
     setError(null);
     try {
       const base = apiBaseFromConfig(serverDraft);
-      const res = await fetch(`${base}/api/health`, { method: "GET" });
+      const res = await fetch(`${base}/api/health`);
       if (!res.ok) throw new Error(`Serveris neatbild (${res.status})`);
       saveServerConfig(serverDraft);
       setServer(serverDraft);
       setShowServer(false);
-      setStatusMsg(`Savienots ar ${serverDraft.host}`);
     } catch (e) {
       setError(
         e instanceof Error
-          ? `${e.message}. Pārbaudi: PC un iPhone vienā Wi‑Fi, Windows Firewall atļauj 3000/4000, API klausās 0.0.0.0.`
+          ? `${e.message}. PC un iPhone vienā Wi‑Fi; firewall 3000/4000.`
           : "Nevar savienoties",
       );
     } finally {
@@ -279,8 +273,8 @@ export default function ClientPortalPage() {
   async function login(e: React.FormEvent) {
     e.preventDefault();
     if (!server) {
-      setError("Vispirms iestati servera IP");
       setShowServer(true);
+      setError("Vispirms iestati servera IP");
       return;
     }
     setBusy(true);
@@ -289,17 +283,14 @@ export default function ClientPortalPage() {
       const res = await portalApi<{ accessToken: string; account: PortalAccount }>(
         apiBaseFromConfig(server),
         "/auth/client-portal/login",
-        {
-          method: "POST",
-          body: JSON.stringify({ code: code.trim(), pin: pin.trim() }),
-        },
+        { method: "POST", body: JSON.stringify({ pin: pin.trim() }) },
       );
       sessionStorage.setItem("vs_client_portal_token", res.accessToken);
       setToken(res.accessToken);
       setAccount(res.account);
       setPin("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Nepareizs PIN");
     } finally {
       setBusy(false);
     }
@@ -328,9 +319,7 @@ export default function ClientPortalPage() {
           configuration: buildConfig({ lotSize, exit }),
         }),
       });
-      setStatusMsg(
-        action === "stop" ? "Bots apturēts" : action === "save" ? "Saglabāts" : "Bots palaists",
-      );
+      setStatusMsg(action === "stop" ? "Apturēts" : action === "save" ? "Saglabāts" : "Palaists");
       await loadSession(token);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Neizdevās");
@@ -339,71 +328,58 @@ export default function ClientPortalPage() {
     }
   }
 
-  /* ---------- Server setup (first launch / settings) ---------- */
   if (!server || showServer) {
     return (
-      <div className="min-h-[100dvh] bg-[radial-gradient(900px_500px_at_50%_-10%,rgba(0,255,194,.12),transparent_55%),#07090c] px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2.5rem,env(safe-area-inset-top))]">
-        <div className="mx-auto w-full max-w-sm">
-          <div className="mb-8 text-center">
-            <img src="/client-icons/icon-192.png" alt="" className="mx-auto mb-5 h-[72px] w-[72px] rounded-[22px] shadow-[0_12px_40px_rgba(0,255,194,.15)]" />
-            <h1 className="text-[28px] font-bold tracking-tight text-white">VS Client</h1>
-            <p className="mt-2 text-sm leading-relaxed text-white/50">
-              Savieno ar Tava datora VS System serveri (tā pati Wi‑Fi).
-            </p>
-          </div>
-
-          <div className="space-y-3 rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 backdrop-blur">
-            <label className="block text-[11px] font-medium tracking-[0.14em] text-white/45">
-              DATORA IP ADRESE
+      <div className={`${shell} px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2.75rem,env(safe-area-inset-top))]`}>
+        <div className="mx-auto w-full max-w-[360px]">
+          <p className="text-center text-[10px] font-medium tracking-[0.42em] text-[#8aa0b8]">VS SYSTEM</p>
+          <h1 className="mt-3 text-center font-[family-name:var(--font-display)] text-[34px] font-semibold tracking-[-0.03em] text-[#f2f6fa]">
+            Client
+          </h1>
+          <p className="mt-2 text-center text-[13px] leading-relaxed text-[#7d8fa3]">
+            Savieno ar galveno serveri — Tava datora IP.
+          </p>
+          <div className="mt-8 space-y-3 border border-[#1a2330] bg-[#0a0e14]/90 p-5">
+            <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+              SERVER IP
               <input
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3.5 font-mono text-base text-white outline-none focus:border-[#00ffc2]/45"
-                placeholder="192.168.1.50"
+                className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-3 font-mono text-[15px] text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
                 value={serverDraft.host}
                 onChange={(e) => setServerDraft((s) => ({ ...s, host: e.target.value.trim() }))}
+                placeholder="192.168.1.50"
                 autoCapitalize="off"
-                autoCorrect="off"
               />
             </label>
             <div className="grid grid-cols-2 gap-3">
-              <label className="block text-[11px] font-medium tracking-[0.14em] text-white/45">
-                WEB PORT
+              <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+                WEB
                 <input
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 font-mono text-white outline-none focus:border-[#00ffc2]/45"
+                  className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-3 font-mono text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
                   value={serverDraft.webPort}
                   onChange={(e) => setServerDraft((s) => ({ ...s, webPort: e.target.value }))}
-                  inputMode="numeric"
                 />
               </label>
-              <label className="block text-[11px] font-medium tracking-[0.14em] text-white/45">
-                API PORT
+              <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+                API
                 <input
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 font-mono text-white outline-none focus:border-[#00ffc2]/45"
+                  className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-3 font-mono text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
                   value={serverDraft.apiPort}
                   onChange={(e) => setServerDraft((s) => ({ ...s, apiPort: e.target.value }))}
-                  inputMode="numeric"
                 />
               </label>
             </div>
-            <p className="text-[11px] leading-relaxed text-white/35">
-              Windows: <code className="text-white/55">ipconfig</code> → IPv4. Piemērs:{" "}
-              <span className="text-[#00ffc2]/80">192.168.0.24</span>
-            </p>
-            {error ? <p className="text-sm text-[#ff5c7a]">{error}</p> : null}
+            {error ? <p className="text-[13px] text-[#c97a8a]">{error}</p> : null}
             <button
               type="button"
               disabled={testing || !serverDraft.host}
               onClick={() => void testAndSaveServer()}
-              className="w-full rounded-full bg-[#00ffc2] py-3.5 text-sm font-bold text-[#031410] disabled:opacity-40"
+              className="mt-2 w-full border border-[#c5d4e3] bg-[#d7e2ee] py-3.5 text-[12px] font-semibold tracking-[0.18em] text-[#0a1018] disabled:opacity-40"
             >
-              {testing ? "Pārbauda…" : "Savienot ar serveri"}
+              {testing ? "…" : "CONNECT"}
             </button>
             {server ? (
-              <button
-                type="button"
-                className="w-full py-2 text-xs text-white/40"
-                onClick={() => setShowServer(false)}
-              >
-                Atcelt
+              <button type="button" className="w-full py-2 text-[11px] text-[#5c6d80]" onClick={() => setShowServer(false)}>
+                Cancel
               </button>
             ) : null}
           </div>
@@ -412,51 +388,46 @@ export default function ClientPortalPage() {
     );
   }
 
-  /* ---------- PIN login ---------- */
   if (!token || !account) {
     return (
-      <div className="min-h-[100dvh] bg-[radial-gradient(900px_500px_at_50%_-10%,rgba(0,255,194,.12),transparent_55%),#07090c] px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2.5rem,env(safe-area-inset-top))]">
-        <div className="mx-auto w-full max-w-sm">
+      <div className={`${shell} px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2.75rem,env(safe-area-inset-top))]`}>
+        <div className="mx-auto w-full max-w-[360px]">
           <button
             type="button"
             onClick={() => setShowServer(true)}
-            className="mb-6 text-left text-[11px] tracking-wide text-white/35"
+            className="mb-10 text-[10px] tracking-[0.2em] text-[#5c6d80]"
           >
-            Serveris · {server.host}:{server.apiPort} ⚙
+            {server.host}:{server.apiPort}
           </button>
-          <div className="mb-8 text-center">
-            <img src="/client-icons/icon-192.png" alt="" className="mx-auto mb-5 h-[72px] w-[72px] rounded-[22px]" />
-            <h1 className="text-[28px] font-bold text-white">VS Client</h1>
-            <p className="mt-2 text-sm text-white/50">Ievadi kodu un PIN no operatora</p>
-          </div>
-          <form onSubmit={login} className="space-y-3 rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5">
-            <label className="block text-[11px] tracking-[0.14em] text-white/45">
-              KODS
+          <p className="text-center text-[10px] font-medium tracking-[0.42em] text-[#8aa0b8]">VS SYSTEM</p>
+          <h1 className="mt-3 text-center font-[family-name:var(--font-display)] text-[40px] font-semibold tracking-[-0.04em] text-[#f2f6fa]">
+            Client
+          </h1>
+          <p className="mt-3 text-center text-[13px] text-[#7d8fa3]">Ievadi PIN, ko saņēmi no operatora</p>
+
+          <form onSubmit={login} className="mt-10 border border-[#1a2330] bg-[#0a0e14]/90 p-5">
+            <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+              ACCESS PIN
               <input
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3.5 font-mono text-lg tracking-[0.25em] text-white uppercase outline-none focus:border-[#00ffc2]/45"
-                value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase())}
-                required
-              />
-            </label>
-            <label className="block text-[11px] tracking-[0.14em] text-white/45">
-              PIN
-              <input
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3.5 font-mono text-lg tracking-[0.45em] text-white outline-none focus:border-[#00ffc2]/45"
+                className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-4 text-center font-mono text-[22px] tracking-[0.35em] text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
                 value={pin}
-                onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                inputMode="numeric"
-                maxLength={6}
+                onChange={(e) =>
+                  setPin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12))
+                }
+                autoComplete="one-time-code"
+                inputMode="text"
+                maxLength={12}
                 required
+                autoFocus
               />
             </label>
-            {error ? <p className="text-sm text-[#ff5c7a]">{error}</p> : null}
+            {error ? <p className="mt-3 text-[13px] text-[#c97a8a]">{error}</p> : null}
             <button
               type="submit"
-              disabled={busy || code.length < 4 || pin.length !== 6}
-              className="w-full rounded-full bg-[#00ffc2] py-3.5 text-sm font-bold text-[#031410] disabled:opacity-40"
+              disabled={busy || pin.length < 6}
+              className="mt-5 w-full border border-[#c5d4e3] bg-[#d7e2ee] py-3.5 text-[12px] font-semibold tracking-[0.18em] text-[#0a1018] disabled:opacity-40"
             >
-              {busy ? "…" : "Ieiet"}
+              {busy ? "…" : "ENTER"}
             </button>
           </form>
         </div>
@@ -464,58 +435,51 @@ export default function ClientPortalPage() {
     );
   }
 
-  /* ---------- Main trading controls ---------- */
   return (
-    <div className="min-h-[100dvh] bg-[#07090c] px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] text-[#f4f7f6]">
-      <div className="mx-auto flex w-full max-w-md flex-col gap-3.5">
-        <header className="flex items-start justify-between gap-3 pt-1">
+    <div className={`${shell} px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]`}>
+      <div className="mx-auto flex w-full max-w-[400px] flex-col gap-3">
+        <header className="flex items-start justify-between gap-3 border-b border-[#151c26] pb-3">
           <div>
-            <div className="text-[10px] font-semibold tracking-[0.28em] text-[#00ffc2]/90">VS CLIENT</div>
-            <h1 className="mt-0.5 text-[22px] font-bold tracking-tight">{account.name}</h1>
-            <p className="mt-0.5 text-[13px] text-white/45">
+            <p className="text-[9px] tracking-[0.35em] text-[#8aa0b8]">VS CLIENT</p>
+            <h1 className="mt-1 font-[family-name:var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">
+              {account.name}
+            </h1>
+            <p className="mt-0.5 font-mono text-[12px] text-[#6b7f94]">
               {Number(account.equity).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
               {account.baseCurrency}
               {openPositions ? ` · ${openPositions} open` : ""}
             </p>
           </div>
-          <div className="flex flex-col items-end gap-2">
-            <button type="button" onClick={() => setShowServer(true)} className="text-[11px] text-white/35">
+          <div className="flex flex-col items-end gap-2 pt-1">
+            <button type="button" onClick={() => setShowServer(true)} className="text-[10px] text-[#4d5d6e]">
               {server.host}
             </button>
-            <button type="button" onClick={logout} className="text-[12px] text-white/45">
-              Iziet
+            <button type="button" onClick={logout} className="text-[11px] tracking-wide text-[#7d8fa3]">
+              Exit
             </button>
           </div>
         </header>
 
         <div
-          className={`rounded-2xl border px-3.5 py-2.5 text-[13px] ${
+          className={`border px-3 py-2 font-mono text-[11px] tracking-wide ${
             strategy?.status === "RUNNING"
-              ? "border-[#00ffc2]/25 bg-[#00ffc2]/8 text-[#00ffc2]"
-              : "border-white/10 bg-white/[0.03] text-white/55"
+              ? "border-[#3d5a4a] bg-[#0c1612] text-[#9dceb4]"
+              : "border-[#1a2330] bg-[#0a0e14] text-[#6b7f94]"
           }`}
         >
-          {strategy ? (
-            <>
-              <span className="font-semibold">{strategy.status}</span>
-              <span className="text-white/35"> · </span>
-              {strategy.mode}
-            </>
-          ) : (
-            "Stratēģija nav iestatīta"
-          )}
+          {strategy ? `${strategy.status} · ${strategy.mode}` : "NO STRATEGY"}
         </div>
 
-        <section className="rounded-3xl border border-white/[0.08] bg-white/[0.025] p-4">
-          <div className="mb-2 text-[10px] font-semibold tracking-[0.2em] text-white/40">TIRGUS</div>
+        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">MARKET</p>
           <input
-            className="mb-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-[#00ffc2]/35"
-            placeholder="Meklēt…"
+            className="mb-2 w-full border border-[#243041] bg-[#06090d] px-3 py-2 text-[13px] outline-none focus:border-[#9eb6cc]"
+            placeholder="Search…"
             value={marketQ}
             onChange={(e) => setMarketQ(e.target.value)}
           />
           <select
-            className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-sm"
+            className="w-full border border-[#243041] bg-[#06090d] px-3 py-3 text-[13px]"
             value={epic}
             onChange={(e) => setEpic(e.target.value)}
           >
@@ -528,10 +492,10 @@ export default function ClientPortalPage() {
           </select>
         </section>
 
-        <section className="rounded-3xl border border-white/[0.08] bg-white/[0.025] p-4">
-          <div className="mb-2 text-[10px] font-semibold tracking-[0.2em] text-white/40">STRATĒĢIJA</div>
+        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">STRATEGY</p>
           <select
-            className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-sm"
+            className="w-full border border-[#243041] bg-[#06090d] px-3 py-3 text-[13px]"
             value={mode}
             onChange={(e) => setMode(e.target.value)}
           >
@@ -543,18 +507,18 @@ export default function ClientPortalPage() {
           </select>
         </section>
 
-        <section className="rounded-3xl border border-white/[0.08] bg-white/[0.025] p-4">
-          <div className="mb-2 text-[10px] font-semibold tracking-[0.2em] text-white/40">LOT SIZE</div>
-          <div className="grid grid-cols-3 gap-2">
+        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">LOT</p>
+          <div className="grid grid-cols-3 gap-1.5">
             {LOTS.map((l) => (
               <button
                 key={l}
                 type="button"
                 onClick={() => setLotSize(l)}
-                className={`rounded-xl border py-2.5 font-mono text-sm transition ${
+                className={`border py-2.5 font-mono text-[13px] ${
                   lotSize === l
-                    ? "border-[#00ffc2] bg-[#00ffc2]/12 text-[#00ffc2]"
-                    : "border-white/10 text-white/65"
+                    ? "border-[#9eb6cc] bg-[#141c26] text-[#e8eef5]"
+                    : "border-[#243041] text-[#7d8fa3]"
                 }`}
               >
                 {l}
@@ -563,69 +527,67 @@ export default function ClientPortalPage() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-white/[0.08] bg-white/[0.025] p-4">
-          <div className="mb-2 text-[10px] font-semibold tracking-[0.2em] text-white/40">EXIT</div>
-          <div className="space-y-2">
+        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">EXIT</p>
+          <div className="space-y-1.5">
             {(Object.keys(EXITS) as ExitVersion[]).map((k) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setExit(k)}
-                className={`flex w-full items-center justify-between rounded-2xl border px-3.5 py-3 text-left transition ${
-                  exit === k
-                    ? "border-[#00ffc2]/50 bg-[#00ffc2]/10"
-                    : "border-white/10 bg-transparent"
+                className={`flex w-full items-center justify-between border px-3 py-3 text-left ${
+                  exit === k ? "border-[#9eb6cc] bg-[#141c26]" : "border-[#243041]"
                 }`}
               >
-                <span className={`text-sm font-semibold ${exit === k ? "text-[#00ffc2]" : "text-white/80"}`}>
+                <span className={`text-[13px] ${exit === k ? "text-[#e8eef5]" : "text-[#9aabbc]"}`}>
                   {EXITS[k].label}
                 </span>
-                <span className="text-[11px] text-white/40">{EXITS[k].hint}</span>
+                <span className="font-mono text-[10px] text-[#5c6d80]">{EXITS[k].hint}</span>
               </button>
             ))}
           </div>
         </section>
 
-        {error ? <p className="text-sm text-[#ff5c7a]">{error}</p> : null}
-        {statusMsg ? <p className="text-sm text-[#00ffc2]">{statusMsg}</p> : null}
+        {error ? <p className="text-[13px] text-[#c97a8a]">{error}</p> : null}
+        {statusMsg ? <p className="text-[13px] text-[#9dceb4]">{statusMsg}</p> : null}
 
-        <div className="grid grid-cols-3 gap-2 pb-4">
+        <div className="grid grid-cols-3 gap-1.5 pt-1">
           <button
             type="button"
             disabled={busy}
             onClick={() => void run("save")}
-            className="rounded-full border border-white/15 py-3.5 text-sm font-semibold text-white/80"
+            className="border border-[#243041] py-3.5 text-[11px] tracking-[0.12em] text-[#9aabbc]"
           >
-            Saglabāt
+            SAVE
           </button>
           <button
             type="button"
             disabled={busy}
             onClick={() => void run("start")}
-            className="rounded-full bg-[#00ffc2] py-3.5 text-sm font-bold text-[#031410]"
+            className="border border-[#c5d4e3] bg-[#d7e2ee] py-3.5 text-[11px] font-semibold tracking-[0.12em] text-[#0a1018]"
           >
-            Start
+            START
           </button>
           <button
             type="button"
             disabled={busy}
             onClick={() => void run("stop")}
-            className="rounded-full border border-[#ff5c7a]/40 py-3.5 text-sm font-semibold text-[#ff5c7a]"
+            className="border border-[#4a3038] py-3.5 text-[11px] tracking-[0.12em] text-[#c97a8a]"
           >
-            Stop
+            STOP
           </button>
         </div>
 
         <button
           type="button"
-          className="pb-2 text-center text-[11px] text-white/25"
+          className="pt-2 text-center text-[10px] text-[#3d4a58]"
           onClick={() => {
             clearServerConfig();
             logout();
             setServer(null);
           }}
         >
-          Atiestatīt serveri
+          Reset server
         </button>
       </div>
     </div>

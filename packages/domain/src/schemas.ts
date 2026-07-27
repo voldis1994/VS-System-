@@ -43,15 +43,24 @@ export const Verify2FASchema = z.object({
   code: z.string().regex(/^\d{6}$/),
 });
 
-/** Client phone portal: desk issues code + PIN per trading account. */
+/** Client phone portal: desk issues a single access PIN they choose. */
 export const ClientPortalLoginSchema = z.object({
-  code: z
+  pin: z
     .string()
     .trim()
-    .min(4)
+    .min(6)
     .max(12)
-    .regex(/^[A-Za-z0-9]+$/, "Code must be alphanumeric"),
-  pin: z.string().regex(/^\d{6}$/, "PIN must be 6 digits"),
+    .regex(/^[A-Za-z0-9]+$/, "PIN must be alphanumeric"),
+});
+
+/** Desk sets the client access PIN manually (given to client separately). */
+export const IssueClientPortalSchema = z.object({
+  pin: z
+    .string()
+    .trim()
+    .min(6)
+    .max(12)
+    .regex(/^[A-Za-z0-9]+$/, "PIN must be 6–12 letters or digits"),
 });
 
 export const ClientPortalStrategySchema = z.object({
@@ -62,6 +71,7 @@ export const ClientPortalStrategySchema = z.object({
 });
 
 export type ClientPortalLoginInput = z.infer<typeof ClientPortalLoginSchema>;
+export type IssueClientPortalInput = z.infer<typeof IssueClientPortalSchema>;
 export type ClientPortalStrategyInput = z.infer<typeof ClientPortalStrategySchema>;
 
 export const VerifyTradingPinSchema = z.object({
