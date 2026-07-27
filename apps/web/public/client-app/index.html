@@ -3,13 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — Face Avatar</title>
+  <title>VS System — Live Emoji Avatar</title>
   <style>
     :root {
       --teal: #00ffc2;
       --text: #f4f7f6;
       --muted: rgba(244,247,246,.55);
       --line: rgba(255,255,255,.08);
+      --loss: #ff5c7a;
       --phone-w: 390px;
       --phone-h: 844px;
     }
@@ -21,7 +22,7 @@
       font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     }
     .stage { min-height: 100vh; display: grid; place-items: center; padding: 20px 14px 36px; gap: 12px; }
-    .hint { max-width: 460px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .hint { max-width: 480px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.45; }
     .hint strong { color: var(--teal); }
     .phone {
       width: min(100%, var(--phone-w)); height: min(92vh, var(--phone-h));
@@ -40,7 +41,7 @@
     .screen {
       position: absolute; inset: 0; display: none; flex-direction: column;
       padding: 58px 16px 88px;
-      background: radial-gradient(700px 360px at 50% 35%, rgba(0,255,194,.1), transparent 55%), #050608;
+      background: radial-gradient(700px 360px at 50% 32%, rgba(0,255,194,.1), transparent 55%), #050608;
     }
     .screen.active { display: flex; }
 
@@ -54,34 +55,117 @@
     .stats { text-align: right; font-size: 10px; line-height: 1.65; color: var(--muted); }
     .stats b { color: #fff; }
 
-    /* Avatar stage — no video, no frame */
-    .avatar-stage {
+    .hidden-cam {
+      position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden;
+    }
+
+    .emo-stage {
       position: relative;
       flex: 1;
       min-height: 280px;
-      margin: 8px 0 10px;
+      margin: 6px 0 10px;
       display: grid;
       place-items: center;
+      perspective: 900px;
       overflow: hidden;
     }
-    .avatar-stage.dash { min-height: 220px; flex: 0 0 220px; }
-    .avatar-stage canvas {
-      width: 100%;
-      height: 100%;
-      display: block;
+    .emo-stage.dash { flex: 0 0 220px; min-height: 220px; }
+
+    .emo-rig {
+      width: min(70%, 240px);
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+      transform-style: preserve-3d;
+      will-change: transform;
+      filter: drop-shadow(0 18px 40px rgba(0,0,0,.45));
+      transition: transform 0.05s linear;
     }
-    /* hidden camera — tracking only, never shown */
-    .hidden-cam {
+    .emo-face {
+      font-size: clamp(96px, 28vw, 168px);
+      line-height: 1;
+      user-select: none;
+      transform: translateZ(40px);
+      transition: transform 0.25s ease, filter 0.25s ease;
+      animation: bob 2.8s ease-in-out infinite;
+    }
+    .emo-face.swap {
+      transform: translateZ(40px) scale(0.86);
+      filter: blur(2px);
+      opacity: 0.75;
+    }
+    @keyframes bob {
+      0%, 100% { translate: 0 0; }
+      50% { translate: 0 -6px; }
+    }
+    .emo-glow {
       position: absolute;
-      width: 1px; height: 1px;
-      opacity: 0;
+      width: 70%;
+      height: 70%;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,255,194,.18), transparent 65%);
       pointer-events: none;
-      overflow: hidden;
+      z-index: 0;
     }
+    .emo-stage.loss .emo-glow {
+      background: radial-gradient(circle, rgba(255,92,122,.2), transparent 65%);
+    }
+    .emo-stage.think .emo-glow {
+      background: radial-gradient(circle, rgba(255,209,102,.18), transparent 65%);
+    }
+
+    .mood-chip {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,255,194,.3);
+      background: rgba(0,0,0,.35);
+      color: var(--teal);
+      white-space: nowrap;
+      z-index: 2;
+    }
+    .emo-stage.loss .mood-chip {
+      color: var(--loss);
+      border-color: rgba(255,92,122,.35);
+    }
+    .emo-stage.think .mood-chip {
+      color: #ffd166;
+      border-color: rgba(255,209,102,.35);
+    }
+
+    .demo-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .demo-row button {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      color: var(--muted);
+      border-radius: 12px;
+      padding: 8px 6px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .demo-row button.on {
+      color: #031410;
+      background: var(--teal);
+      border-color: var(--teal);
+      font-weight: 700;
+    }
+    .demo-row button[data-mood="loss"].on { background: var(--loss); border-color: var(--loss); }
+    .demo-row button[data-mood="think"].on { background: #ffd166; border-color: #ffd166; }
 
     .perm {
       position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
-      text-align: center; padding: 20px;
+      text-align: center; padding: 20px; background: rgba(5,6,8,.72);
     }
     .perm button {
       margin-top: 12px; border: 0; background: var(--teal); color: #031410;
@@ -105,7 +189,7 @@
       background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.25);
     }
     .chart-wrap {
-      flex: 1; min-height: 120px; border-radius: 16px; border: 1px solid var(--line);
+      flex: 1; min-height: 110px; border-radius: 16px; border: 1px solid var(--line);
       overflow: hidden; margin-bottom: 10px; background: rgba(255,255,255,.02);
     }
     .chart-wrap canvas { width: 100%; height: 100%; display: block; }
@@ -114,6 +198,7 @@
       display: flex; justify-content: space-between; background: rgba(255,255,255,.03); cursor: pointer;
     }
     .pnl-up { color: var(--teal); font-weight: 700; }
+    .pnl-down { color: var(--loss); font-weight: 700; }
     .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
     .page-title { font-size: 26px; font-weight: 800; margin-bottom: 12px; }
     .pos { border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 10px; }
@@ -147,10 +232,6 @@
       opacity: 0; transition: .25s; z-index: 60; pointer-events: none; white-space: nowrap;
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-    .waiting {
-      position: absolute; color: var(--muted); font-size: 12px; letter-spacing: .08em;
-      text-transform: uppercase; pointer-events: none;
-    }
     @media (max-width: 480px) {
       .stage { padding: 0; } .hint { display: none; }
       .phone { width: 100%; height: 100vh; height: 100dvh; border-radius: 0; border: 0; box-shadow: none; }
@@ -161,39 +242,43 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>Avatar mode</strong> — kamera tikai trackingam.<br />
-      Redzams tikai wireframe avatārs, bez atspulga un bez rāmja.
+      <strong>Emoji avatar</strong> seko galvai.<br />
+      🤑 peļņa · 😢 mīnus · 🤔 meklē entry
     </p>
 
     <div class="phone">
       <div class="notch"></div>
-      <div class="status"><span id="clock">9:41</span><span>AVATAR</span></div>
+      <div class="status"><span id="clock">9:41</span><span>EMOJI</span></div>
       <div class="toast" id="toast">…</div>
-
-      <!-- hidden camera feed -->
-      <div class="hidden-cam">
-        <video id="cam" playsinline autoplay muted></video>
-      </div>
+      <div class="hidden-cam"><video id="cam" playsinline autoplay muted></video></div>
 
       <section class="screen active" id="lock">
         <div class="brand">VS<span>SYSTEM</span></div>
         <div class="top-meta">
           <div class="client">Client<b>ANNA K · PRIVATE</b></div>
           <div class="stats">
-            EQUITY <b>+24.18%</b><br />
+            EQUITY <b id="lockEq">+24.18%</b><br />
             TRADES <b>37</b><br />
-            STATUS <b style="color:var(--teal)">SECURE</b>
+            STATUS <b id="lockStatus" style="color:var(--teal)">SECURE</b>
           </div>
         </div>
         <div class="cam-status" id="camStatus">Gaida kameru…</div>
+        <div class="demo-row" id="moodDemo">
+          <button data-mood="profit" class="on">🤑 Profit</button>
+          <button data-mood="loss">😢 Minus</button>
+          <button data-mood="think">🤔 Entry</button>
+        </div>
 
-        <div class="avatar-stage" id="lockStage">
-          <canvas id="avatarLock"></canvas>
-          <div class="waiting" id="waitLock">Avatar</div>
+        <div class="emo-stage" id="lockStage">
+          <div class="emo-glow"></div>
+          <div class="emo-rig" id="rigLock">
+            <div class="emo-face" id="emoLock">🤑</div>
+          </div>
+          <div class="mood-chip" id="chipLock">Profit · profile OK</div>
           <div class="perm" id="permBox">
             <div>
-              Kameras atspulgs netiks rādīts —<br />tikai <strong style="color:var(--teal)">sejas avatārs</strong>
-              <br /><button id="startCam">Start Avatar</button>
+              Emoji kustās ar Tavu galvu<br />(bez kameras atspulga)
+              <br /><button id="startCam">Start Face Track</button>
             </div>
           </div>
         </div>
@@ -202,20 +287,23 @@
       </section>
 
       <section class="screen" id="home">
-        <div class="hello">Labdien, Anna · avatar</div>
+        <div class="hello">Labdien, Anna</div>
         <div class="equity-row">
           <div class="equity" id="equity">€8,240</div>
-          <div class="pill">AVATAR · LIVE</div>
+          <div class="pill" id="homePill">PROFIT</div>
         </div>
-        <div class="avatar-stage dash" id="dashStage">
-          <canvas id="avatarDash"></canvas>
-          <div class="waiting" id="waitDash">Avatar</div>
+        <div class="emo-stage dash" id="dashStage">
+          <div class="emo-glow"></div>
+          <div class="emo-rig" id="rigDash">
+            <div class="emo-face" id="emoDash">🤑</div>
+          </div>
+          <div class="mood-chip" id="chipDash">Profit · profile OK</div>
         </div>
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
         <div class="mini-card" data-go="positions">
           <div>
             <div style="font-weight:700">US100 · BUY 0.03</div>
-            <div class="meta">Trail ON · TP1 done</div>
+            <div class="meta" id="posMeta">Trail ON · floating PnL</div>
           </div>
           <div class="pnl-up" id="floatPnl">+€126.40</div>
         </div>
@@ -232,7 +320,7 @@
         <div class="pos">
           <div class="pos-head">
             <div><b>GOLD</b><div class="meta">SELL · 0.02</div></div>
-            <div style="color:#ff5c7a;font-weight:700">-€8.40</div>
+            <div class="pnl-down" id="pos2">-€8.40</div>
           </div>
         </div>
       </section>
@@ -241,7 +329,7 @@
         <div class="hello">Private client</div>
         <div class="mono-ak">AK</div>
         <div class="row"><span>Name</span><b>Anna K.</b></div>
-        <div class="row"><span>Face</span><b style="color:var(--teal)">AVATAR ONLY</b></div>
+        <div class="row"><span>Mood avatar</span><b style="color:var(--teal)">LIVE EMOJI</b></div>
         <div class="row"><span>Strategy</span><b>SCALPING · US100</b></div>
         <button class="lock-again" id="lockAgain">Lock</button>
       </section>
@@ -259,146 +347,104 @@
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
 
-    const OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
-    const LIP_OUT = [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185];
-    const LIP_IN = [78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191];
-    const LEFT_EYE = [33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246];
-    const RIGHT_EYE = [263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466];
-    const LEFT_BROW = [70,63,105,66,107,55,65,52,53,46];
-    const RIGHT_BROW = [300,293,334,296,336,285,295,282,283,276];
-    const MESH_LINES = [
-      [234,93,132,58,172,136,150,149,176,148,152],
-      [454,323,361,288,397,365,379,378,400,377,152],
-      [127,162,21,54,103,67,109,10],
-      [356,389,251,284,332,297,338,10],
-      [33,133,362,263],
-      [61,291],
-      [1,4,5,195,197,6,168,8,9,151,10],
-    ];
+    const MOODS = {
+      profit: {
+        emoji: "🤑",
+        chip: "Profit · profile OK",
+        stage: "profit",
+        pill: "PROFIT",
+        status: "SECURE",
+        statusColor: "var(--teal)",
+      },
+      loss: {
+        emoji: "😢",
+        chip: "Minus · drawdown",
+        stage: "loss",
+        pill: "MINUS",
+        status: "RISK",
+        statusColor: "var(--loss)",
+      },
+      think: {
+        emoji: "🤔",
+        chip: "Meklē entry…",
+        stage: "think",
+        pill: "SCANNING",
+        status: "WAIT",
+        statusColor: "#ffd166",
+      },
+    };
 
+    let mood = "profit";
     let landmarker = null;
     let stream = null;
     let unlocked = false;
     let lastVideoTime = -1;
+    let smooth = { yaw: 0, pitch: 0, roll: 0 };
     const cam = $("#cam");
-    const cLock = $("#avatarLock");
-    const cDash = $("#avatarDash");
-    const ctxL = cLock.getContext("2d");
-    const ctxD = cDash.getContext("2d");
 
     function showToast(m) {
       const t = $("#toast");
       t.textContent = m; t.classList.add("show");
       setTimeout(() => t.classList.remove("show"), 1400);
     }
+
     function setScreen(id) {
       $$(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
       $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
-      resizeAvatars();
     }
-    function resizeAvatars() {
-      for (const [stage, canvas] of [
-        [$("#lockStage"), cLock],
-        [$("#dashStage"), cDash],
-      ]) {
-        const w = stage.clientWidth, h = stage.clientHeight;
-        if (!w || !h) continue;
-        const dpr = Math.min(devicePixelRatio || 1, 2);
-        canvas.width = Math.floor(w * dpr);
-        canvas.height = Math.floor(h * dpr);
-        canvas.style.width = w + "px";
-        canvas.style.height = h + "px";
-        canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    function setMood(next, { toast = true } = {}) {
+      mood = next;
+      const m = MOODS[mood];
+      for (const id of ["emoLock", "emoDash"]) {
+        const el = $("#" + id);
+        el.classList.add("swap");
+        setTimeout(() => {
+          el.textContent = m.emoji;
+          el.classList.remove("swap");
+        }, 120);
       }
-    }
-
-    /** Map landmarks into a centered avatar box (no camera mirror). */
-    function toAvatarPoints(lm, w, h) {
-      let minX = 1, maxX = 0, minY = 1, maxY = 0;
-      for (const i of OVAL) {
-        const p = lm[i];
-        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      for (const stage of ["lockStage", "dashStage"]) {
+        const el = $("#" + stage);
+        el.classList.remove("profit", "loss", "think");
+        if (m.stage !== "profit") el.classList.add(m.stage);
       }
-      const bw = Math.max(maxX - minX, 0.05);
-      const bh = Math.max(maxY - minY, 0.05);
-      const size = Math.min(w, h) * 0.78;
-      const scale = size / Math.max(bw, bh);
-      // mirror X so head turns feel natural (like looking in avatar space)
-      const cx = w / 2;
-      const cy = h / 2 + h * 0.02;
-      const midX = (minX + maxX) / 2;
-      const midY = (minY + maxY) / 2;
+      $("#chipLock").textContent = m.chip;
+      $("#chipDash").textContent = m.chip;
+      $("#homePill").textContent = m.pill;
+      $("#lockStatus").textContent = m.status;
+      $("#lockStatus").style.color = m.statusColor;
 
-      return lm.map((p) => ({
-        x: cx - (p.x - midX) * scale,
-        y: cy + (p.y - midY) * scale,
-      }));
-    }
-
-    function drawPath(ctx, pts, idx, close = true) {
-      ctx.beginPath();
-      idx.forEach((i, n) => {
-        const p = pts[i];
-        n ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y);
+      $$("#moodDemo button").forEach((b) => {
+        b.classList.toggle("on", b.dataset.mood === mood);
       });
-      if (close) ctx.closePath();
-      ctx.stroke();
+
+      if (toast) showToast(m.emoji + " " + m.chip);
     }
 
-    function drawAvatar(ctx, lm, w, h) {
-      ctx.clearRect(0, 0, w, h);
-      if (!lm) return;
-      const pts = toAvatarPoints(lm, w, h);
+    function applyPose(yaw, pitch, roll) {
+      const a = 0.38;
+      smooth.yaw += (yaw - smooth.yaw) * a;
+      smooth.pitch += (pitch - smooth.pitch) * a;
+      smooth.roll += (roll - smooth.roll) * a;
+      const ry = Math.max(-36, Math.min(36, smooth.yaw));
+      const rx = Math.max(-26, Math.min(26, smooth.pitch));
+      const rz = Math.max(-16, Math.min(16, smooth.roll));
+      const t = `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg)`;
+      $("#rigLock").style.transform = t;
+      $("#rigDash").style.transform = t;
+    }
 
-      // ambient glow disc behind avatar
-      ctx.save();
-      const g = ctx.createRadialGradient(w/2, h/2, 10, w/2, h/2, Math.min(w,h)*0.42);
-      g.addColorStop(0, "rgba(0,255,194,0.12)");
-      g.addColorStop(1, "rgba(0,255,194,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(w/2, h/2, Math.min(w,h)*0.42, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-
-      // soft underlay
-      ctx.strokeStyle = "rgba(0,255,194,0.22)";
-      ctx.lineWidth = 4;
-      drawPath(ctx, pts, OVAL, true);
-
-      // main contour
-      ctx.shadowColor = "rgba(0,255,194,0.85)";
-      ctx.shadowBlur = 14;
-      ctx.strokeStyle = "#00ffc2";
-      ctx.lineWidth = 1.5;
-      drawPath(ctx, pts, OVAL, true);
-
-      ctx.shadowBlur = 8;
-      ctx.lineWidth = 1.15;
-      drawPath(ctx, pts, LEFT_EYE, true);
-      drawPath(ctx, pts, RIGHT_EYE, true);
-      drawPath(ctx, pts, LEFT_BROW, false);
-      drawPath(ctx, pts, RIGHT_BROW, false);
-      drawPath(ctx, pts, LIP_OUT, true);
-      ctx.lineWidth = 0.85;
-      drawPath(ctx, pts, LIP_IN, true);
-
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(0,255,194,0.4)";
-      ctx.lineWidth = 0.7;
-      for (const line of MESH_LINES) drawPath(ctx, pts, line, false);
-
-      ctx.fillStyle = "#00ffc2";
-      for (const i of [1, 33, 263, 61, 291]) {
-        const p = pts[i];
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
+    function poseFromLandmarks(lm) {
+      const nose = lm[1], left = lm[33], right = lm[263], chin = lm[152], brow = lm[10];
+      const midX = (left.x + right.x) / 2;
+      const eyeDist = Math.hypot(right.x - left.x, right.y - left.y) || 0.01;
+      const yaw = ((midX - nose.x) / eyeDist) * 55;
+      const faceH = Math.hypot(chin.x - brow.x, chin.y - brow.y) || 0.01;
+      const midY = (brow.y + chin.y) / 2;
+      const pitch = ((nose.y - midY) / faceH) * -70;
+      const roll = Math.atan2(right.y - left.y, right.x - left.x) * (180 / Math.PI);
+      return { yaw, pitch, roll };
     }
 
     async function initLandmarker() {
@@ -420,7 +466,7 @@
     }
 
     async function startCamera() {
-      $("#camStatus").textContent = "Ielādē model…";
+      $("#camStatus").textContent = "Ielādē face track…";
       try {
         if (!landmarker) await initLandmarker();
         stream = await navigator.mediaDevices.getUserMedia({
@@ -431,12 +477,9 @@
         await cam.play();
         $("#permBox").style.display = "none";
         $("#unlockBtn").style.display = "flex";
-        $("#camStatus").textContent = "Avatar live · bez atspulga";
+        $("#camStatus").textContent = "Emoji seko galvai";
         $("#camStatus").classList.add("on");
-        $("#waitLock").style.display = "none";
-        $("#waitDash").style.display = "none";
-        showToast("Avatar ON");
-        resizeAvatars();
+        showToast("Face track ON");
         loop();
       } catch (e) {
         console.error(e);
@@ -451,12 +494,19 @@
       if (cam.currentTime === lastVideoTime) return;
       lastVideoTime = cam.currentTime;
       const res = landmarker.detectForVideo(cam, performance.now());
-      const lm = res.faceLandmarks?.[0] || null;
+      if (res.faceLandmarks?.[0]) {
+        const { yaw, pitch, roll } = poseFromLandmarks(res.faceLandmarks[0]);
+        applyPose(yaw, pitch, roll);
+      }
+    }
 
-      const wL = $("#lockStage").clientWidth, hL = $("#lockStage").clientHeight;
-      const wD = $("#dashStage").clientWidth, hD = $("#dashStage").clientHeight;
-      if (wL && hL) drawAvatar(ctxL, lm, wL, hL);
-      if (unlocked && wD && hD) drawAvatar(ctxD, lm, wD, hD);
+    // Auto mood from simulated floating PnL when unlocked
+    function moodFromPnl(pnl) {
+      if (pnl <= -5) return "loss";
+      if (Math.abs(pnl) < 8 && Math.random() < 0.02) return "think"; // occasional scan feel
+      if (pnl > 15) return "profit";
+      if (pnl < 0) return "loss";
+      return mood === "think" ? "think" : "profit";
     }
 
     $("#startCam").addEventListener("click", startCamera);
@@ -464,7 +514,7 @@
       unlocked = true;
       $("#tabs").classList.add("show");
       setScreen("home");
-      showToast("Dashboard · avatar");
+      showToast("Dashboard");
       startChart();
     });
     $("#lockAgain").addEventListener("click", () => {
@@ -477,16 +527,22 @@
       if (b) setScreen(b.dataset.tab);
     });
     $$("[data-go]").forEach((el) => el.addEventListener("click", () => setScreen(el.dataset.go)));
-    window.addEventListener("resize", resizeAvatars);
+    $("#moodDemo").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-mood]");
+      if (!b) return;
+      setMood(b.dataset.mood);
+    });
 
     const tick = () => {
       $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     };
     tick(); setInterval(tick, 10000);
 
+    // chart + live pnl drives emoji when auto
     const chart = $("#chart");
     const cctx = chart.getContext("2d");
     let prices = [];
+    let manualMood = true; // demo buttons set manual; after unlock can auto-switch lightly
     function seed() {
       prices = []; let p = 21820;
       for (let i = 0; i < 50; i++) { p += (Math.random() - .45) * 12; prices.push(p); }
@@ -522,6 +578,8 @@
       });
       cctx.strokeStyle = "#00ffc2"; cctx.lineWidth = 2; cctx.stroke();
     }
+
+    let autoTimer = 0;
     function startChart() {
       seed(); resizeChart();
       setInterval(() => {
@@ -529,15 +587,35 @@
         prices.push(prices.at(-1) + (Math.random() - .48) * 9);
         if (prices.length > 50) prices.shift();
         drawChart();
-        const base = 126.4 + (prices.at(-1) - 21820) * .08;
-        const t = (base >= 0 ? "+" : "") + "€" + base.toFixed(2);
-        $("#floatPnl").textContent = t;
-        $("#pos1").textContent = t;
-        $("#equity").textContent = "€" + (8240 + base * .3).toLocaleString("en-US", { maximumFractionDigits: 0 });
+        const base = 126.4 + (prices.at(-1) - 21820) * 0.08;
+        const t = (base >= 0 ? "+" : "") + "€" + Math.abs(base).toFixed(2);
+        const signed = (base >= 0 ? "+" : "-") + "€" + Math.abs(base).toFixed(2);
+        $("#floatPnl").textContent = signed;
+        $("#floatPnl").className = base >= 0 ? "pnl-up" : "pnl-down";
+        $("#pos1").textContent = signed;
+        $("#pos1").className = base >= 0 ? "pnl-up" : "pnl-down";
+        $("#equity").textContent = "€" + (8240 + base * 0.3).toLocaleString("en-US", { maximumFractionDigits: 0 });
+        $("#posMeta").textContent =
+          mood === "think" ? "Gaida entry…" : mood === "loss" ? "Floating minus" : "Trail ON · floating +";
+
+        // every ~4s nudge mood from pnl unless user just clicked demo
+        autoTimer += 1;
+        if (autoTimer % 5 === 0 && !manualMood) {
+          const next = base < -3 ? "loss" : base > 20 ? "profit" : (Math.random() < 0.35 ? "think" : mood);
+          if (next !== mood) setMood(next, { toast: false });
+        }
       }, 900);
+
+      // after enter dashboard, allow auto mood from pnl
+      setTimeout(() => { manualMood = false; }, 2500);
     }
+
+    $("#moodDemo").addEventListener("click", () => { manualMood = true; });
+
     window.addEventListener("resize", resizeChart);
-    seed(); requestAnimationFrame(() => { resizeAvatars(); resizeChart(); });
+    seed();
+    requestAnimationFrame(resizeChart);
+    setMood("profit", { toast: false });
   </script>
 </body>
 </html>
