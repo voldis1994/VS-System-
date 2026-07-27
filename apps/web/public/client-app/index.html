@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — 3D Emoji Avatar</title>
+  <title>VS System — Real 3D Avatar</title>
   <style>
     :root {
       --teal: #00ffc2;
@@ -41,158 +41,49 @@
     .screen {
       position: absolute; inset: 0; display: none; flex-direction: column;
       padding: 58px 16px 88px;
-      background: radial-gradient(700px 360px at 50% 32%, rgba(0,255,194,.1), transparent 55%), #050608;
+      background: radial-gradient(700px 360px at 50% 34%, rgba(0,255,194,.1), transparent 55%), #050608;
     }
     .screen.active { display: flex; }
-
     .brand { font-size: 52px; font-weight: 800; letter-spacing: -.06em; line-height: .85; }
     .brand span { display: block; font-size: 11px; letter-spacing: .42em; margin-top: 6px; color: var(--muted); }
-    .top-meta {
-      display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; align-items: flex-start;
-    }
+    .top-meta { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; }
     .client { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); }
-    .client b { display: block; color: #fff; font-size: 13px; letter-spacing: .04em; margin-top: 3px; }
+    .client b { display: block; color: #fff; font-size: 13px; margin-top: 3px; }
     .stats { text-align: right; font-size: 10px; line-height: 1.65; color: var(--muted); }
     .stats b { color: #fff; }
+    .hidden-cam { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
-    .hidden-cam {
-      position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden;
+    .avatar-stage {
+      position: relative; flex: 1; min-height: 300px; margin: 8px 0 10px;
+      border-radius: 0; overflow: hidden;
     }
-
-    .emo-stage {
-      position: relative;
-      flex: 1;
-      min-height: 280px;
-      margin: 6px 0 10px;
-      display: grid;
-      place-items: center;
-      perspective: 1000px;
-      overflow: hidden;
-    }
-    .emo-stage.dash { flex: 0 0 230px; min-height: 230px; }
-
-    .emo-rig {
-      width: min(72%, 250px);
-      aspect-ratio: 1;
-      display: grid;
-      place-items: center;
-      transform-style: preserve-3d;
-      will-change: transform;
-      transition: transform 0.05s linear;
-      position: relative;
-      z-index: 1;
-    }
-
-    .emo-3d {
-      width: 88%;
-      height: 88%;
-      object-fit: contain;
-      user-select: none;
-      pointer-events: none;
-      transform: translateZ(48px);
-      filter: drop-shadow(0 22px 28px rgba(0,0,0,.55));
-      transition: opacity 0.2s ease, transform 0.2s ease, filter 0.2s ease;
-      animation: floaty 3s ease-in-out infinite;
-    }
-    .emo-3d.swap {
-      opacity: 0.35;
-      transform: translateZ(48px) scale(0.9);
-      filter: blur(3px) drop-shadow(0 22px 28px rgba(0,0,0,.55));
-    }
-
-    /* fake specular for 3D plastic feel */
-    .emo-shine {
-      position: absolute;
-      inset: 12%;
-      border-radius: 50%;
-      background: linear-gradient(135deg, rgba(255,255,255,.35) 0%, transparent 42%, transparent 100%);
-      mix-blend-mode: soft-light;
-      pointer-events: none;
-      transform: translateZ(60px);
-      opacity: 0.55;
-    }
-
-    @keyframes floaty {
-      0%, 100% { translate: 0 0; }
-      50% { translate: 0 -8px; }
-    }
-
-    .emo-glow {
-      position: absolute;
-      width: 72%;
-      height: 72%;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(0,255,194,.2), transparent 68%);
-      pointer-events: none;
-      z-index: 0;
-      filter: blur(2px);
-    }
-    .emo-stage.loss .emo-glow {
-      background: radial-gradient(circle, rgba(255,92,122,.22), transparent 68%);
-    }
-    .emo-stage.think .emo-glow {
-      background: radial-gradient(circle, rgba(255,209,102,.2), transparent 68%);
+    .avatar-stage.dash { flex: 0 0 240px; min-height: 240px; }
+    .avatar-stage canvas {
+      width: 100% !important; height: 100% !important; display: block;
     }
 
     .mood-chip {
-      position: absolute;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 11px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      padding: 6px 12px;
-      border-radius: 999px;
-      border: 1px solid rgba(0,255,194,.3);
-      background: rgba(0,0,0,.4);
-      color: var(--teal);
-      white-space: nowrap;
-      z-index: 2;
+      position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+      font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+      padding: 6px 12px; border-radius: 999px; z-index: 2;
+      border: 1px solid rgba(0,255,194,.3); background: rgba(0,0,0,.45); color: var(--teal);
+      pointer-events: none;
     }
-    .emo-stage.loss .mood-chip {
-      color: var(--loss);
-      border-color: rgba(255,92,122,.35);
-    }
-    .emo-stage.think .mood-chip {
-      color: #ffd166;
-      border-color: rgba(255,209,102,.35);
-    }
+    .avatar-stage.loss .mood-chip { color: var(--loss); border-color: rgba(255,92,122,.35); }
+    .avatar-stage.think .mood-chip { color: #ffd166; border-color: rgba(255,209,102,.35); }
 
-    .demo-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 6px;
-      margin-bottom: 8px;
-    }
+    .demo-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
     .demo-row button {
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,.03);
-      color: var(--muted);
-      border-radius: 12px;
-      padding: 8px 6px;
-      font-size: 11px;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
+      border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--muted);
+      border-radius: 12px; padding: 10px 6px; font-size: 11px; cursor: pointer;
     }
-    .demo-row button img {
-      width: 28px; height: 28px; object-fit: contain;
-    }
-    .demo-row button.on {
-      color: #031410;
-      background: var(--teal);
-      border-color: var(--teal);
-      font-weight: 700;
-    }
-    .demo-row button[data-mood="loss"].on { background: var(--loss); border-color: var(--loss); color: #fff; }
-    .demo-row button[data-mood="think"].on { background: #ffd166; border-color: #ffd166; }
+    .demo-row button.on { background: var(--teal); color: #031410; border-color: var(--teal); font-weight: 700; }
+    .demo-row button[data-mood="loss"].on { background: var(--loss); color: #fff; border-color: var(--loss); }
+    .demo-row button[data-mood="think"].on { background: #ffd166; color: #031410; border-color: #ffd166; }
 
     .perm {
       position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
-      text-align: center; padding: 20px; background: rgba(5,6,8,.75);
+      text-align: center; padding: 20px; background: rgba(5,6,8,.78);
     }
     .perm button {
       margin-top: 12px; border: 0; background: var(--teal); color: #031410;
@@ -200,14 +91,12 @@
     }
     .cam-status { font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 4px; }
     .cam-status.on { color: var(--teal); }
-
     .unlock-btn {
-      display: flex; align-items: center; justify-content: center; gap: 10px;
-      width: 100%; padding: 14px; border-radius: 999px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; width: 100%;
+      padding: 14px; border-radius: 999px; cursor: pointer;
       border: 1px solid rgba(0,255,194,.35); background: rgba(0,255,194,.08);
       color: #fff; font-weight: 700;
     }
-
     .hello { font-size: 12px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
     .equity { font-size: 42px; font-weight: 800; letter-spacing: -.04em; }
     .equity-row { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 8px; }
@@ -216,7 +105,7 @@
       background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.25);
     }
     .chart-wrap {
-      flex: 1; min-height: 100px; border-radius: 16px; border: 1px solid var(--line);
+      flex: 1; min-height: 90px; border-radius: 16px; border: 1px solid var(--line);
       overflow: hidden; margin-bottom: 10px; background: rgba(255,255,255,.02);
     }
     .chart-wrap canvas { width: 100%; height: 100%; display: block; }
@@ -269,13 +158,13 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>Realistic 3D emoji</strong> (Fluent 3D) — seko galvai.<br />
-      Peļņa · Mīnus · Meklē entry
+      <strong>Īsts 3D avatārs</strong> (Three.js) — spīdīga galva ar gaismu un dziļumu.<br />
+      Seko Tavai galvai. Bez kameras atspulga.
     </p>
 
     <div class="phone">
       <div class="notch"></div>
-      <div class="status"><span id="clock">9:41</span><span>3D EMOJI</span></div>
+      <div class="status"><span id="clock">9:41</span><span>3D AVATAR</span></div>
       <div class="toast" id="toast">…</div>
       <div class="hidden-cam"><video id="cam" playsinline autoplay muted></video></div>
 
@@ -284,39 +173,25 @@
         <div class="top-meta">
           <div class="client">Client<b>ANNA K · PRIVATE</b></div>
           <div class="stats">
-            EQUITY <b>+24.18%</b><br />
-            TRADES <b>37</b><br />
+            EQUITY <b>+24.18%</b><br />TRADES <b>37</b><br />
             STATUS <b id="lockStatus" style="color:var(--teal)">SECURE</b>
           </div>
         </div>
         <div class="cam-status" id="camStatus">Gaida kameru…</div>
         <div class="demo-row" id="moodDemo">
-          <button data-mood="profit" class="on">
-            <img alt="" data-src="profit" />Profit
-          </button>
-          <button data-mood="loss">
-            <img alt="" data-src="loss" />Minus
-          </button>
-          <button data-mood="think">
-            <img alt="" data-src="think" />Entry
-          </button>
+          <button data-mood="profit" class="on">🤑 Profit</button>
+          <button data-mood="loss">😢 Minus</button>
+          <button data-mood="think">🤔 Entry</button>
         </div>
-
-        <div class="emo-stage" id="lockStage">
-          <div class="emo-glow"></div>
-          <div class="emo-rig" id="rigLock">
-            <img class="emo-3d" id="emoLock" alt="mood" />
-            <div class="emo-shine"></div>
-          </div>
+        <div class="avatar-stage" id="lockStage">
           <div class="mood-chip" id="chipLock">Profit · profile OK</div>
           <div class="perm" id="permBox">
             <div>
-              3D emoji kustās ar Tavu galvu<br />(bez kameras atspulga)
-              <br /><button id="startCam">Start Face Track</button>
+              Īsts WebGL 3D avatārs<br />sekos Tavai galvai
+              <br /><button id="startCam">Start 3D Face Track</button>
             </div>
           </div>
         </div>
-
         <button class="unlock-btn" id="unlockBtn" style="display:none">Face ID or Passcode · Enter</button>
       </section>
 
@@ -326,12 +201,7 @@
           <div class="equity" id="equity">€8,240</div>
           <div class="pill" id="homePill">PROFIT</div>
         </div>
-        <div class="emo-stage dash" id="dashStage">
-          <div class="emo-glow"></div>
-          <div class="emo-rig" id="rigDash">
-            <img class="emo-3d" id="emoDash" alt="mood" />
-            <div class="emo-shine"></div>
-          </div>
+        <div class="avatar-stage dash" id="dashStage">
           <div class="mood-chip" id="chipDash">Profit · profile OK</div>
         </div>
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
@@ -355,7 +225,7 @@
         <div class="pos">
           <div class="pos-head">
             <div><b>GOLD</b><div class="meta">SELL · 0.02</div></div>
-            <div class="pnl-down" id="pos2">-€8.40</div>
+            <div class="pnl-down">-€8.40</div>
           </div>
         </div>
       </section>
@@ -364,7 +234,7 @@
         <div class="hello">Private client</div>
         <div class="mono-ak">AK</div>
         <div class="row"><span>Name</span><b>Anna K.</b></div>
-        <div class="row"><span>Avatar</span><b style="color:var(--teal)">3D EMOJI LIVE</b></div>
+        <div class="row"><span>Avatar</span><b style="color:var(--teal)">REAL 3D WEBGL</b></div>
         <div class="row"><span>Strategy</span><b>SCALPING · US100</b></div>
         <button class="lock-again" id="lockAgain">Lock</button>
       </section>
@@ -378,81 +248,275 @@
     </div>
   </div>
 
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
   <script type="module">
+    import * as THREE from "three";
+
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
 
-    // Microsoft Fluent UI 3D emoji (local — same as your reference image)
-    const IMG = {
-      profit: "./emoji/profit.png",
-      loss: "./emoji/loss.png",
-      think: "./emoji/think.png",
+    const MOOD_META = {
+      profit: { chip: "Profit · profile OK", pill: "PROFIT", status: "SECURE", color: "var(--teal)", stage: "profit" },
+      loss: { chip: "Minus · drawdown", pill: "MINUS", status: "RISK", color: "var(--loss)", stage: "loss" },
+      think: { chip: "Meklē entry…", pill: "SCANNING", status: "WAIT", color: "#ffd166", stage: "think" },
     };
-
-    const MOODS = {
-      profit: {
-        img: IMG.profit,
-        chip: "Profit · profile OK",
-        stage: "profit",
-        pill: "PROFIT",
-        status: "SECURE",
-        statusColor: "var(--teal)",
-      },
-      loss: {
-        img: IMG.loss,
-        chip: "Minus · drawdown",
-        stage: "loss",
-        pill: "MINUS",
-        status: "RISK",
-        statusColor: "var(--loss)",
-      },
-      think: {
-        img: IMG.think,
-        chip: "Meklē entry…",
-        stage: "think",
-        pill: "SCANNING",
-        status: "WAIT",
-        statusColor: "#ffd166",
-      },
-    };
-
-    // preload
-    Object.values(IMG).forEach((src) => { const i = new Image(); i.src = src; });
-    $$("#moodDemo img").forEach((img) => { img.src = IMG[img.dataset.src]; });
 
     let mood = "profit";
     let landmarker = null;
     let stream = null;
     let unlocked = false;
     let lastVideoTime = -1;
-    let smooth = { yaw: 0, pitch: 0, roll: 0 };
     let manualMood = true;
+    let smooth = { yaw: 0, pitch: 0, roll: 0 };
     const cam = $("#cam");
 
-    function showToast(m) {
-      const t = $("#toast");
-      t.textContent = m; t.classList.add("show");
-      setTimeout(() => t.classList.remove("show"), 1400);
+    /* ---------- 3D avatar factory ---------- */
+    function makeSkin() {
+      return new THREE.MeshPhysicalMaterial({
+        color: 0xffcc33,
+        roughness: 0.28,
+        metalness: 0.05,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.2,
+      });
+    }
+    function makeDollarTexture() {
+      const c = document.createElement("canvas");
+      c.width = 128; c.height = 128;
+      const g = c.getContext("2d");
+      g.fillStyle = "#16c45a";
+      g.beginPath(); g.arc(64, 64, 58, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = "#0a7a35"; g.lineWidth = 6; g.stroke();
+      g.fillStyle = "#083d1c";
+      g.font = "bold 78px Arial";
+      g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText("$", 64, 70);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
     }
 
-    function setScreen(id) {
-      $$(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
-      $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
+    function buildAvatar() {
+      const root = new THREE.Group();
+      const skin = makeSkin();
+
+      const head = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 64), skin);
+      head.castShadow = true;
+      root.add(head);
+
+      // eye whites
+      const eyeGeo = new THREE.SphereGeometry(0.22, 32, 32);
+      const white = new THREE.MeshStandardMaterial({ color: 0xfff8e7, roughness: 0.35 });
+      const leftEye = new THREE.Mesh(eyeGeo, white);
+      const rightEye = new THREE.Mesh(eyeGeo, white);
+      leftEye.position.set(-0.38, 0.22, 0.82);
+      rightEye.position.set(0.38, 0.22, 0.82);
+      root.add(leftEye, rightEye);
+
+      // pupils / dollar eyes
+      const dollarTex = makeDollarTexture();
+      const dollarMat = new THREE.MeshStandardMaterial({ map: dollarTex, transparent: true });
+      const pupilGeo = new THREE.CircleGeometry(0.18, 32);
+      const leftDollar = new THREE.Mesh(pupilGeo, dollarMat);
+      const rightDollar = new THREE.Mesh(pupilGeo, dollarMat);
+      leftDollar.position.set(-0.38, 0.22, 1.02);
+      rightDollar.position.set(0.38, 0.22, 1.02);
+      root.add(leftDollar, rightDollar);
+
+      const pupilMat = new THREE.MeshStandardMaterial({ color: 0x1a1208 });
+      const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.1, 24, 24), pupilMat);
+      const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.1, 24, 24), pupilMat);
+      leftPupil.position.set(-0.38, 0.22, 1.0);
+      rightPupil.position.set(0.38, 0.22, 1.0);
+      root.add(leftPupil, rightPupil);
+
+      // brows
+      const browMat = new THREE.MeshStandardMaterial({ color: 0x5a3a1a });
+      const browGeo = new THREE.CapsuleGeometry(0.04, 0.28, 4, 8);
+      const leftBrow = new THREE.Mesh(browGeo, browMat);
+      const rightBrow = new THREE.Mesh(browGeo, browMat);
+      leftBrow.rotation.z = 0.2; rightBrow.rotation.z = -0.2;
+      leftBrow.position.set(-0.38, 0.48, 0.9);
+      rightBrow.position.set(0.38, 0.48, 0.9);
+      root.add(leftBrow, rightBrow);
+
+      // mouth group
+      const mouth = new THREE.Group();
+      const smile = new THREE.Mesh(
+        new THREE.TorusGeometry(0.35, 0.08, 16, 48, Math.PI),
+        new THREE.MeshStandardMaterial({ color: 0x6b1d1d }),
+      );
+      smile.rotation.x = Math.PI; smile.position.set(0, -0.15, 0.9);
+      const tongue = new THREE.Mesh(
+        new THREE.SphereGeometry(0.18, 24, 24),
+        new THREE.MeshStandardMaterial({ color: 0x2ecc71 }),
+      );
+      tongue.scale.set(1.2, 0.55, 0.7);
+      tongue.position.set(0, -0.32, 0.95);
+      const tongueDollar = new THREE.Mesh(
+        new THREE.CircleGeometry(0.08, 20),
+        new THREE.MeshStandardMaterial({ color: 0x0f6b35, side: THREE.DoubleSide }),
+      );
+      tongueDollar.position.set(0, -0.32, 1.08);
+      mouth.add(smile, tongue, tongueDollar);
+      root.add(mouth);
+
+      // sad mouth
+      const frown = new THREE.Mesh(
+        new THREE.TorusGeometry(0.28, 0.07, 12, 40, Math.PI),
+        new THREE.MeshStandardMaterial({ color: 0x6b1d1d }),
+      );
+      frown.position.set(0, -0.45, 0.9);
+      root.add(frown);
+
+      // flat think mouth
+      const flat = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.05, 0.28, 4, 8),
+        new THREE.MeshStandardMaterial({ color: 0x6b1d1d }),
+      );
+      flat.rotation.z = Math.PI / 2;
+      flat.position.set(0, -0.28, 0.95);
+      root.add(flat);
+
+      // tears
+      const tearMat = new THREE.MeshPhysicalMaterial({
+        color: 0x4db7ff, roughness: 0.4, transparent: true, opacity: 0.95, roughnessIntensity: 0.6,
+      });
+      const tearL = new THREE.Mesh(new THREE.SphereGeometry(0.09, 16, 16), tearMat);
+      const tearR = new THREE.Mesh(new THREE.SphereGeometry(0.09, 16, 16), tearMat);
+      tearL.scale.set(0.8, 1.6, 0.8); tearR.scale.set(0.8, 1.6, 0.8);
+      tearL.position.set(-0.42, -0.05, 0.95);
+      tearR.position.set(0.42, -0.05, 0.95);
+      root.add(tearL, tearR);
+
+      // thinking hand
+      const hand = new THREE.Group();
+      const palm = new THREE.Mesh(
+        new THREE.SphereGeometry(0.28, 24, 24),
+        skin,
+      );
+      palm.scale.set(1, 0.75, 0.55);
+      const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.35, 4, 8), skin);
+      finger.position.set(0.05, 0.35, 0.05);
+      hand.add(palm, finger);
+      hand.position.set(0.85, -0.35, 0.85);
+      hand.rotation.set(0.2, -0.4, -0.5);
+      root.add(hand);
+
+      root.userData = {
+        leftDollar, rightDollar, leftPupil, rightPupil,
+        leftBrow, rightBrow, mouth, frown, flat, tearL, tearR, hand, leftEye, rightEye,
+      };
+      applyMoodMeshes(root, "profit");
+      return root;
     }
+
+    function applyMoodMeshes(root, m) {
+      const u = root.userData;
+      const profit = m === "profit";
+      const loss = m === "loss";
+      const think = m === "think";
+
+      u.leftDollar.visible = profit;
+      u.rightDollar.visible = profit;
+      u.leftPupil.visible = !profit;
+      u.rightPupil.visible = !profit;
+      u.mouth.visible = profit;
+      u.frown.visible = loss;
+      u.flat.visible = think;
+      u.tearL.visible = loss;
+      u.tearR.visible = loss;
+      u.hand.visible = think;
+
+      // brow angles
+      if (profit) {
+        u.leftBrow.rotation.z = 0.25; u.rightBrow.rotation.z = -0.25;
+        u.leftBrow.position.y = 0.5; u.rightBrow.position.y = 0.5;
+        u.leftEye.position.set(-0.38, 0.22, 0.82);
+        u.rightEye.position.set(0.38, 0.22, 0.82);
+      } else if (loss) {
+        u.leftBrow.rotation.z = -0.35; u.rightBrow.rotation.z = 0.35;
+        u.leftBrow.position.y = 0.52; u.rightBrow.position.y = 0.52;
+        u.leftEye.position.set(-0.38, 0.18, 0.82);
+        u.rightEye.position.set(0.38, 0.18, 0.82);
+        u.leftPupil.position.set(-0.38, 0.14, 1.0);
+        u.rightPupil.position.set(0.38, 0.14, 1.0);
+      } else {
+        u.leftBrow.rotation.z = 0.45; u.rightBrow.rotation.z = 0.05;
+        u.leftBrow.position.y = 0.55; u.rightBrow.position.y = 0.46;
+        u.leftEye.position.set(-0.34, 0.28, 0.82);
+        u.rightEye.position.set(0.42, 0.3, 0.82);
+        u.leftPupil.position.set(-0.3, 0.32, 1.0);
+        u.rightPupil.position.set(0.46, 0.34, 1.0);
+      }
+    }
+
+    function createStage(container) {
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+      camera.position.set(0, 0.05, 4.2);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.15;
+      container.appendChild(renderer.domElement);
+
+      const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.85);
+      const key = new THREE.DirectionalLight(0xffffff, 1.35);
+      key.position.set(2.5, 3.5, 4);
+      const fill = new THREE.DirectionalLight(0x88ffdd, 0.45);
+      fill.position.set(-3, 1, 2);
+      const rim = new THREE.DirectionalLight(0xfff0c0, 0.55);
+      rim.position.set(0, -1, -3);
+      scene.add(hemi, key, fill, rim);
+
+      const avatar = buildAvatar();
+      scene.add(avatar);
+
+      // soft ground glow
+      const glow = new THREE.Mesh(
+        new THREE.CircleGeometry(1.3, 48),
+        new THREE.MeshBasicMaterial({ color: 0x00ffc2, transparent: true, opacity: 0.12 }),
+      );
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.y = -1.25;
+      scene.add(glow);
+
+      function resize() {
+        const w = container.clientWidth, h = container.clientHeight;
+        if (!w || !h) return;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h, false);
+      }
+      resize();
+
+      return { scene, camera, renderer, avatar, glow, resize, container };
+    }
+
+    const lock3d = createStage($("#lockStage"));
+    const dash3d = createStage($("#dashStage"));
+    const stages = [lock3d, dash3d];
 
     function setMood(next, { toast = true } = {}) {
       mood = next;
-      const m = MOODS[mood];
-      for (const id of ["emoLock", "emoDash"]) {
-        const el = $("#" + id);
-        el.classList.add("swap");
-        setTimeout(() => {
-          el.src = m.img;
-          el.classList.remove("swap");
-        }, 140);
+      const m = MOOD_META[mood];
+      for (const s of stages) {
+        applyMoodMeshes(s.avatar, mood);
+        s.glow.material.color.set(
+          mood === "loss" ? 0xff5c7a : mood === "think" ? 0xffd166 : 0x00ffc2,
+        );
       }
-      for (const stage of ["lockStage", "dashStage"]) {
-        const el = $("#" + stage);
+      for (const id of ["lockStage", "dashStage"]) {
+        const el = $("#" + id);
         el.classList.remove("profit", "loss", "think");
         if (m.stage !== "profit") el.classList.add(m.stage);
       }
@@ -460,30 +524,22 @@
       $("#chipDash").textContent = m.chip;
       $("#homePill").textContent = m.pill;
       $("#lockStatus").textContent = m.status;
-      $("#lockStatus").style.color = m.statusColor;
+      $("#lockStatus").style.color = m.color;
       $$("#moodDemo button").forEach((b) => b.classList.toggle("on", b.dataset.mood === mood));
       if (toast) showToast(m.chip);
     }
 
     function applyPose(yaw, pitch, roll) {
-      const a = 0.4;
+      const a = 0.42;
       smooth.yaw += (yaw - smooth.yaw) * a;
       smooth.pitch += (pitch - smooth.pitch) * a;
       smooth.roll += (roll - smooth.roll) * a;
-      const ry = Math.max(-38, Math.min(38, smooth.yaw));
-      const rx = Math.max(-28, Math.min(28, smooth.pitch));
-      const rz = Math.max(-16, Math.min(16, smooth.roll));
-      // stronger perspective feel for 3D asset
-      const t = `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg)`;
-      $("#rigLock").style.transform = t;
-      $("#rigDash").style.transform = t;
-      // move shine with head for material feel
-      const shineX = 50 + ry * 0.6;
-      const shineY = 35 + rx * 0.5;
-      $$(".emo-shine").forEach((s) => {
-        s.style.background = `linear-gradient(135deg, rgba(255,255,255,.4) 0%, transparent 40%),
-          radial-gradient(circle at ${shineX}% ${shineY}%, rgba(255,255,255,.35), transparent 45%)`;
-      });
+      const y = THREE.MathUtils.degToRad(Math.max(-34, Math.min(34, smooth.yaw)));
+      const x = THREE.MathUtils.degToRad(Math.max(-24, Math.min(24, smooth.pitch)));
+      const z = THREE.MathUtils.degToRad(Math.max(-14, Math.min(14, smooth.roll)));
+      for (const s of stages) {
+        s.avatar.rotation.set(x, y, -z);
+      }
     }
 
     function poseFromLandmarks(lm) {
@@ -493,11 +549,26 @@
       const yaw = ((midX - nose.x) / eyeDist) * 58;
       const faceH = Math.hypot(chin.x - brow.x, chin.y - brow.y) || 0.01;
       const midY = (brow.y + chin.y) / 2;
-      const pitch = ((nose.y - midY) / faceH) * -72;
+      const pitch = ((nose.y - midY) / faceH) * -70;
       const roll = Math.atan2(right.y - left.y, right.x - left.x) * (180 / Math.PI);
       return { yaw, pitch, roll };
     }
 
+    function renderLoop(t) {
+      requestAnimationFrame(renderLoop);
+      const bob = Math.sin(t * 0.0022) * 0.04;
+      for (const s of stages) {
+        if (!s.container.offsetParent && s !== lock3d) {
+          // still ok to render dash when visible
+        }
+        s.avatar.position.y = bob;
+        s.renderer.render(s.scene, s.camera);
+      }
+    }
+    requestAnimationFrame(renderLoop);
+    window.addEventListener("resize", () => stages.forEach((s) => s.resize()));
+
+    /* ---------- face track ---------- */
     async function initLandmarker() {
       const { FaceLandmarker, FilesetResolver } = await import(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm"
@@ -528,27 +599,52 @@
         await cam.play();
         $("#permBox").style.display = "none";
         $("#unlockBtn").style.display = "flex";
-        $("#camStatus").textContent = "3D emoji seko galvai";
+        $("#camStatus").textContent = "3D avatārs seko galvai";
         $("#camStatus").classList.add("on");
-        showToast("Face track ON");
-        loop();
+        showToast("3D face track ON");
+        faceLoop();
       } catch (e) {
         console.error(e);
         $("#camStatus").textContent = "Atļauj kameru";
-        showToast("Camera permission needed");
+        // still allow exploring 3D with mouse
+        enableMouseFallback($("#lockStage"));
+        enableMouseFallback($("#dashStage"));
+        showToast("Bez kameras — velc ar peli");
+        $("#permBox").style.display = "none";
+        $("#unlockBtn").style.display = "flex";
       }
     }
 
-    function loop() {
-      requestAnimationFrame(loop);
+    function enableMouseFallback(el) {
+      el.addEventListener("pointermove", (e) => {
+        const r = el.getBoundingClientRect();
+        const x = (e.clientX - r.left) / r.width;
+        const y = (e.clientY - r.top) / r.height;
+        applyPose((x - 0.5) * 50, (0.5 - y) * 40, 0);
+      });
+    }
+
+    function faceLoop() {
+      requestAnimationFrame(faceLoop);
       if (!landmarker || cam.readyState < 2) return;
       if (cam.currentTime === lastVideoTime) return;
       lastVideoTime = cam.currentTime;
       const res = landmarker.detectForVideo(cam, performance.now());
       if (res.faceLandmarks?.[0]) {
-        const { yaw, pitch, roll } = poseFromLandmarks(res.faceLandmarks[0]);
-        applyPose(yaw, pitch, roll);
+        const p = poseFromLandmarks(res.faceLandmarks[0]);
+        applyPose(p.yaw, p.pitch, p.roll);
       }
+    }
+
+    function showToast(m) {
+      const t = $("#toast");
+      t.textContent = m; t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), 1400);
+    }
+    function setScreen(id) {
+      $$(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
+      $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
+      requestAnimationFrame(() => stages.forEach((s) => s.resize()));
     }
 
     $("#startCam").addEventListener("click", startCamera);
@@ -556,14 +652,11 @@
       unlocked = true;
       $("#tabs").classList.add("show");
       setScreen("home");
-      showToast("Dashboard");
       startChart();
       setTimeout(() => { manualMood = false; }, 2500);
     });
     $("#lockAgain").addEventListener("click", () => {
-      unlocked = false;
-      $("#tabs").classList.remove("show");
-      setScreen("lock");
+      unlocked = false; $("#tabs").classList.remove("show"); setScreen("lock");
     });
     $("#tabs").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-tab]");
@@ -582,6 +675,7 @@
     };
     tick(); setInterval(tick, 10000);
 
+    // chart
     const chart = $("#chart");
     const cctx = chart.getContext("2d");
     let prices = [];
@@ -635,23 +729,15 @@
         $("#pos1").textContent = signed;
         $("#pos1").className = base >= 0 ? "pnl-up" : "pnl-down";
         $("#equity").textContent = "€" + (8240 + base * 0.3).toLocaleString("en-US", { maximumFractionDigits: 0 });
-        $("#posMeta").textContent =
-          mood === "think" ? "Gaida entry…" : mood === "loss" ? "Floating minus" : "Trail ON · floating +";
-
-        autoTimer += 1;
+        autoTimer++;
         if (autoTimer % 5 === 0 && !manualMood) {
           const next = base < -3 ? "loss" : base > 20 ? "profit" : (Math.random() < 0.3 ? "think" : mood);
           if (next !== mood) setMood(next, { toast: false });
         }
       }, 900);
     }
-
     window.addEventListener("resize", resizeChart);
-    seed();
-    requestAnimationFrame(resizeChart);
-    // initial images
-    $("#emoLock").src = IMG.profit;
-    $("#emoDash").src = IMG.profit;
+    seed(); requestAnimationFrame(resizeChart);
     setMood("profit", { toast: false });
   </script>
 </body>
