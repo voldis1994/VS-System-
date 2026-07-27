@@ -21,6 +21,9 @@ export type TradingAccount = {
   dayStartEquity?: string;
   peakEquity?: string;
   createdAt?: string;
+  clientPortalEnabled?: boolean;
+  clientPortalCode?: string | null;
+  hasClientPortalPin?: boolean;
 };
 
 export type Position = {

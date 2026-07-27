@@ -1,4 +1,5 @@
 import { Injectable, HttpStatus } from "@nestjs/common";
+import * as argon2 from "argon2";
 import {
   CreateAccountSchema,
   DomainEventType,
@@ -63,14 +64,17 @@ export class AccountsService {
               marginLevel: state.marginLevel,
             },
           });
-          refreshed.push({ ...updated, floatingPnl: state.floatingPnl });
+          refreshed.push({
+            ...this.sanitizeAccount(updated as unknown as Record<string, unknown>),
+            floatingPnl: state.floatingPnl,
+          });
           continue;
         } catch {
           // fall through
         }
       }
       refreshed.push({
-        ...account,
+        ...this.sanitizeAccount(account as unknown as Record<string, unknown>),
         floatingPnl:
           (account as { floatingPnl?: string }).floatingPnl ?? "0",
       });
@@ -814,5 +818,111 @@ export class AccountsService {
       correlationId,
     });
     return updated;
+  }
+
+  /** Desk: generate client phone-portal code + PIN (shown once). */
+  async issueClientPortalAccess(
+    organizationId: string,
+    actorId: string,
+    accountId: string,
+    correlationId: string,
+  ) {
+    const account = await this.get(organizationId, accountId);
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
+    for (let attempt = 0; attempt < 12; attempt++) {
+      code = Array.from({ length: 6 }, () =>
+        alphabet[Math.floor(Math.random() * alphabet.length)],
+      ).join("");
+      const clash = await this.prisma.tradingAccount.findFirst({
+        where: { clientPortalCode: code, NOT: { id: accountId } },
+      });
+      if (!clash) break;
+    }
+    const pin = String(Math.floor(100000 + Math.random() * 900000));
+    const pinHash = await argon2.hash(pin);
+    const updated = await this.prisma.tradingAccount.update({
+      where: { id: accountId },
+      data: {
+        clientPortalCode: code,
+        clientPortalPinHash: pinHash,
+        clientPortalEnabled: true,
+        clientPortalIssuedAt: new Date(),
+      },
+    });
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "CLIENT_PORTAL_PIN_ISSUED",
+      resourceType: "TradingAccount",
+      resourceId: accountId,
+      before: {
+        clientPortalEnabled: account.clientPortalEnabled,
+        clientPortalCode: account.clientPortalCode,
+      },
+      after: {
+        clientPortalEnabled: true,
+        clientPortalCode: code,
+      },
+      correlationId,
+    });
+    return {
+      accountId,
+      name: updated.name,
+      code,
+      pin,
+      enabled: true,
+      issuedAt: updated.clientPortalIssuedAt,
+      note: "Saglabā PIN tagad — to vairs neparādīs. Klients ielogojas /client ar kodu + PIN.",
+    };
+  }
+
+  async revokeClientPortalAccess(
+    organizationId: string,
+    actorId: string,
+    accountId: string,
+    correlationId: string,
+  ) {
+    await this.get(organizationId, accountId);
+    const updated = await this.prisma.tradingAccount.update({
+      where: { id: accountId },
+      data: {
+        clientPortalEnabled: false,
+        clientPortalPinHash: null,
+        clientPortalCode: null,
+        clientPortalIssuedAt: null,
+      },
+    });
+    await this.audit.record({
+      organizationId,
+      actorId,
+      action: "CLIENT_PORTAL_PIN_REVOKED",
+      resourceType: "TradingAccount",
+      resourceId: accountId,
+      correlationId,
+    });
+    return {
+      accountId,
+      enabled: false,
+      name: updated.name,
+    };
+  }
+
+  /** Strip secrets; expose portal status for desk UI. */
+  sanitizeAccount<T extends Record<string, unknown>>(account: T) {
+    const {
+      clientPortalPinHash: _hash,
+      ...rest
+    } = account as T & { clientPortalPinHash?: string | null };
+    return {
+      ...rest,
+      clientPortalEnabled: Boolean(
+        (account as { clientPortalEnabled?: boolean }).clientPortalEnabled,
+      ),
+      clientPortalCode:
+        (account as { clientPortalCode?: string | null }).clientPortalCode ??
+        null,
+      hasClientPortalPin: Boolean(_hash),
+    };
   }
 }

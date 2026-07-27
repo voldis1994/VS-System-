@@ -168,6 +168,15 @@ export function permissionsForRole(role: Role): Permission[] {
   return [...ROLE_PERMISSIONS[role]];
 }
 
+/** Permissions granted to client phone-portal sessions (account-scoped). */
+export const CLIENT_PORTAL_PERMISSIONS: Permission[] = [
+  "accounts:read",
+  "strategies:read",
+  "strategies:run",
+  "positions:read",
+  "orders:read",
+];
+
 export function hasPermission(
   role: Role,
   permission: Permission,

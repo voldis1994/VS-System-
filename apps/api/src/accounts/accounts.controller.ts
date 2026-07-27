@@ -218,4 +218,33 @@ export class AccountsController {
       req.correlationId ?? "unknown",
     );
   }
+
+  /** Desk: issue code + PIN for client phone portal (PIN shown once). */
+  @Post(":id/client-portal")
+  @RequirePermissions("accounts:manage")
+  issueClientPortal(
+    @Param("id") id: string,
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.accounts.issueClientPortalAccess(
+      req.user.organizationId,
+      req.user.userId,
+      id,
+      req.correlationId ?? "unknown",
+    );
+  }
+
+  @Delete(":id/client-portal")
+  @RequirePermissions("accounts:manage")
+  revokeClientPortal(
+    @Param("id") id: string,
+    @Req() req: Request & { user: AuthUser; correlationId?: string },
+  ) {
+    return this.accounts.revokeClientPortalAccess(
+      req.user.organizationId,
+      req.user.userId,
+      id,
+      req.correlationId ?? "unknown",
+    );
+  }
 }

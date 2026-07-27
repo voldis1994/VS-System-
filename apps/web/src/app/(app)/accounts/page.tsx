@@ -47,6 +47,57 @@ export default function AccountsPage() {
     }>
   >([]);
   const [bindValue, setBindValue] = useState("");
+  const [portalCreds, setPortalCreds] = useState<{
+    accountId: string;
+    name: string;
+    code: string;
+    pin: string;
+  } | null>(null);
+
+  async function issueClientPortal(accountId: string) {
+    setBusyId(accountId);
+    try {
+      const res = await api<{
+        accountId: string;
+        name: string;
+        code: string;
+        pin: string;
+        note?: string;
+      }>(`/accounts/${accountId}/client-portal`, {
+        method: "POST",
+        token: token ?? undefined,
+      });
+      setPortalCreds({
+        accountId: res.accountId,
+        name: res.name,
+        code: res.code,
+        pin: res.pin,
+      });
+      toast.success("Klienta PIN izveidots — saglabā tagad");
+      await qc.invalidateQueries({ queryKey: ["accounts"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Neizdevās");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function revokeClientPortal(accountId: string) {
+    setBusyId(accountId);
+    try {
+      await api(`/accounts/${accountId}/client-portal`, {
+        method: "DELETE",
+        token: token ?? undefined,
+      });
+      toast.success("Klienta piekļuve atcelta");
+      setPortalCreds((c) => (c?.accountId === accountId ? null : c));
+      await qc.invalidateQueries({ queryKey: ["accounts"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Neizdevās");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   async function createAccount() {
     if (provider === "CAPITAL" && !demo && !riskAccepted) {
@@ -513,6 +564,11 @@ export default function AccountsPage() {
                         <Badge tone={a.liveTradingEnabled ? "loss" : "neutral"}>
                           {a.liveTradingEnabled ? "LIVE ON" : "LIVE OFF"}
                         </Badge>
+                        {a.clientPortalEnabled ? (
+                          <Badge tone="accent">
+                            PIN {a.clientPortalCode ?? "ON"}
+                          </Badge>
+                        ) : null}
                       </div>
                       <div className="mt-1 flex flex-wrap gap-3 font-mono text-xs text-white/50">
                         <span>Eq {formatMoney(a.equity, a.baseCurrency)}</span>
@@ -613,6 +669,24 @@ export default function AccountsPage() {
                       ) : null}
                       <Button
                         size="sm"
+                        variant="outline"
+                        loading={busyId === a.id}
+                        onClick={() => void issueClientPortal(a.id)}
+                      >
+                        {a.clientPortalEnabled ? "Jauns klienta PIN" : "Klienta PIN"}
+                      </Button>
+                      {a.clientPortalEnabled ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={busyId === a.id}
+                          onClick={() => void revokeClientPortal(a.id)}
+                        >
+                          Atcelt PIN
+                        </Button>
+                      ) : null}
+                      <Button
+                        size="sm"
                         variant="ghost"
                         loading={busyId === a.id}
                         onClick={() => void action(a.id, "sync", "Synced")}
@@ -702,6 +776,40 @@ export default function AccountsPage() {
           )}
         </Panel>
       </div>
+
+      {portalCreds ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-xl border border-accent/40 bg-bg p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white">Klienta piekļuve</h3>
+            <p className="mt-1 text-sm text-white/55">
+              {portalCreds.name} — saglabā PIN tagad. Klients ielogojas{" "}
+              <span className="text-accent">/client</span>
+            </p>
+            <div className="mt-4 space-y-2 rounded-md border border-white/10 bg-white/[0.03] p-3 font-mono text-sm">
+              <div>
+                Kods: <strong className="text-accent">{portalCreds.code}</strong>
+              </div>
+              <div>
+                PIN: <strong className="text-accent">{portalCreds.pin}</strong>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void navigator.clipboard.writeText(
+                    `VS System klienta portāls\nURL: ${window.location.origin}/client\nKods: ${portalCreds.code}\nPIN: ${portalCreds.pin}`,
+                  );
+                  toast.success("Nokopēts");
+                }}
+              >
+                Kopēt
+              </Button>
+              <Button onClick={() => setPortalCreds(null)}>Aizvērt</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

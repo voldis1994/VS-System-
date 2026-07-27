@@ -219,6 +219,12 @@ export default function LoginPage() {
             </Button>
           </form>
         )}
+        <p className="mt-6 text-center text-xs text-white/40">
+          Klienta PIN portāls:{" "}
+          <a href="/client" className="text-accent underline">
+            /client
+          </a>
+        </p>
       </motion.div>
     </div>
   );

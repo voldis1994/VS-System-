@@ -18,6 +18,7 @@ import { NotificationsModule } from "./notifications/notifications.module";
 import { HealthModule } from "./health/health.module";
 import { WsModule } from "./ws/ws.module";
 import { BrokerRuntimeModule } from "./broker-runtime/broker-runtime.module";
+import { ClientPortalModule } from "./client-portal/client-portal.module";
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { BrokerRuntimeModule } from "./broker-runtime/broker-runtime.module";
     AlertsModule,
     AnalyticsModule,
     NotificationsModule,
+    ClientPortalModule,
     HealthModule,
     WsModule,
   ],

@@ -5,7 +5,12 @@ import {
   HttpStatus,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
-import { ErrorCodes, permissionsForRole, type Role } from "@nexus/domain";
+import {
+  ErrorCodes,
+  permissionsForRole,
+  type Permission,
+  type Role,
+} from "@nexus/domain";
 import { AppError } from "../common/errors/app-error";
 import type { AuthUser } from "../common/guards/permissions.guard";
 
@@ -39,14 +44,24 @@ export class JwtAuthGuard implements CanActivate {
         role: Role;
         email: string;
         tradingPinVerified?: boolean;
+        clientPortal?: boolean;
+        accountId?: string;
+        permissions?: Permission[];
       }>(token);
+      const rolePermissions = permissionsForRole(payload.role);
+      const permissions =
+        payload.permissions && payload.permissions.length > 0
+          ? [...new Set([...rolePermissions, ...payload.permissions])]
+          : rolePermissions;
       request.user = {
         userId: payload.sub,
         organizationId: payload.organizationId,
         role: payload.role,
         email: payload.email,
-        permissions: permissionsForRole(payload.role),
+        permissions,
         tradingPinVerified: Boolean(payload.tradingPinVerified),
+        clientPortal: Boolean(payload.clientPortal),
+        accountId: payload.accountId,
       };
       return true;
     } catch {

@@ -48,6 +48,19 @@ export class AuthController {
     return result;
   }
 
+  /** Client phone portal — code + PIN (no desk email login). */
+  @Post("client-portal/login")
+  async clientPortalLogin(
+    @Body() body: unknown,
+    @Req() req: Request & { correlationId?: string },
+  ) {
+    return this.auth.loginClientPortal(body, {
+      ip: req.ip,
+      ua: req.headers["user-agent"],
+      correlationId: req.correlationId ?? "unknown",
+    });
+  }
+
   @Post("2fa/verify")
   async verify2FA(
     @Body() body: unknown,

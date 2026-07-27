@@ -21,6 +21,9 @@ export interface AuthUser {
   email: string;
   permissions: Permission[];
   tradingPinVerified: boolean;
+  /** Set for client phone-portal sessions (scoped to one trading account). */
+  clientPortal?: boolean;
+  accountId?: string;
 }
 
 @Injectable()

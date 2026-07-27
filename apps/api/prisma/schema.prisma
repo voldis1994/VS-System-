@@ -252,6 +252,11 @@ model TradingAccount {
   riskProfileId     String?
   brokerStateJson   Json?
   archivedAt        DateTime?
+  /** Short login code for client phone portal (desk generates). */
+  clientPortalCode      String?  @unique
+  clientPortalPinHash   String?
+  clientPortalEnabled   Boolean  @default(false)
+  clientPortalIssuedAt  DateTime?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -265,6 +270,7 @@ model TradingAccount {
 
   @@index([organizationId])
   @@index([status])
+  @@index([clientPortalCode])
 }
 
 model BrokerCredential {

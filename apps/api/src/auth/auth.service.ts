@@ -3,6 +3,8 @@ import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
 import { authenticator } from "otplib";
 import {
+  CLIENT_PORTAL_PERMISSIONS,
+  ClientPortalLoginSchema,
   ErrorCodes,
   LoginSchema,
   RegisterSchema,
@@ -266,6 +268,79 @@ export class AuthService {
       correlationId: meta.correlationId,
     });
     return { ...tokens, requires2FA: false, user: this.publicUser(user) };
+  }
+
+  /** Phone portal: code + PIN scoped to one trading account (desk issues credentials). */
+  async loginClientPortal(
+    raw: unknown,
+    meta: { correlationId: string; ip?: string; ua?: string },
+  ) {
+    const input = ClientPortalLoginSchema.parse(raw);
+    const code = input.code.trim().toUpperCase();
+    const account = await this.prisma.tradingAccount.findFirst({
+      where: {
+        clientPortalCode: code,
+        clientPortalEnabled: true,
+        archivedAt: null,
+      },
+    });
+    if (!account?.clientPortalPinHash) {
+      throw new AppError(
+        ErrorCodes.AUTH_INVALID_CREDENTIALS,
+        "Invalid client code or PIN",
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    const ok = await argon2.verify(account.clientPortalPinHash, input.pin);
+    if (!ok) {
+      throw new AppError(
+        ErrorCodes.AUTH_INVALID_CREDENTIALS,
+        "Invalid client code or PIN",
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const accessToken = this.jwt.sign(
+      {
+        sub: `client-portal:${account.id}`,
+        email: `client+${code}@portal.local`,
+        organizationId: account.organizationId,
+        role: Role.VIEWER,
+        tradingPinVerified: false,
+        clientPortal: true,
+        accountId: account.id,
+        permissions: CLIENT_PORTAL_PERMISSIONS,
+      },
+      { expiresIn: "12h" },
+    );
+
+    await this.audit.record({
+      organizationId: account.organizationId,
+      actorId: null,
+      action: "CLIENT_PORTAL_LOGIN",
+      resourceType: "TradingAccount",
+      resourceId: account.id,
+      after: { clientPortalCode: code, actor: `client-portal:${account.id}` },
+      sourceIp: meta.ip,
+      userAgent: meta.ua,
+      correlationId: meta.correlationId,
+    });
+
+    return {
+      accessToken,
+      clientPortal: true,
+      account: {
+        id: account.id,
+        name: account.name,
+        provider: account.provider,
+        accountType: account.accountType,
+        baseCurrency: account.baseCurrency,
+        equity: String(account.equity),
+        balance: String(account.balance),
+        connectionStatus: account.connectionStatus,
+        clientPortalCode: account.clientPortalCode,
+      },
+    };
   }
 
   async verifyTradingPin(

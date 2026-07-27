@@ -18,10 +18,14 @@ export class AuditService {
     userAgent?: string | null;
     correlationId: string;
   }) {
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const actorId =
+      input.actorId && uuidRe.test(input.actorId) ? input.actorId : null;
     return this.prisma.auditLog.create({
       data: {
         organizationId: input.organizationId,
-        actorId: input.actorId ?? null,
+        actorId,
         action: input.action,
         resourceType: input.resourceType,
         resourceId: input.resourceId ?? null,

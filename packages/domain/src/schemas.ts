@@ -43,6 +43,27 @@ export const Verify2FASchema = z.object({
   code: z.string().regex(/^\d{6}$/),
 });
 
+/** Client phone portal: desk issues code + PIN per trading account. */
+export const ClientPortalLoginSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(4)
+    .max(12)
+    .regex(/^[A-Za-z0-9]+$/, "Code must be alphanumeric"),
+  pin: z.string().regex(/^\d{6}$/, "PIN must be 6 digits"),
+});
+
+export const ClientPortalStrategySchema = z.object({
+  mode: z.nativeEnum(StrategyMode),
+  configuration: z.record(z.unknown()),
+  assignedSymbols: z.array(z.string()).min(1),
+  action: z.enum(["start", "stop", "save"]).default("save"),
+});
+
+export type ClientPortalLoginInput = z.infer<typeof ClientPortalLoginSchema>;
+export type ClientPortalStrategyInput = z.infer<typeof ClientPortalStrategySchema>;
+
 export const VerifyTradingPinSchema = z.object({
   pin: z.string().regex(/^\d{6}$/),
 });
