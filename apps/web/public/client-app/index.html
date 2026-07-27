@@ -3,625 +3,238 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — Studio 3D Avatar</title>
+  <title>VS System — Client Mockup</title>
   <style>
     :root {
+      --bg: #07090c;
       --teal: #00ffc2;
-      --text: #f4f7f6;
-      --muted: rgba(244,247,246,.55);
-      --line: rgba(255,255,255,.08);
-      --loss: #ff5c7a;
+      --muted: rgba(244, 247, 246, 0.55);
       --phone-w: 390px;
       --phone-h: 844px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       min-height: 100%;
-      background: radial-gradient(1200px 600px at 50% -10%, rgba(0,255,194,.08), transparent 55%), #07090c;
-      color: var(--text);
+      background:
+        radial-gradient(1000px 520px at 50% -8%, rgba(0, 255, 194, 0.09), transparent 55%),
+        var(--bg);
+      color: #f4f7f6;
       font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     }
-    .stage { min-height: 100vh; display: grid; place-items: center; padding: 20px 14px 36px; gap: 12px; }
-    .hint { max-width: 480px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .stage {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 22px 14px 36px;
+      gap: 14px;
+    }
+    .hint {
+      max-width: 420px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
     .hint strong { color: var(--teal); }
     .phone {
-      width: min(100%, var(--phone-w)); height: min(92vh, var(--phone-h));
-      border-radius: 42px; background: #000; border: 1px solid rgba(255,255,255,.14);
-      box-shadow: 0 40px 100px rgba(0,0,0,.65); position: relative; overflow: hidden;
-    }
-    .notch {
-      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-      width: 120px; height: 34px; background: #000; border-radius: 20px; z-index: 40;
-    }
-    .status {
-      position: absolute; top: 14px; left: 0; right: 0; z-index: 35;
-      display: flex; justify-content: space-between; padding: 0 26px;
-      font-size: 12px; font-weight: 600; pointer-events: none;
+      width: min(100%, var(--phone-w));
+      height: min(92vh, var(--phone-h));
+      aspect-ratio: 390 / 844;
+      border-radius: 44px;
+      background: #000;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      box-shadow: 0 40px 110px rgba(0, 0, 0, 0.7);
+      position: relative;
+      overflow: hidden;
     }
     .screen {
-      position: absolute; inset: 0; display: none; flex-direction: column;
-      padding: 58px 16px 88px;
-      background: radial-gradient(700px 360px at 50% 34%, rgba(0,255,194,.1), transparent 55%), #050608;
-    }
-    .screen.active { display: flex; }
-    .brand { font-size: 52px; font-weight: 800; letter-spacing: -.06em; line-height: .85; }
-    .brand span { display: block; font-size: 11px; letter-spacing: .42em; margin-top: 6px; color: var(--muted); }
-    .top-meta { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; }
-    .client { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); }
-    .client b { display: block; color: #fff; font-size: 13px; margin-top: 3px; }
-    .stats { text-align: right; font-size: 10px; line-height: 1.65; color: var(--muted); }
-    .stats b { color: #fff; }
-    .hidden-cam { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-
-    .avatar-stage {
-      position: relative; flex: 1; min-height: 300px; margin: 8px 0 10px;
-      border-radius: 0; overflow: hidden;
-    }
-    .avatar-stage.dash { flex: 0 0 240px; min-height: 240px; }
-    .avatar-stage canvas {
-      width: 100% !important; height: 100% !important; display: block;
-    }
-
-    .mood-chip {
-      position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
-      font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-      padding: 6px 12px; border-radius: 999px; z-index: 2;
-      border: 1px solid rgba(0,255,194,.3); background: rgba(0,0,0,.45); color: var(--teal);
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center top;
+      opacity: 0;
       pointer-events: none;
+      transition: opacity 0.28s ease;
+      user-select: none;
+      -webkit-user-drag: none;
     }
-    .avatar-stage.loss .mood-chip { color: var(--loss); border-color: rgba(255,92,122,.35); }
-    .avatar-stage.think .mood-chip { color: #ffd166; border-color: rgba(255,209,102,.35); }
-
-    .demo-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
-    .demo-row button {
-      border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--muted);
-      border-radius: 12px; padding: 10px 6px; font-size: 11px; cursor: pointer;
+    .screen.on {
+      opacity: 1;
+      pointer-events: auto;
     }
-    .demo-row button.on { background: var(--teal); color: #031410; border-color: var(--teal); font-weight: 700; }
-    .demo-row button[data-mood="loss"].on { background: var(--loss); color: #fff; border-color: var(--loss); }
-    .demo-row button[data-mood="think"].on { background: #ffd166; color: #031410; border-color: #ffd166; }
-
-    .perm {
-      position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
-      text-align: center; padding: 20px; background: rgba(5,6,8,.78);
+    .hotspots {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
     }
-    .perm button {
-      margin-top: 12px; border: 0; background: var(--teal); color: #031410;
-      font-weight: 800; padding: 12px 18px; border-radius: 999px; cursor: pointer; width: min(100%, 240px);
+    .hot {
+      position: absolute;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 18px;
     }
-    .cam-status { font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 4px; }
-    .cam-status.on { color: var(--teal); }
-    .unlock-btn {
-      display: flex; align-items: center; justify-content: center; width: 100%;
-      padding: 14px; border-radius: 999px; cursor: pointer;
-      border: 1px solid rgba(0,255,194,.35); background: rgba(0,255,194,.08);
-      color: #fff; font-weight: 700;
+    .hot:focus-visible {
+      outline: 2px solid rgba(0, 255, 194, 0.65);
+      outline-offset: 2px;
     }
-    .hello { font-size: 12px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
-    .equity { font-size: 42px; font-weight: 800; letter-spacing: -.04em; }
-    .equity-row { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 8px; }
-    .pill {
-      font-size: 11px; padding: 6px 10px; border-radius: 999px; color: var(--teal);
-      background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.25);
+    /* Face ID screen → unlock */
+    #hs-faceid .hot-unlock {
+      left: 10%;
+      right: 10%;
+      bottom: 9%;
+      height: 9%;
     }
-    .chart-wrap {
-      flex: 1; min-height: 90px; border-radius: 16px; border: 1px solid var(--line);
-      overflow: hidden; margin-bottom: 10px; background: rgba(255,255,255,.02);
+    #hs-faceid .hot-scan {
+      left: 22%;
+      right: 22%;
+      top: 34%;
+      height: 28%;
+      border-radius: 28px;
     }
-    .chart-wrap canvas { width: 100%; height: 100%; display: block; }
-    .mini-card {
-      border: 1px solid var(--line); border-radius: 16px; padding: 12px;
-      display: flex; justify-content: space-between; background: rgba(255,255,255,.03); cursor: pointer;
+    /* Home → positions/chart */
+    #hs-home .hot-positions {
+      left: 6%;
+      right: 6%;
+      bottom: 8%;
+      height: 9.5%;
     }
-    .pnl-up { color: var(--teal); font-weight: 700; }
-    .pnl-down { color: var(--loss); font-weight: 700; }
-    .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
-    .page-title { font-size: 26px; font-weight: 800; margin-bottom: 12px; }
-    .pos { border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 10px; }
-    .pos-head { display: flex; justify-content: space-between; }
-    .mono-ak {
-      font-size: 84px; font-weight: 800; letter-spacing: -.08em;
-      background: linear-gradient(180deg,#fff,rgba(0,255,194,.55));
-      -webkit-background-clip: text; background-clip: text; color: transparent; margin: 8px 0 14px;
+    #hs-home .hot-profile {
+      left: 4%;
+      top: 7%;
+      width: 28%;
+      height: 8%;
     }
-    .row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
-    .row span { color: var(--muted); }
-    .lock-again {
-      margin-top: 18px; width: 100%; border: 1px solid rgba(0,255,194,.3); background: transparent;
-      color: var(--teal); border-radius: 14px; padding: 14px; font-weight: 700; cursor: pointer;
+    /* Chart → profile / back home */
+    #hs-chart .hot-back {
+      left: 2%;
+      top: 7%;
+      width: 12%;
+      height: 6%;
     }
-    .tabs {
-      position: absolute; left: 14px; right: 14px; bottom: 18px; height: 62px; border-radius: 22px;
-      background: rgba(10,12,16,.92); border: 1px solid rgba(255,255,255,.1);
-      display: none; grid-template-columns: repeat(4,1fr); z-index: 30;
+    #hs-chart .hot-settings {
+      right: 2%;
+      bottom: 2%;
+      width: 20%;
+      height: 9%;
     }
-    .tabs.show { display: grid; }
-    .tabs button {
-      border: 0; background: transparent; color: var(--muted); font-size: 10px;
-      letter-spacing: .04em; text-transform: uppercase; cursor: pointer;
+    /* Profile tabs */
+    #hs-profile .hot-dash {
+      left: 0;
+      bottom: 2%;
+      width: 20%;
+      height: 10%;
     }
-    .tabs button.on { color: var(--teal); }
-    .toast {
-      position: absolute; left: 50%; top: 68px; transform: translateX(-50%) translateY(-8px);
-      background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.35); color: var(--teal);
-      padding: 10px 14px; border-radius: 12px; font-size: 12px; font-weight: 600;
-      opacity: 0; transition: .25s; z-index: 60; pointer-events: none; white-space: nowrap;
+    #hs-profile .hot-positions {
+      left: 20%;
+      bottom: 2%;
+      width: 20%;
+      height: 10%;
     }
-    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .nav button {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 9px 14px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .nav button.on {
+      background: var(--teal);
+      color: #031410;
+      border-color: var(--teal);
+      font-weight: 700;
+    }
     @media (max-width: 480px) {
-      .stage { padding: 0; } .hint { display: none; }
-      .phone { width: 100%; height: 100vh; height: 100dvh; border-radius: 0; border: 0; box-shadow: none; }
-      .notch { display: none; }
+      .stage { padding: 0; gap: 0; }
+      .hint, .nav { display: none; }
+      .phone {
+        width: 100%;
+        height: 100vh;
+        height: 100dvh;
+        border-radius: 0;
+        border: 0;
+        box-shadow: none;
+        aspect-ratio: auto;
+      }
     }
   </style>
 </head>
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>Studio 3D emoji</strong> — Tavi reference renderi (profit / minus / entry).<br />
-      Seko Tavai galvai. Bez kameras atspulga.
+      <strong>1:1 client mockup</strong> — sākotnējais HUD Face ID dizains.<br />
+      Spied ekrānā vai pogās zemāk, lai pārslēgtu skatus.
     </p>
 
-    <div class="phone">
-      <div class="notch"></div>
-      <div class="status"><span id="clock">9:41</span><span>3D AVATAR</span></div>
-      <div class="toast" id="toast">…</div>
-      <div class="hidden-cam"><video id="cam" playsinline autoplay muted></video></div>
+    <div class="phone" id="phone">
+      <img class="screen on" id="scr-faceid" src="./screens/faceid.png" alt="Face ID lock" />
+      <img class="screen" id="scr-home" src="./screens/home.png" alt="Home equity" />
+      <img class="screen" id="scr-chart" src="./screens/chart.png" alt="Chart positions" />
+      <img class="screen" id="scr-profile" src="./screens/profile.png" alt="Client profile" />
 
-      <section class="screen active" id="lock">
-        <div class="brand">VS<span>SYSTEM</span></div>
-        <div class="top-meta">
-          <div class="client">Client<b>ANNA K · PRIVATE</b></div>
-          <div class="stats">
-            EQUITY <b>+24.18%</b><br />TRADES <b>37</b><br />
-            STATUS <b id="lockStatus" style="color:var(--teal)">SECURE</b>
-          </div>
-        </div>
-        <div class="cam-status" id="camStatus">Gaida kameru…</div>
-        <div class="demo-row" id="moodDemo">
-          <button data-mood="profit" class="on">🤑 Profit</button>
-          <button data-mood="loss">😢 Minus</button>
-          <button data-mood="think">🤔 Entry</button>
-        </div>
-        <div class="avatar-stage" id="lockStage">
-          <div class="mood-chip" id="chipLock">Profit · profile OK</div>
-          <div class="perm" id="permBox">
-            <div>
-              Studio 3D emoji<br />sekos Tavai galvai
-              <br /><button id="startCam">Start 3D Face Track</button>
-            </div>
-          </div>
-        </div>
-        <button class="unlock-btn" id="unlockBtn" style="display:none">Face ID or Passcode · Enter</button>
-      </section>
+      <div class="hotspots" id="hs-faceid">
+        <button class="hot hot-scan" data-go="home" aria-label="Unlock with Face ID"></button>
+        <button class="hot hot-unlock" data-go="home" aria-label="Face ID or Passcode"></button>
+      </div>
+      <div class="hotspots" id="hs-home" hidden>
+        <button class="hot hot-profile" data-go="profile" aria-label="Open profile"></button>
+        <button class="hot hot-positions" data-go="chart" aria-label="Open positions"></button>
+      </div>
+      <div class="hotspots" id="hs-chart" hidden>
+        <button class="hot hot-back" data-go="home" aria-label="Back to home"></button>
+        <button class="hot hot-settings" data-go="profile" aria-label="Open settings"></button>
+      </div>
+      <div class="hotspots" id="hs-profile" hidden>
+        <button class="hot hot-dash" data-go="home" aria-label="Dashboard"></button>
+        <button class="hot hot-positions" data-go="chart" aria-label="Positions"></button>
+      </div>
+    </div>
 
-      <section class="screen" id="home">
-        <div class="hello">Labdien, Anna</div>
-        <div class="equity-row">
-          <div class="equity" id="equity">€8,240</div>
-          <div class="pill" id="homePill">PROFIT</div>
-        </div>
-        <div class="avatar-stage dash" id="dashStage">
-          <div class="mood-chip" id="chipDash">Profit · profile OK</div>
-        </div>
-        <div class="chart-wrap"><canvas id="chart"></canvas></div>
-        <div class="mini-card" data-go="positions">
-          <div>
-            <div style="font-weight:700">US100 · BUY 0.03</div>
-            <div class="meta" id="posMeta">Trail ON · floating PnL</div>
-          </div>
-          <div class="pnl-up" id="floatPnl">+€126.40</div>
-        </div>
-      </section>
-
-      <section class="screen" id="positions">
-        <div class="page-title">Positions</div>
-        <div class="pos">
-          <div class="pos-head">
-            <div><b>US100</b><div class="meta">BUY · 0.03</div></div>
-            <div class="pnl-up" id="pos1">+€126.40</div>
-          </div>
-        </div>
-        <div class="pos">
-          <div class="pos-head">
-            <div><b>GOLD</b><div class="meta">SELL · 0.02</div></div>
-            <div class="pnl-down">-€8.40</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="screen" id="profile">
-        <div class="hello">Private client</div>
-        <div class="mono-ak">AK</div>
-        <div class="row"><span>Name</span><b>Anna K.</b></div>
-        <div class="row"><span>Avatar</span><b style="color:var(--teal)">STUDIO 3D EMOJI</b></div>
-        <div class="row"><span>Strategy</span><b>SCALPING · US100</b></div>
-        <button class="lock-again" id="lockAgain">Lock</button>
-      </section>
-
-      <nav class="tabs" id="tabs">
-        <button data-tab="home" class="on">Home</button>
-        <button data-tab="home">Chart</button>
-        <button data-tab="positions">Positions</button>
-        <button data-tab="profile">Profile</button>
-      </nav>
+    <div class="nav" id="nav">
+      <button data-go="faceid" class="on">Face ID</button>
+      <button data-go="home">Home</button>
+      <button data-go="chart">Chart</button>
+      <button data-go="profile">Profile</button>
     </div>
   </div>
 
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
-    }
-  }
-  </script>
-  <script type="module">
-    import * as THREE from "three";
+  <script>
+    const screens = ["faceid", "home", "chart", "profile"];
+    let current = "faceid";
 
-    const $ = (s) => document.querySelector(s);
-    const $$ = (s) => [...document.querySelectorAll(s)];
-
-    const MOOD_META = {
-      profit: { chip: "Profit · profile OK", pill: "PROFIT", status: "SECURE", color: "var(--teal)", stage: "profit" },
-      loss: { chip: "Minus · drawdown", pill: "MINUS", status: "RISK", color: "var(--loss)", stage: "loss" },
-      think: { chip: "Meklē entry…", pill: "SCANNING", status: "WAIT", color: "#ffd166", stage: "think" },
-    };
-
-    let mood = "profit";
-    let landmarker = null;
-    let stream = null;
-    let unlocked = false;
-    let lastVideoTime = -1;
-    let manualMood = true;
-    let smooth = { yaw: 0, pitch: 0, roll: 0 };
-    const cam = $("#cam");
-
-    /* ---------- Photo-real 3D emoji renders (user reference style) ---------- */
-    const EMOJI_URLS = {
-      profit: "./emoji/profit.png",
-      loss: "./emoji/loss.png",
-      think: "./emoji/think.png",
-    };
-    const texLoader = new THREE.TextureLoader();
-    const moodTextures = {};
-
-    function loadMoodTextures() {
-      return Promise.all(
-        Object.entries(EMOJI_URLS).map(
-          ([key, url]) =>
-            new Promise((resolve, reject) => {
-              texLoader.load(
-                url,
-                (tex) => {
-                  tex.colorSpace = THREE.SRGBColorSpace;
-                  tex.anisotropy = 8;
-                  tex.generateMipmaps = true;
-                  tex.minFilter = THREE.LinearMipmapLinearFilter;
-                  tex.magFilter = THREE.LinearFilter;
-                  moodTextures[key] = tex;
-                  resolve();
-                },
-                undefined,
-                reject,
-              );
-            }),
-        ),
-      );
-    }
-
-    function buildAvatar() {
-      const root = new THREE.Group();
-      const geo = new THREE.PlaneGeometry(2.55, 2.55);
-      const mat = new THREE.MeshBasicMaterial({
-        map: moodTextures.profit || null,
-        transparent: true,
-        alphaTest: 0.08,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      });
-      const plane = new THREE.Mesh(geo, mat);
-      const ghostMat = mat.clone();
-      ghostMat.opacity = 0.16;
-      ghostMat.alphaTest = 0;
-      const ghost = new THREE.Mesh(geo, ghostMat);
-      ghost.position.z = -0.08;
-      ghost.scale.setScalar(0.98);
-      root.add(plane, ghost);
-      root.userData = { plane, ghost, mat, ghostMat };
-      return root;
-    }
-
-    function applyMoodMeshes(root, m) {
-      const tex = moodTextures[m] || moodTextures.profit;
-      if (!tex) return;
-      root.userData.mat.map = tex;
-      root.userData.mat.needsUpdate = true;
-      root.userData.ghostMat.map = tex;
-      root.userData.ghostMat.needsUpdate = true;
-    }
-
-    function createStage(container) {
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
-      camera.position.set(0, 0.05, 4.2);
-
-      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      container.appendChild(renderer.domElement);
-
-      const avatar = buildAvatar();
-      scene.add(avatar);
-
-      const glow = new THREE.Mesh(
-        new THREE.CircleGeometry(1.15, 48),
-        new THREE.MeshBasicMaterial({ color: 0x00ffc2, transparent: true, opacity: 0.14 }),
-      );
-      glow.rotation.x = -Math.PI / 2;
-      glow.position.y = -1.35;
-      scene.add(glow);
-
-      function resize() {
-        const w = container.clientWidth, h = container.clientHeight;
-        if (!w || !h) return;
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
-        renderer.setSize(w, h, false);
+    function show(id) {
+      if (!screens.includes(id)) return;
+      current = id;
+      for (const s of screens) {
+        document.getElementById("scr-" + s).classList.toggle("on", s === id);
+        const hs = document.getElementById("hs-" + s);
+        if (hs) hs.hidden = s !== id;
       }
-      resize();
-
-      return { scene, camera, renderer, avatar, glow, resize, container };
-    }
-
-    let lock3d = null;
-    let dash3d = null;
-    let stages = [];
-
-    function setMood(next, { toast = true } = {}) {
-      mood = next;
-      const m = MOOD_META[mood];
-      for (const s of stages) {
-        applyMoodMeshes(s.avatar, mood);
-        s.glow.material.color.set(
-          mood === "loss" ? 0xff5c7a : mood === "think" ? 0xffd166 : 0x00ffc2,
-        );
-      }
-      for (const id of ["lockStage", "dashStage"]) {
-        const el = $("#" + id);
-        el.classList.remove("profit", "loss", "think");
-        if (m.stage !== "profit") el.classList.add(m.stage);
-      }
-      $("#chipLock").textContent = m.chip;
-      $("#chipDash").textContent = m.chip;
-      $("#homePill").textContent = m.pill;
-      $("#lockStatus").textContent = m.status;
-      $("#lockStatus").style.color = m.color;
-      $$("#moodDemo button").forEach((b) => b.classList.toggle("on", b.dataset.mood === mood));
-      if (toast) showToast(m.chip);
-    }
-
-    function applyPose(yaw, pitch, roll) {
-      const a = 0.42;
-      smooth.yaw += (yaw - smooth.yaw) * a;
-      smooth.pitch += (pitch - smooth.pitch) * a;
-      smooth.roll += (roll - smooth.roll) * a;
-      const y = THREE.MathUtils.degToRad(Math.max(-34, Math.min(34, smooth.yaw)));
-      const x = THREE.MathUtils.degToRad(Math.max(-24, Math.min(24, smooth.pitch)));
-      const z = THREE.MathUtils.degToRad(Math.max(-14, Math.min(14, smooth.roll)));
-      for (const s of stages) {
-        s.avatar.rotation.set(x, y, -z);
-      }
-    }
-
-    function poseFromLandmarks(lm) {
-      const nose = lm[1], left = lm[33], right = lm[263], chin = lm[152], brow = lm[10];
-      const midX = (left.x + right.x) / 2;
-      const eyeDist = Math.hypot(right.x - left.x, right.y - left.y) || 0.01;
-      const yaw = ((midX - nose.x) / eyeDist) * 58;
-      const faceH = Math.hypot(chin.x - brow.x, chin.y - brow.y) || 0.01;
-      const midY = (brow.y + chin.y) / 2;
-      const pitch = ((nose.y - midY) / faceH) * -70;
-      const roll = Math.atan2(right.y - left.y, right.x - left.x) * (180 / Math.PI);
-      return { yaw, pitch, roll };
-    }
-
-    function renderLoop(t) {
-      requestAnimationFrame(renderLoop);
-      const bob = Math.sin(t * 0.0022) * 0.04;
-      for (const s of stages) {
-        if (!s.container.offsetParent && s !== lock3d) {
-          // still ok to render dash when visible
-        }
-        s.avatar.position.y = bob;
-        s.renderer.render(s.scene, s.camera);
-      }
-    }
-    // renderLoop starts after emoji textures load
-
-    /* ---------- face track ---------- */
-    async function initLandmarker() {
-      const { FaceLandmarker, FilesetResolver } = await import(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm"
-      );
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
-      );
-      landmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-          delegate: "GPU",
-        },
-        runningMode: "VIDEO",
-        numFaces: 1,
+      document.querySelectorAll("#nav button").forEach((b) => {
+        b.classList.toggle("on", b.dataset.go === id);
       });
     }
 
-    async function startCamera() {
-      $("#camStatus").textContent = "Ielādē face track…";
-      try {
-        if (!landmarker) await initLandmarker();
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false,
-        });
-        cam.srcObject = stream;
-        await cam.play();
-        $("#permBox").style.display = "none";
-        $("#unlockBtn").style.display = "flex";
-        $("#camStatus").textContent = "3D avatārs seko galvai";
-        $("#camStatus").classList.add("on");
-        showToast("3D face track ON");
-        faceLoop();
-      } catch (e) {
-        console.error(e);
-        $("#camStatus").textContent = "Atļauj kameru";
-        // still allow exploring 3D with mouse
-        enableMouseFallback($("#lockStage"));
-        enableMouseFallback($("#dashStage"));
-        showToast("Bez kameras — velc ar peli");
-        $("#permBox").style.display = "none";
-        $("#unlockBtn").style.display = "flex";
-      }
-    }
-
-    function enableMouseFallback(el) {
-      el.addEventListener("pointermove", (e) => {
-        const r = el.getBoundingClientRect();
-        const x = (e.clientX - r.left) / r.width;
-        const y = (e.clientY - r.top) / r.height;
-        applyPose((x - 0.5) * 50, (0.5 - y) * 40, 0);
-      });
-    }
-
-    function faceLoop() {
-      requestAnimationFrame(faceLoop);
-      if (!landmarker || cam.readyState < 2) return;
-      if (cam.currentTime === lastVideoTime) return;
-      lastVideoTime = cam.currentTime;
-      const res = landmarker.detectForVideo(cam, performance.now());
-      if (res.faceLandmarks?.[0]) {
-        const p = poseFromLandmarks(res.faceLandmarks[0]);
-        applyPose(p.yaw, p.pitch, p.roll);
-      }
-    }
-
-    function showToast(m) {
-      const t = $("#toast");
-      t.textContent = m; t.classList.add("show");
-      setTimeout(() => t.classList.remove("show"), 1400);
-    }
-    function setScreen(id) {
-      $$(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
-      $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
-      requestAnimationFrame(() => stages.forEach((s) => s.resize()));
-    }
-
-    $("#startCam").addEventListener("click", startCamera);
-    $("#unlockBtn").addEventListener("click", () => {
-      unlocked = true;
-      $("#tabs").classList.add("show");
-      setScreen("home");
-      startChart();
-      setTimeout(() => { manualMood = false; }, 2500);
+    document.getElementById("phone").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-go]");
+      if (!btn) return;
+      show(btn.dataset.go);
     });
-    $("#lockAgain").addEventListener("click", () => {
-      unlocked = false; $("#tabs").classList.remove("show"); setScreen("lock");
+    document.getElementById("nav").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-go]");
+      if (!btn) return;
+      show(btn.dataset.go);
     });
-    $("#tabs").addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-tab]");
-      if (b) setScreen(b.dataset.tab);
-    });
-    $$("[data-go]").forEach((el) => el.addEventListener("click", () => setScreen(el.dataset.go)));
-    $("#moodDemo").addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-mood]");
-      if (!b) return;
-      manualMood = true;
-      setMood(b.dataset.mood);
-    });
-
-    const tick = () => {
-      $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    };
-    tick(); setInterval(tick, 10000);
-
-    // chart
-    const chart = $("#chart");
-    const cctx = chart.getContext("2d");
-    let prices = [];
-    let autoTimer = 0;
-    function seed() {
-      prices = []; let p = 21820;
-      for (let i = 0; i < 50; i++) { p += (Math.random() - .45) * 12; prices.push(p); }
-    }
-    function resizeChart() {
-      const wrap = chart.parentElement;
-      const dpr = Math.min(devicePixelRatio || 1, 2);
-      chart.width = wrap.clientWidth * dpr;
-      chart.height = wrap.clientHeight * dpr;
-      cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawChart();
-    }
-    function drawChart() {
-      const w = chart.clientWidth, h = chart.clientHeight;
-      cctx.clearRect(0, 0, w, h);
-      if (prices.length < 2) return;
-      const min = Math.min(...prices), max = Math.max(...prices), pad = 8, span = max - min || 1;
-      cctx.beginPath(); cctx.moveTo(0, h);
-      prices.forEach((p, i) => {
-        const x = (i / (prices.length - 1)) * w;
-        const y = pad + (1 - (p - min) / span) * (h - pad * 2);
-        cctx.lineTo(x, y);
-      });
-      cctx.lineTo(w, h); cctx.closePath();
-      const g = cctx.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, "rgba(0,255,194,.25)"); g.addColorStop(1, "rgba(0,255,194,0)");
-      cctx.fillStyle = g; cctx.fill();
-      cctx.beginPath();
-      prices.forEach((p, i) => {
-        const x = (i / (prices.length - 1)) * w;
-        const y = pad + (1 - (p - min) / span) * (h - pad * 2);
-        i ? cctx.lineTo(x, y) : cctx.moveTo(x, y);
-      });
-      cctx.strokeStyle = "#00ffc2"; cctx.lineWidth = 2; cctx.stroke();
-    }
-    function startChart() {
-      seed(); resizeChart();
-      setInterval(() => {
-        if (!unlocked) return;
-        prices.push(prices.at(-1) + (Math.random() - .48) * 9);
-        if (prices.length > 50) prices.shift();
-        drawChart();
-        const base = 126.4 + (prices.at(-1) - 21820) * 0.08;
-        const signed = (base >= 0 ? "+" : "-") + "€" + Math.abs(base).toFixed(2);
-        $("#floatPnl").textContent = signed;
-        $("#floatPnl").className = base >= 0 ? "pnl-up" : "pnl-down";
-        $("#pos1").textContent = signed;
-        $("#pos1").className = base >= 0 ? "pnl-up" : "pnl-down";
-        $("#equity").textContent = "€" + (8240 + base * 0.3).toLocaleString("en-US", { maximumFractionDigits: 0 });
-        autoTimer++;
-        if (autoTimer % 5 === 0 && !manualMood) {
-          const next = base < -3 ? "loss" : base > 20 ? "profit" : (Math.random() < 0.3 ? "think" : mood);
-          if (next !== mood) setMood(next, { toast: false });
-        }
-      }, 900);
-    }
-    window.addEventListener("resize", resizeChart);
-    seed(); requestAnimationFrame(resizeChart);
-
-    loadMoodTextures()
-      .then(() => {
-        lock3d = createStage($("#lockStage"));
-        dash3d = createStage($("#dashStage"));
-        stages = [lock3d, dash3d];
-        setMood("profit", { toast: false });
-        requestAnimationFrame(renderLoop);
-        window.addEventListener("resize", () => stages.forEach((s) => s.resize()));
-      })
-      .catch((err) => {
-        console.error(err);
-        $("#camStatus").textContent = "Emoji assets failed to load";
-      });
   </script>
 </body>
 </html>
