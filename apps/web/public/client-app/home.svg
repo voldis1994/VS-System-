@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1536" viewBox="0 0 1024 1536">
+  <title>VS System — Home</title>
+  <a xlink:href="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/../..">
+  </a>
+  <image width="1024" height="1536" href="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/screens/home.png" xlink:href="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/screens/home.png"/>
+  <!-- tap bottom band to go next -->
+  <a href="https://cdn.jsdelivr.net/gh/voldis1994/VS-System-@main/apps/web/public/client-app/chart.svg">
+    <rect x="0" y="1380" width="1024" height="156" fill="transparent"/>
+  </a>
+</svg>
