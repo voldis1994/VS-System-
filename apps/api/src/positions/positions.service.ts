@@ -1,4 +1,5 @@
 import { Injectable, HttpStatus } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import {
   ClosePositionSchema,
   DomainEventType,
@@ -665,7 +666,12 @@ export class PositionsService {
     const open = await this.prisma.position.findMany({
       where: {
         status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
-        OR: [{ breakEvenEnabled: true }, { trailingEnabled: true }],
+        OR: [
+          { breakEvenEnabled: true },
+          { trailingEnabled: true },
+          // Multi-TP scale-out must run even when BE/Trail are off
+          { takeProfitsJson: { not: Prisma.DbNull } },
+        ],
       },
     });
 

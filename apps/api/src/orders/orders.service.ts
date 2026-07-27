@@ -393,17 +393,24 @@ export class OrdersService {
             ? (input.takeProfits.map((tp, idx, arr) => {
                 const fill = Number(brokerResponse.filledVolume);
                 const step = 0.01;
-                const raw = (fill * tp.closePercent) / 100;
-                const closeVolume =
-                  idx === arr.length - 1
-                    ? null // filled below
-                    : Math.floor(raw / step + 1e-12) * step;
+                const totalSteps = Math.floor(fill / step + 1e-12);
+                const count = arr.length;
+                // Whole-step split (same as buildEqualMultiTpPlan) — % alone
+                // rounds 0.03×33.33% → 0 and dumps full lot onto the last TP.
+                const baseSteps = Math.floor(totalSteps / count);
+                let rem = totalSteps - baseSteps * count;
+                const volumes: number[] = [];
+                for (let i = 0; i < count; i++) {
+                  const extra = rem > 0 ? 1 : 0;
+                  if (rem > 0) rem -= 1;
+                  volumes.push((baseSteps + extra) * step);
+                }
+                const closeVolume = volumes[idx] ?? 0;
                 return {
                   index: idx + 1,
                   price: tp.price,
                   closePercent: tp.closePercent,
-                  closeVolume:
-                    closeVolume == null ? "0" : closeVolume.toFixed(8),
+                  closeVolume: closeVolume.toFixed(8),
                   status: "PENDING",
                 };
               }) as unknown as object)

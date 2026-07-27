@@ -747,7 +747,9 @@ export default function StrategiesPage() {
                         placeholder="5"
                       />
                       <p className="mt-1 text-[11px] text-white/35">
-                        Piem. 0.5 lot ÷ 5 TP → katrs 0.1 (20%). Cenas = vienādi ATR soļi līdz ATR×.
+                        Katrs TP aizver daļu lota (nevis visu). Min lot = TP skaits ×
+                        0.01 (piem. 3 TP → ≥0.03). Mazākam lotam sistēma krīt atpakaļ
+                        uz Single TP.
                       </p>
                     </Field>
                   ) : null}

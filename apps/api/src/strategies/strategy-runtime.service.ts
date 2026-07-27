@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import {
   DomainEventType,
   OrderDirection,
@@ -130,12 +131,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Auto BE + trailing for flagged open positions (all strategies / modes). */
+  /** Auto BE + trailing + multi-TP scale-out for open positions. */
   private async manageExitProtections() {
     const open = await this.prisma.position.findMany({
       where: {
         status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
-        OR: [{ breakEvenEnabled: true }, { trailingEnabled: true }],
+        OR: [
+          { breakEvenEnabled: true },
+          { trailingEnabled: true },
+          { takeProfitsJson: { not: Prisma.DbNull } },
+        ],
       },
       select: { symbol: true },
     });
@@ -682,6 +687,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           | Array<{ price: string; closePercent: number }>
           | undefined;
         let multiPlan: ReturnType<typeof buildEqualMultiTpPlan> | undefined;
+        let effectiveTpMode: "SINGLE" | "MULTI" = takeProfitMode;
         if (takeProfitEnabled && takeProfitMode === "MULTI") {
           multiPlan = buildEqualMultiTpPlan({
             direction: signal,
@@ -692,21 +698,34 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             atrTpMult,
             volumeStep: 0.01,
           });
-          if (multiPlan.length === 0) {
+          if (multiPlan.length < 2) {
+            // 0.01 lot (or too small) cannot partial-close — use SINGLE TP, don't fake multi
+            effectiveTpMode = "SINGLE";
+            multiPlan = undefined;
             lastStatus = {
               ...lastStatus,
-              skip: "multi_tp_lot_too_small",
-              reason: `lot ${entryLot} cannot split into ${multiTpCount} TPs at 0.01 step`,
+              takeProfitMode: "SINGLE",
+              reason: `multi_tp_fallback_single: lot ${entryLot} needs ≥${(multiTpCount * 0.01).toFixed(2)} for ${multiTpCount} TPs`,
             };
-            continue;
+            takeProfit =
+              signal === "BUY"
+                ? formatInstrumentPrice(
+                    brokerSymbol,
+                    d(entry).plus(tpDist).toNumber(),
+                  )
+                : formatInstrumentPrice(
+                    brokerSymbol,
+                    d(entry).minus(tpDist).toNumber(),
+                  );
+          } else {
+            takeProfits = multiPlan.map((l) => ({
+              price: formatInstrumentPrice(brokerSymbol, Number(l.price)),
+              closePercent: l.closePercent,
+            }));
+            // Capital single profitLevel = final TP only (fail-safe for remainder)
+            const last = multiPlan[multiPlan.length - 1]!;
+            takeProfit = formatInstrumentPrice(brokerSymbol, Number(last.price));
           }
-          takeProfits = multiPlan.map((l) => ({
-            price: formatInstrumentPrice(brokerSymbol, Number(l.price)),
-            closePercent: l.closePercent,
-          }));
-          // Capital single profitLevel = final TP only (fail-safe for remainder)
-          const last = multiPlan[multiPlan.length - 1]!;
-          takeProfit = formatInstrumentPrice(brokerSymbol, Number(last.price));
         } else if (takeProfitEnabled) {
           takeProfit =
             signal === "BUY"
@@ -808,7 +827,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             );
             // Rebuild plan with actual fill volume when MULTI
             let planJson = multiPlan;
-            if (takeProfitMode === "MULTI" && takeProfitEnabled) {
+            if (effectiveTpMode === "MULTI" && takeProfitEnabled) {
               planJson = buildEqualMultiTpPlan({
                 direction: signal,
                 entry,
@@ -821,6 +840,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 atrTpMult,
                 volumeStep: 0.01,
               });
+              if (planJson.length < 2) planJson = undefined;
+            } else {
+              planJson = undefined;
             }
             await this.prisma.position.update({
               where: { id: child.position.id },
@@ -834,7 +856,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 ),
                 takeProfitsJson: planJson
                   ? (planJson as unknown as object)
-                  : undefined,
+                  : Prisma.DbNull,
                 breakEvenEnabled,
                 breakEvenActivation: breakEvenEnabled
                   ? beActDist.toFixed(8)

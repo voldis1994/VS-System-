@@ -49,6 +49,12 @@ export function deploymentHint(d: DeploymentState): string | null {
   if (d.skip === "multi_tp_lot_too_small") {
     return "Multi TP: lot pārāk mazs šim TP skaitam (min step 0.01).";
   }
+  if (
+    typeof d.reason === "string" &&
+    d.reason.startsWith("multi_tp_fallback_single")
+  ) {
+    return "Multi TP nav iespējams ar šo lot — izmanto Single TP (vajag ≥ TP×0.01 lot).";
+  }
   if (d.skip === "buy_vs_bearish") {
     return `BUY bloķēts pret bearish — ja SELL arī neder, gaida.`;
   }
