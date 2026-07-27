@@ -39,6 +39,14 @@ type CapitalMarket = {
 
 type ExitVersion = "SCALP" | "SWING" | "RUNNER";
 
+type ExitParams = {
+  atrStopMult: number;
+  atrTpMult: number;
+  beActivationPips: number;
+  trailPips: number;
+  trailActPips: number;
+};
+
 const MODES = [
   StrategyMode.TREND,
   StrategyMode.MOMENTUM,
@@ -65,53 +73,152 @@ const EXITS: Record<
   {
     label: string;
     hint: string;
+    blurb: string;
     tpEnabled: boolean;
     beEnabled: boolean;
     trailEnabled: boolean;
-    atrStopMult: string;
-    atrTpMult: string;
-    beActivationPips: string;
-    trailPips: string;
-    trailActPips: string;
+    atrStopMult: number;
+    atrTpMult: number;
+    beActivationPips: number;
+    trailPips: number;
+    trailActPips: number;
   }
 > = {
   SCALP: {
     label: "Scalp",
     hint: "TP · BE · Trail",
+    blurb: "Ciešs exits — TP, BE un trailing aktīvi.",
     tpEnabled: true,
     beEnabled: true,
     trailEnabled: true,
-    atrStopMult: "1.0",
-    atrTpMult: "1.8",
-    beActivationPips: "15",
-    trailPips: "20",
-    trailActPips: "15",
+    atrStopMult: 1.0,
+    atrTpMult: 1.8,
+    beActivationPips: 15,
+    trailPips: 20,
+    trailActPips: 15,
   },
   SWING: {
     label: "Swing",
     hint: "TP · BE",
+    blurb: "Plašāks TP/SL — bez trailing, ar BE.",
     tpEnabled: true,
     beEnabled: true,
     trailEnabled: false,
-    atrStopMult: "1.4",
-    atrTpMult: "2.4",
-    beActivationPips: "25",
-    trailPips: "30",
-    trailActPips: "25",
+    atrStopMult: 1.4,
+    atrTpMult: 2.4,
+    beActivationPips: 25,
+    trailPips: 30,
+    trailActPips: 25,
   },
   RUNNER: {
     label: "Runner",
     hint: "BE · Trail",
+    blurb: "Bez fiksēta TP — BE + trailing ved peļņu.",
     tpEnabled: false,
     beEnabled: true,
     trailEnabled: true,
-    atrStopMult: "1.6",
-    atrTpMult: "3.0",
-    beActivationPips: "20",
-    trailPips: "35",
-    trailActPips: "20",
+    atrStopMult: 1.6,
+    atrTpMult: 3.0,
+    beActivationPips: 20,
+    trailPips: 35,
+    trailActPips: 20,
   },
 };
+
+function paramsFromExit(v: ExitVersion): ExitParams {
+  const e = EXITS[v];
+  return {
+    atrStopMult: e.atrStopMult,
+    atrTpMult: e.atrTpMult,
+    beActivationPips: e.beActivationPips,
+    trailPips: e.trailPips,
+    trailActPips: e.trailActPips,
+  };
+}
+
+function fmtNum(n: number, digits = 1) {
+  return Number.isInteger(n) ? String(n) : n.toFixed(digits).replace(/\.0$/, "");
+}
+
+function tipAtrTp(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Šajā exit versijā fiksēts TP ir izslēgts — peļņu ved BE/Trail.";
+  if (now === prev) return "TP distance = ATR × šis skaitlis. Mazāks = TP tuvāk ieejai.";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `TP sāksies tuvāk — apm. ${fmtNum(d)}× ATR agrāk nekā iepriekš (${fmtNum(prev)} → ${fmtNum(now)}).`;
+  }
+  return `TP būs tālāk — vajadzēs +${fmtNum(d)}× ATR peļņu pret iepriekšējo (${fmtNum(prev)} → ${fmtNum(now)}).`;
+}
+
+function tipAtrSl(now: number, prev: number): string {
+  if (now === prev) return "SL distance = ATR × šis skaitlis. Mazāks = ciešāks stops (vairāk riska tikt izsists).";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `SL kļūst ciešāks — apm. ${fmtNum(d)}× ATR tuvāk nekā iepriekš (${fmtNum(prev)} → ${fmtNum(now)}).`;
+  }
+  return `SL kļūst plašāks — +${fmtNum(d)}× ATR elpas pret iepriekšējo (${fmtNum(prev)} → ${fmtNum(now)}).`;
+}
+
+function tipBe(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Break-even šajā versijā ir izslēgts.";
+  if (now === prev) return "Cik pipus peļņā jāsasniedz, lai SL pārvietotos uz BE (apm. ieejas līmeni).";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `BE ieslēgsies agrāk — par ${d} pips ātrāk nekā iepriekš (${prev} → ${now}).`;
+  }
+  return `BE ieslēgsies vēlāk — vajadzēs +${d} pips peļņu pret iepriekšējo (${prev} → ${now}).`;
+}
+
+function tipTrailDist(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Trailing šajā versijā ir izslēgts.";
+  if (now === prev) return "Cik tālu trailing SL seko cenai (pips). Mazāks = ciešāks trail.";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `Trail seko ciešāk — ${d} pips tuvāk nekā iepriekš (${prev} → ${now}).`;
+  }
+  return `Trail seko brīvāk — +${d} pips distance pret iepriekšējo (${prev} → ${now}).`;
+}
+
+function tipTrailAct(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Trailing šajā versijā ir izslēgts.";
+  if (now === prev) return "Cik pipus peļņā jāsasniedz, pirms trailing sāk kustēties.";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `Trail sāksies agrāk — par ${d} pips ātrāk nekā iepriekš (${prev} → ${now}).`;
+  }
+  return `Trail sāksies vēlāk — +${d} pips peļņa pret iepriekšējo (${prev} → ${now}).`;
+}
+
+function tipExitSwitch(from: ExitVersion, to: ExitVersion): string[] {
+  if (from === to) return [];
+  const a = EXITS[from];
+  const b = EXITS[to];
+  const lines: string[] = [`Pāreja ${a.label} → ${b.label}. ${b.blurb}`];
+  if (a.tpEnabled && b.tpEnabled && a.atrTpMult !== b.atrTpMult) {
+    lines.push(tipAtrTp(b.atrTpMult, a.atrTpMult, true));
+  } else if (a.tpEnabled && !b.tpEnabled) {
+    lines.push("Fiksētais TP tiek izslēgts — turpmāk peļņu ved BE un/vai Trail.");
+  } else if (!a.tpEnabled && b.tpEnabled) {
+    lines.push(`Fiksētais TP ieslēgts — mērķis apm. ATR × ${fmtNum(b.atrTpMult)}.`);
+  }
+  if (a.atrStopMult !== b.atrStopMult) {
+    lines.push(tipAtrSl(b.atrStopMult, a.atrStopMult));
+  }
+  if (a.beEnabled && b.beEnabled && a.beActivationPips !== b.beActivationPips) {
+    lines.push(tipBe(b.beActivationPips, a.beActivationPips, true));
+  }
+  if (a.trailEnabled !== b.trailEnabled) {
+    lines.push(
+      b.trailEnabled
+        ? `Trailing ieslēgts — distance ${b.trailPips} pips, aktivācija ${b.trailActPips} pips.`
+        : "Trailing tiek izslēgts šajā versijā.",
+    );
+  } else if (a.trailEnabled && b.trailEnabled) {
+    if (a.trailPips !== b.trailPips) lines.push(tipTrailDist(b.trailPips, a.trailPips, true));
+    if (a.trailActPips !== b.trailActPips) lines.push(tipTrailAct(b.trailActPips, a.trailActPips, true));
+  }
+  return lines;
+}
 
 async function portalApi<T>(
   apiBase: string,
@@ -133,8 +240,9 @@ async function portalApi<T>(
   return data as T;
 }
 
-function buildConfig(input: { lotSize: string; exit: ExitVersion }) {
+function buildConfig(input: { lotSize: string; exit: ExitVersion; params: ExitParams }) {
   const e = EXITS[input.exit];
+  const p = input.params;
   return {
     timeframe: "M5",
     riskPercent: 0.5,
@@ -144,21 +252,73 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion }) {
     closeOnlyNoFlip: false,
     autoAggressive: false,
     minScore: 50,
-    atrStopMult: Number(e.atrStopMult),
-    atrTpMult: Number(e.atrTpMult),
+    atrStopMult: p.atrStopMult,
+    atrTpMult: p.atrTpMult,
     takeProfitEnabled: e.tpEnabled,
     takeProfitMode: "SINGLE",
     multiTpCount: 3,
     breakEvenEnabled: e.beEnabled,
-    breakEvenActivationPips: Number(e.beActivationPips),
+    breakEvenActivationPips: p.beActivationPips,
     breakEvenOffsetPips: 1,
     trailingEnabled: e.trailEnabled,
-    trailingDistancePips: Number(e.trailPips),
-    trailingActivationPips: Number(e.trailActPips),
+    trailingDistancePips: p.trailPips,
+    trailingActivationPips: p.trailActPips,
     exitVersion: input.exit,
     newsFilterEnabled: false,
     cooldownSeconds: 30,
   };
+}
+
+function Stepper({
+  label,
+  value,
+  step,
+  min,
+  max,
+  digits,
+  onChange,
+  tip,
+}: {
+  label: string;
+  value: number;
+  step: number;
+  min: number;
+  max: number;
+  digits?: number;
+  onChange: (n: number) => void;
+  tip: string;
+}) {
+  const round = (n: number) => {
+    const f = 10 ** (digits ?? (step < 1 ? 1 : 0));
+    return Math.round(n * f) / f;
+  };
+  return (
+    <div className="border border-[#1e2a38] bg-[#06090d] px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] tracking-[0.2em] text-[#6b7f94]">{label}</span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className="h-8 w-8 border border-[#243041] text-[#9aabbc]"
+            onClick={() => onChange(round(Math.max(min, value - step)))}
+          >
+            −
+          </button>
+          <span className="min-w-[3.25rem] text-center font-mono text-[14px] text-[#e8eef5]">
+            {fmtNum(value, digits ?? 1)}
+          </span>
+          <button
+            type="button"
+            className="h-8 w-8 border border-[#243041] text-[#9aabbc]"
+            onClick={() => onChange(round(Math.min(max, value + step)))}
+          >
+            +
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{tip}</p>
+    </div>
+  );
 }
 
 const shell =
@@ -181,6 +341,9 @@ export default function ClientPortalPage() {
   const [mode, setMode] = useState<string>(CLIENT_DEFAULTS.mode);
   const [lotSize, setLotSize] = useState(CLIENT_DEFAULTS.lotSize);
   const [exit, setExit] = useState<ExitVersion>(CLIENT_DEFAULTS.exit);
+  const [exitParams, setExitParams] = useState<ExitParams>(() => paramsFromExit(CLIENT_DEFAULTS.exit));
+  const [prevParams, setPrevParams] = useState<ExitParams>(() => paramsFromExit(CLIENT_DEFAULTS.exit));
+  const [exitSwitchTips, setExitSwitchTips] = useState<string[]>([]);
   const [epic, setEpic] = useState(CLIENT_DEFAULTS.epic);
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [marketQ, setMarketQ] = useState("");
@@ -255,9 +418,31 @@ export default function ClientPortalPage() {
         if (syms[0]) setEpic(syms[0]);
         const cfg = session.strategy.configuration ?? {};
         if (typeof cfg.volume === "string") setLotSize(cfg.volume);
-        if (cfg.exitVersion === "SWING" || cfg.exitVersion === "RUNNER" || cfg.exitVersion === "SCALP") {
-          setExit(cfg.exitVersion);
-        }
+        const nextExit: ExitVersion =
+          cfg.exitVersion === "SWING" || cfg.exitVersion === "RUNNER" || cfg.exitVersion === "SCALP"
+            ? cfg.exitVersion
+            : "SCALP";
+        setExit(nextExit);
+        const loaded: ExitParams = {
+          atrStopMult:
+            typeof cfg.atrStopMult === "number" ? cfg.atrStopMult : EXITS[nextExit].atrStopMult,
+          atrTpMult: typeof cfg.atrTpMult === "number" ? cfg.atrTpMult : EXITS[nextExit].atrTpMult,
+          beActivationPips:
+            typeof cfg.breakEvenActivationPips === "number"
+              ? cfg.breakEvenActivationPips
+              : EXITS[nextExit].beActivationPips,
+          trailPips:
+            typeof cfg.trailingDistancePips === "number"
+              ? cfg.trailingDistancePips
+              : EXITS[nextExit].trailPips,
+          trailActPips:
+            typeof cfg.trailingActivationPips === "number"
+              ? cfg.trailingActivationPips
+              : EXITS[nextExit].trailActPips,
+        };
+        setExitParams(loaded);
+        setPrevParams(loaded);
+        setExitSwitchTips([]);
       }
       try {
         const m = await portalApi<{ markets: CapitalMarket[] }>(
@@ -324,7 +509,7 @@ export default function ClientPortalPage() {
           mode,
           assignedSymbols: [epic],
           action,
-          configuration: buildConfig({ lotSize, exit }),
+          configuration: buildConfig({ lotSize, exit, params: exitParams }),
         }),
       });
       setStatusMsg(action === "stop" ? "Apturēts" : action === "save" ? "Saglabāts" : "Palaists");
@@ -336,21 +521,40 @@ export default function ClientPortalPage() {
     }
   }
 
+  function applyExitVersion(next: ExitVersion) {
+    const tips = tipExitSwitch(exit, next);
+    const nextParams = paramsFromExit(next);
+    setPrevParams(exitParams);
+    setExit(next);
+    setExitParams(nextParams);
+    setExitSwitchTips(tips);
+  }
+
+  function patchParams(patch: Partial<ExitParams>) {
+    setPrevParams(exitParams);
+    setExitParams((cur) => ({ ...cur, ...patch }));
+    setExitSwitchTips([]);
+  }
+
   async function resetToDefaults() {
     if (!token || !server) return;
     setBusy(true);
     setError(null);
     setStatusMsg(null);
     const d = CLIENT_DEFAULTS;
+    const params = paramsFromExit(d.exit);
     setMode(d.mode);
     setLotSize(d.lotSize);
     setExit(d.exit);
+    setExitParams(params);
+    setPrevParams(params);
+    setExitSwitchTips([]);
     setEpic(d.epic);
     setMarketQ("");
     const body = {
       mode: d.mode,
       assignedSymbols: [d.epic],
-      configuration: buildConfig({ lotSize: d.lotSize, exit: d.exit }),
+      configuration: buildConfig({ lotSize: d.lotSize, exit: d.exit, params }),
     };
     try {
       if (strategy?.status === "RUNNING") {
@@ -580,7 +784,7 @@ export default function ClientPortalPage() {
               <button
                 key={k}
                 type="button"
-                onClick={() => setExit(k)}
+                onClick={() => applyExitVersion(k)}
                 className={`flex w-full items-center justify-between border px-3 py-3 text-left ${
                   exit === k ? "border-[#9eb6cc] bg-[#141c26]" : "border-[#243041]"
                 }`}
@@ -591,6 +795,93 @@ export default function ClientPortalPage() {
                 <span className="font-mono text-[10px] text-[#5c6d80]">{EXITS[k].hint}</span>
               </button>
             ))}
+          </div>
+          <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{EXITS[exit].blurb}</p>
+          {exitSwitchTips.length > 0 ? (
+            <div className="mt-2 space-y-1.5 border border-[#243041] bg-[#0c1219] px-3 py-2.5">
+              <p className="text-[9px] tracking-[0.22em] text-[#8aa0b8]">KAS MAINĪJĀS</p>
+              {exitSwitchTips.map((t) => (
+                <p key={t} className="text-[11px] leading-snug text-[#9aabbc]">
+                  {t}
+                </p>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mt-3 space-y-2">
+            <p className="text-[9px] tracking-[0.28em] text-[#6b7f94]">FINE TUNE</p>
+            {EXITS[exit].tpEnabled ? (
+              <Stepper
+                label="TP ATR×"
+                value={exitParams.atrTpMult}
+                step={0.1}
+                min={0.5}
+                max={6}
+                digits={1}
+                onChange={(n) => patchParams({ atrTpMult: n })}
+                tip={tipAtrTp(exitParams.atrTpMult, prevParams.atrTpMult, true)}
+              />
+            ) : (
+              <div className="border border-[#1e2a38] bg-[#06090d] px-3 py-2.5">
+                <p className="text-[10px] tracking-[0.2em] text-[#6b7f94]">TP ATR×</p>
+                <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">
+                  {tipAtrTp(exitParams.atrTpMult, prevParams.atrTpMult, false)}
+                </p>
+              </div>
+            )}
+            <Stepper
+              label="SL ATR×"
+              value={exitParams.atrStopMult}
+              step={0.1}
+              min={0.4}
+              max={4}
+              digits={1}
+              onChange={(n) => patchParams({ atrStopMult: n })}
+              tip={tipAtrSl(exitParams.atrStopMult, prevParams.atrStopMult)}
+            />
+            {EXITS[exit].beEnabled ? (
+              <Stepper
+                label="BE aktivācija (pips)"
+                value={exitParams.beActivationPips}
+                step={1}
+                min={5}
+                max={80}
+                digits={0}
+                onChange={(n) => patchParams({ beActivationPips: n })}
+                tip={tipBe(exitParams.beActivationPips, prevParams.beActivationPips, true)}
+              />
+            ) : null}
+            {EXITS[exit].trailEnabled ? (
+              <>
+                <Stepper
+                  label="Trail distance (pips)"
+                  value={exitParams.trailPips}
+                  step={1}
+                  min={5}
+                  max={80}
+                  digits={0}
+                  onChange={(n) => patchParams({ trailPips: n })}
+                  tip={tipTrailDist(exitParams.trailPips, prevParams.trailPips, true)}
+                />
+                <Stepper
+                  label="Trail aktivācija (pips)"
+                  value={exitParams.trailActPips}
+                  step={1}
+                  min={5}
+                  max={80}
+                  digits={0}
+                  onChange={(n) => patchParams({ trailActPips: n })}
+                  tip={tipTrailAct(exitParams.trailActPips, prevParams.trailActPips, true)}
+                />
+              </>
+            ) : (
+              <div className="border border-[#1e2a38] bg-[#06090d] px-3 py-2.5">
+                <p className="text-[10px] tracking-[0.2em] text-[#6b7f94]">TRAILING</p>
+                <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">
+                  {tipTrailDist(exitParams.trailPips, prevParams.trailPips, false)}
+                </p>
+              </div>
+            )}
           </div>
         </section>
 
