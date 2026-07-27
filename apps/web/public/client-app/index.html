@@ -3,12 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — Client App Mockup</title>
-  <meta name="description" content="Interactive VS System private client mobile mockup" />
+  <title>VS System — Live Face Dashboard</title>
   <style>
     :root {
-      --bg: #050608;
-      --bg2: #0b0f14;
       --teal: #00ffc2;
       --teal-dim: rgba(0, 255, 194, 0.14);
       --text: #f4f7f6;
@@ -18,7 +15,6 @@
       --phone-w: 390px;
       --phone-h: 844px;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       min-height: 100%;
@@ -29,73 +25,43 @@
       font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
     }
-
     .stage {
       min-height: 100vh;
       display: grid;
       place-items: center;
       padding: 24px 16px 40px;
-      gap: 18px;
+      gap: 14px;
     }
-
     .hint {
-      max-width: 420px;
+      max-width: 440px;
       text-align: center;
       color: var(--muted);
       font-size: 13px;
       line-height: 1.45;
     }
-    .hint strong { color: var(--teal); font-weight: 600; }
-
+    .hint strong { color: var(--teal); }
     .phone {
       width: min(100%, var(--phone-w));
       height: min(92vh, var(--phone-h));
       border-radius: 42px;
       background: #000;
       border: 1px solid rgba(255,255,255,0.14);
-      box-shadow:
-        0 0 0 1px rgba(0,0,0,0.8),
-        0 40px 100px rgba(0,0,0,0.65),
-        0 0 80px rgba(0, 255, 194, 0.06);
+      box-shadow: 0 40px 100px rgba(0,0,0,0.65), 0 0 80px rgba(0,255,194,0.06);
       position: relative;
       overflow: hidden;
-      isolation: isolate;
     }
-
     .notch {
-      position: absolute;
-      top: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 120px;
-      height: 34px;
-      background: #000;
-      border-radius: 20px;
-      z-index: 50;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      width: 120px; height: 34px; background: #000; border-radius: 20px; z-index: 50;
     }
-
     .status {
-      position: absolute;
-      top: 14px;
-      left: 0;
-      right: 0;
-      z-index: 40;
-      display: flex;
-      justify-content: space-between;
-      padding: 0 28px;
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-      pointer-events: none;
+      position: absolute; top: 14px; left: 0; right: 0; z-index: 40;
+      display: flex; justify-content: space-between; padding: 0 28px;
+      font-size: 12px; font-weight: 600; pointer-events: none;
     }
-
     .screen {
-      position: absolute;
-      inset: 0;
-      display: none;
-      flex-direction: column;
-      padding: 62px 20px 92px;
+      position: absolute; inset: 0; display: none; flex-direction: column;
+      padding: 62px 18px 92px;
       background:
         radial-gradient(600px 280px at 80% 0%, rgba(0,255,194,0.12), transparent 50%),
         linear-gradient(165deg, #0a0d12 0%, #050608 48%, #020303 100%);
@@ -103,437 +69,226 @@
     }
     .screen.active { display: flex; }
 
-    .brand {
-      font-size: 54px;
-      font-weight: 800;
-      letter-spacing: -0.06em;
-      line-height: 0.85;
-    }
+    .brand { font-size: 48px; font-weight: 800; letter-spacing: -0.06em; line-height: 0.85; }
     .brand span {
-      display: block;
-      font-size: 12px;
-      letter-spacing: 0.42em;
-      margin-top: 6px;
-      color: var(--muted);
-      font-weight: 500;
+      display: block; font-size: 11px; letter-spacing: 0.42em; margin-top: 6px;
+      color: var(--muted); font-weight: 500;
     }
 
-    /* —— LOCK —— */
-    #lock {
-      cursor: pointer;
-      user-select: none;
-      touch-action: none;
+    /* hidden cam */
+    #cam, #overlay {
+      position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;
     }
-    .lock-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
+
+    .perm {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(0,255,194,0.3);
+      background: rgba(0,255,194,0.06);
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.4;
     }
-    .client-chip {
+    .perm button {
       margin-top: 10px;
-      font-size: 11px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--teal);
+      border: 0;
+      background: var(--teal);
+      color: #031410;
+      font-weight: 800;
+      padding: 12px 18px;
+      border-radius: 999px;
+      cursor: pointer;
+      width: 100%;
     }
-    .stats-col {
-      text-align: right;
+    .cam-status {
+      margin-top: 8px;
       font-size: 11px;
-      line-height: 1.7;
       color: var(--muted);
-      font-variant-numeric: tabular-nums;
+      text-align: center;
     }
-    .stats-col b { color: var(--text); font-weight: 600; }
+    .cam-status.on { color: var(--teal); }
 
     .face-stage {
-      flex: 1;
-      display: grid;
-      place-items: center;
-      position: relative;
-      margin: 8px 0 12px;
+      flex: 1; display: grid; place-items: center; position: relative; margin: 6px 0;
     }
     .scan-frame {
-      width: min(78%, 260px);
-      aspect-ratio: 1;
-      position: relative;
-      display: grid;
-      place-items: center;
+      width: min(82%, 270px); aspect-ratio: 1; position: relative;
+      display: grid; place-items: center;
     }
     .corner {
-      position: absolute;
-      width: 28px;
-      height: 28px;
-      border: 2px solid var(--teal);
-      opacity: 0.85;
+      position: absolute; width: 26px; height: 26px; border: 2px solid var(--teal); opacity: 0.85;
     }
     .corner.tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
     .corner.tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
     .corner.bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
     .corner.br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
-
     .streak {
-      position: absolute;
-      width: 140%;
-      height: 2px;
+      position: absolute; width: 140%; height: 2px;
       background: linear-gradient(90deg, transparent, var(--teal), transparent);
-      transform: rotate(-28deg);
-      filter: blur(0.2px);
-      opacity: 0.55;
+      transform: rotate(-28deg); opacity: 0.5; pointer-events: none;
       animation: streak 2.8s ease-in-out infinite;
-      pointer-events: none;
     }
     @keyframes streak {
-      0%, 100% { opacity: 0.25; transform: rotate(-28deg) translateY(-30px); }
-      50% { opacity: 0.8; transform: rotate(-28deg) translateY(30px); }
+      0%,100% { opacity: .2; transform: rotate(-28deg) translateY(-28px); }
+      50% { opacity: .85; transform: rotate(-28deg) translateY(28px); }
     }
 
-    .face {
-      width: 70%;
-      height: 70%;
+    .face-rig {
+      width: 72%; height: 72%;
       transform-style: preserve-3d;
-      transition: transform 0.08s linear;
       will-change: transform;
-      filter: drop-shadow(0 0 24px rgba(0,255,194,0.35));
+      transition: transform 0.05s linear;
+      filter: drop-shadow(0 0 22px rgba(0,255,194,0.35));
     }
-    .face svg { width: 100%; height: 100%; display: block; }
-    .face.scanning {
-      animation: pulse 0.9s ease-in-out infinite;
+    .face-rig svg { width: 100%; height: 100%; display: block; }
+
+    .mini-preview {
+      position: absolute;
+      right: 10px; bottom: 10px;
+      width: 72px; height: 96px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(0,255,194,0.35);
+      background: #000;
+      z-index: 5;
     }
-    @keyframes pulse {
-      0%, 100% { filter: drop-shadow(0 0 18px rgba(0,255,194,0.3)); }
-      50% { filter: drop-shadow(0 0 40px rgba(0,255,194,0.7)); }
+    .mini-preview video {
+      width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);
     }
 
     .unlock-btn {
-      margin: 0 auto;
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 14px 22px;
-      border-radius: 999px;
-      border: 1px solid rgba(0,255,194,0.35);
-      background: rgba(0,255,194,0.08);
-      color: var(--text);
-      font-size: 14px;
-      font-weight: 600;
-      backdrop-filter: blur(8px);
-    }
-    .unlock-btn small {
-      display: block;
-      font-size: 10px;
-      color: var(--muted);
-      font-weight: 500;
-      margin-top: 2px;
+      margin: 0 auto; display: inline-flex; align-items: center; gap: 10px;
+      padding: 14px 20px; border-radius: 999px;
+      border: 1px solid rgba(0,255,194,0.35); background: rgba(0,255,194,0.08);
+      color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer;
     }
     .lock-cta { text-align: center; }
-    .lock-hint {
-      margin-top: 10px;
-      font-size: 11px;
-      color: var(--muted);
-    }
+    .lock-hint { margin-top: 8px; font-size: 11px; color: var(--muted); }
 
-    /* —— HOME —— */
-    .hello {
-      font-size: 13px;
-      color: var(--muted);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    .equity {
-      font-size: 52px;
-      font-weight: 800;
-      letter-spacing: -0.04em;
-      margin-top: 4px;
-      line-height: 1;
-    }
+    /* HOME / DASHBOARD with live face */
+    .hello { font-size: 12px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+    .equity { font-size: 44px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
     .equity-row {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 14px;
+      display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 6px 0 12px;
     }
     .pill {
-      font-size: 11px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: var(--teal-dim);
-      color: var(--teal);
-      border: 1px solid rgba(0,255,194,0.25);
-      white-space: nowrap;
+      font-size: 11px; padding: 6px 10px; border-radius: 999px;
+      background: var(--teal-dim); color: var(--teal);
+      border: 1px solid rgba(0,255,194,0.25); white-space: nowrap;
     }
 
-    .chart-wrap {
-      flex: 1;
-      min-height: 220px;
+    .dash-face {
+      position: relative;
+      height: 210px;
       border-radius: 22px;
       border: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent);
-      position: relative;
+      background: radial-gradient(circle at 50% 40%, rgba(0,255,194,0.12), transparent 55%),
+                  rgba(255,255,255,0.02);
+      margin-bottom: 12px;
       overflow: hidden;
-      margin-bottom: 14px;
+      display: grid;
+      place-items: center;
     }
-    .chart-wrap canvas {
-      width: 100%;
-      height: 100%;
-      display: block;
+    .dash-face .face-rig { width: 150px; height: 180px; }
+    .dash-label {
+      position: absolute; top: 12px; left: 12px;
+      font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--teal);
     }
-    .tf {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      display: flex;
-      gap: 6px;
-      z-index: 2;
+    .dash-pose {
+      position: absolute; top: 12px; right: 12px;
+      font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
+      text-align: right; line-height: 1.45;
     }
-    .tf button {
-      border: 0;
-      background: rgba(0,0,0,0.35);
-      color: var(--muted);
-      font-size: 11px;
-      padding: 5px 9px;
-      border-radius: 8px;
-      cursor: pointer;
+    .dash-preview {
+      position: absolute; left: 12px; bottom: 12px;
+      width: 56px; height: 74px; border-radius: 10px; overflow: hidden;
+      border: 1px solid rgba(0,255,194,0.3);
     }
-    .tf button.on {
-      color: #031410;
-      background: var(--teal);
-      font-weight: 700;
+    .dash-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+
+    .chart-wrap {
+      flex: 1; min-height: 140px; border-radius: 18px; border: 1px solid var(--line);
+      background: rgba(255,255,255,0.02); position: relative; overflow: hidden; margin-bottom: 10px;
     }
+    .chart-wrap canvas { width: 100%; height: 100%; display: block; }
 
     .mini-card {
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 14px;
+      border: 1px solid var(--line); border-radius: 16px; padding: 12px;
       background: rgba(255,255,255,0.03);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center; cursor: pointer;
     }
-    .mini-card:active { transform: scale(0.985); }
-    .mini-card .sym {
-      font-weight: 700;
-      letter-spacing: 0.04em;
-    }
-    .mini-card .meta {
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 3px;
-    }
-    .pnl-up { color: var(--teal); font-weight: 700; font-variant-numeric: tabular-nums; }
-    .pnl-down { color: var(--loss); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .pnl-up { color: var(--teal); font-weight: 700; }
+    .pnl-down { color: var(--loss); font-weight: 700; }
+    .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
 
-    /* —— POSITIONS —— */
-    .page-title {
-      font-size: 28px;
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      margin-bottom: 12px;
-    }
-    .pos-list {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      overflow: auto;
-      padding-bottom: 8px;
-    }
+    .page-title { font-size: 26px; font-weight: 800; margin-bottom: 12px; }
     .pos {
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      padding: 14px;
-      background: rgba(255,255,255,0.025);
+      border: 1px solid var(--line); border-radius: 18px; padding: 14px;
+      background: rgba(255,255,255,0.025); margin-bottom: 10px;
     }
-    .pos-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-    }
-    .badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .pos-head { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .badges { display: flex; flex-wrap: wrap; gap: 6px; }
     .badge {
-      font-size: 10px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      padding: 4px 8px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      color: var(--muted);
+      font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase;
+      padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted);
     }
-    .badge.hot {
-      color: var(--teal);
-      border-color: rgba(0,255,194,0.3);
-      background: var(--teal-dim);
-    }
-    .tp-bar {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 6px;
-      margin-top: 8px;
-    }
-    .tp-bar div {
-      height: 6px;
-      border-radius: 99px;
-      background: rgba(255,255,255,0.08);
-      overflow: hidden;
-    }
-    .tp-bar div i {
-      display: block;
-      height: 100%;
-      width: 0;
-      background: var(--teal);
-      border-radius: inherit;
-      transition: width 0.6s ease;
-    }
-    .tp-bar div.done i { width: 100%; }
-    .tp-bar div.active i {
-      width: 55%;
-      background: linear-gradient(90deg, var(--teal), transparent);
-      animation: load 1.4s ease-in-out infinite;
-    }
-    @keyframes load {
-      0%, 100% { width: 40%; }
-      50% { width: 70%; }
-    }
-    .trail-line {
-      margin-top: 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .trail-line em {
-      color: #ffd166;
-      font-style: normal;
-      font-weight: 600;
-    }
+    .badge.hot { color: var(--teal); border-color: rgba(0,255,194,0.3); background: var(--teal-dim); }
 
-    /* —— PROFILE —— */
     .mono-ak {
-      font-size: 96px;
-      font-weight: 800;
-      letter-spacing: -0.08em;
-      line-height: 0.8;
+      font-size: 88px; font-weight: 800; letter-spacing: -0.08em; line-height: 0.8;
       background: linear-gradient(180deg, #fff 20%, rgba(0,255,194,0.55));
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-      margin: 8px 0 18px;
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      margin: 8px 0 16px;
     }
     .row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 14px 0;
-      border-bottom: 1px solid var(--line);
-      font-size: 14px;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 13px 0; border-bottom: 1px solid var(--line); font-size: 14px;
     }
     .row span { color: var(--muted); }
     .toggle {
-      width: 48px;
-      height: 28px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.12);
-      position: relative;
-      cursor: pointer;
-      border: 0;
-      transition: background 0.2s;
+      width: 48px; height: 28px; border-radius: 999px; background: rgba(255,255,255,0.12);
+      position: relative; cursor: pointer; border: 0;
     }
     .toggle.on { background: var(--teal); }
     .toggle i {
-      position: absolute;
-      top: 3px;
-      left: 3px;
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      background: #fff;
-      transition: transform 0.2s;
+      position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
+      border-radius: 50%; background: #fff; transition: transform .2s;
     }
     .toggle.on i { transform: translateX(20px); }
-
     .lock-again {
-      margin-top: 22px;
-      width: 100%;
-      border: 1px solid rgba(0,255,194,0.3);
-      background: transparent;
-      color: var(--teal);
-      border-radius: 14px;
-      padding: 14px;
-      font-weight: 700;
-      cursor: pointer;
+      margin-top: 20px; width: 100%; border: 1px solid rgba(0,255,194,0.3);
+      background: transparent; color: var(--teal); border-radius: 14px; padding: 14px;
+      font-weight: 700; cursor: pointer;
     }
 
-    /* —— TABBAR —— */
     .tabs {
-      position: absolute;
-      left: 14px;
-      right: 14px;
-      bottom: 18px;
-      height: 64px;
-      border-radius: 22px;
-      background: rgba(10, 12, 16, 0.88);
-      border: 1px solid rgba(255,255,255,0.1);
-      backdrop-filter: blur(16px);
-      display: none;
-      grid-template-columns: repeat(4, 1fr);
-      z-index: 30;
-      overflow: hidden;
+      position: absolute; left: 14px; right: 14px; bottom: 18px; height: 64px;
+      border-radius: 22px; background: rgba(10,12,16,0.9);
+      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(16px);
+      display: none; grid-template-columns: repeat(4, 1fr); z-index: 30;
     }
     .tabs.show { display: grid; }
     .tabs button {
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      font-size: 10px;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      cursor: pointer;
-      display: grid;
-      place-items: center;
-      gap: 4px;
-      padding-top: 8px;
+      border: 0; background: transparent; color: var(--muted); font-size: 10px;
+      letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer;
+      display: grid; place-items: center; gap: 4px; padding-top: 8px;
     }
-    .tabs button svg { width: 18px; height: 18px; opacity: 0.7; }
-    .tabs button.on {
-      color: var(--teal);
-    }
-    .tabs button.on svg { opacity: 1; stroke: var(--teal); }
+    .tabs button.on { color: var(--teal); }
 
     .toast {
-      position: absolute;
-      left: 50%;
-      top: 70px;
-      transform: translateX(-50%) translateY(-12px);
-      background: rgba(0,255,194,0.12);
-      border: 1px solid rgba(0,255,194,0.35);
-      color: var(--teal);
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 600;
-      opacity: 0;
-      pointer-events: none;
-      transition: 0.25s ease;
-      z-index: 60;
+      position: absolute; left: 50%; top: 70px; transform: translateX(-50%) translateY(-10px);
+      background: rgba(0,255,194,0.12); border: 1px solid rgba(0,255,194,0.35);
+      color: var(--teal); padding: 10px 14px; border-radius: 12px; font-size: 12px;
+      font-weight: 600; opacity: 0; transition: .25s; z-index: 60; pointer-events: none;
       white-space: nowrap;
     }
-    .toast.show {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
     @media (max-width: 480px) {
       .stage { padding: 0; }
       .hint { display: none; }
-      .phone {
-        width: 100%;
-        height: 100vh;
-        height: 100dvh;
-        border-radius: 0;
-        border: 0;
-        box-shadow: none;
-      }
+      .phone { width: 100%; height: 100vh; height: 100dvh; border-radius: 0; border: 0; box-shadow: none; }
       .notch { display: none; }
     }
   </style>
@@ -541,194 +296,149 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>VS System</strong> — privātā klienta app mockup.<br />
-      Kustini peli / pirkstu pār seju → mesh seko. Spied, lai atslēgtu.
+      <strong>Live Face Tracking</strong> — atļauj kameru, tad pagriez galvu.<br />
+      Wireframe Dashboardā kustas līdzi Tavai sejai (nevis pelei).
     </p>
 
-    <div class="phone" id="phone">
+    <div class="phone">
       <div class="notch"></div>
-      <div class="status"><span id="clock">9:41</span><span>5G · ▮▮▮</span></div>
-      <div class="toast" id="toast">Face ID OK · Welcome Anna</div>
+      <div class="status"><span id="clock">9:41</span><span>5G · CAM</span></div>
+      <div class="toast" id="toast">…</div>
+
+      <video id="cam" playsinline autoplay muted></video>
+      <canvas id="overlay"></canvas>
 
       <!-- LOCK -->
       <section class="screen active" id="lock">
-        <div class="lock-top">
-          <div>
-            <div class="brand">VS<span>SYSTEM</span></div>
-            <div class="client-chip">Client Anna K · Private</div>
-          </div>
-          <div class="stats-col">
-            EQUITY <b>+24.18%</b><br />
-            TRADES <b>37</b><br />
-            STATUS <b style="color:var(--teal)">SECURE</b>
-          </div>
+        <div class="brand">VS<span>SYSTEM</span></div>
+        <div class="cam-status" id="camStatus">Kamera: gaida atļauju…</div>
+
+        <div class="perm" id="permBox">
+          Lai seja kustās līdzi galvai, vajag kameru.<br />
+          <button id="startCam">Ieslēgt kameru + Face track</button>
         </div>
 
-        <div class="face-stage">
+        <div class="face-stage" id="lockStage" style="display:none">
           <div class="scan-frame">
-            <div class="corner tl"></div>
-            <div class="corner tr"></div>
-            <div class="corner bl"></div>
-            <div class="corner br"></div>
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
             <div class="streak"></div>
-            <div class="face" id="face">
-              <!-- Wireframe face -->
-              <svg viewBox="0 0 200 240" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-                    <stop stop-color="#00ffc2" stop-opacity="0.95"/>
-                    <stop offset="1" stop-color="#4de8ff" stop-opacity="0.55"/>
-                  </linearGradient>
-                </defs>
-                <ellipse cx="100" cy="118" rx="62" ry="78" stroke="url(#g)" stroke-width="1.2" opacity="0.9"/>
-                <ellipse cx="100" cy="118" rx="48" ry="62" stroke="#00ffc2" stroke-width="0.7" opacity="0.45"/>
-                <path d="M55 95 C70 70, 130 70, 145 95" stroke="#00ffc2" stroke-width="0.8" opacity="0.7"/>
-                <path d="M60 150 C80 175, 120 175, 140 150" stroke="#00ffc2" stroke-width="0.8" opacity="0.55"/>
-                <path d="M100 78 V155" stroke="#00ffc2" stroke-width="0.5" opacity="0.35"/>
-                <path d="M70 120 H130" stroke="#00ffc2" stroke-width="0.5" opacity="0.3"/>
-                <ellipse cx="78" cy="110" rx="10" ry="7" stroke="#00ffc2" stroke-width="1"/>
-                <ellipse cx="122" cy="110" rx="10" ry="7" stroke="#00ffc2" stroke-width="1"/>
-                <circle cx="78" cy="110" r="2.2" fill="#00ffc2"/>
-                <circle cx="122" cy="110" r="2.2" fill="#00ffc2"/>
-                <path d="M92 138 C100 146, 108 146, 116 138" stroke="#00ffc2" stroke-width="1.1"/>
-                <path d="M100 118 L100 136" stroke="#00ffc2" stroke-width="0.8" opacity="0.7"/>
-                <path d="M88 136 H112" stroke="#00ffc2" stroke-width="0.6" opacity="0.5"/>
-                <!-- mesh lines -->
-                <path d="M55 118 C70 100, 130 100, 145 118" stroke="#00ffc2" stroke-width="0.4" opacity="0.35"/>
-                <path d="M58 135 C75 155, 125 155, 142 135" stroke="#00ffc2" stroke-width="0.4" opacity="0.3"/>
-                <path d="M65 85 C85 95, 115 95, 135 85" stroke="#00ffc2" stroke-width="0.4" opacity="0.35"/>
-                <path d="M72 70 C90 78, 110 78, 128 70" stroke="#00ffc2" stroke-width="0.35" opacity="0.3"/>
-              </svg>
-            </div>
+            <div class="face-rig" id="faceLock"></div>
+            <div class="mini-preview"><video id="previewLock" playsinline autoplay muted></video></div>
           </div>
         </div>
 
-        <div class="lock-cta">
-          <div class="unlock-btn">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00ffc2" stroke-width="1.6">
-              <path d="M12 3c-2 2.5-3 4.5-3 7a3 3 0 0 0 6 0c0-2.5-1-4.5-3-7z"/>
-              <path d="M7 14c1.5 2 3.2 3 5 3s3.5-1 5-3"/>
-              <path d="M9 20h6"/>
-            </svg>
-            <div>Face ID or Passcode<small>Tap to unlock · drag to tilt</small></div>
-          </div>
-          <div class="lock-hint">Mockup · nav īstais Apple Face ID</div>
+        <div class="lock-cta" id="unlockWrap" style="display:none">
+          <button class="unlock-btn" id="unlockBtn">Face ID · Enter Dashboard</button>
+          <div class="lock-hint">Pagriez galvu — mesh seko. Tad spied Enter.</div>
         </div>
       </section>
 
-      <!-- HOME -->
+      <!-- HOME / DASHBOARD -->
       <section class="screen" id="home">
-        <div class="hello">Labdien, Anna</div>
+        <div class="hello">Labdien, Anna · Private</div>
         <div class="equity-row">
           <div class="equity" id="equity">€8,240</div>
-          <div class="pill" id="livePill">LIVE · US100</div>
+          <div class="pill">LIVE · FACE</div>
         </div>
-        <div class="chart-wrap">
-          <div class="tf">
-            <button class="on" data-tf="15m">15m</button>
-            <button data-tf="1H">1H</button>
-            <button data-tf="4H">4H</button>
-          </div>
-          <canvas id="chart"></canvas>
+
+        <div class="dash-face">
+          <div class="dash-label">Face lock · live</div>
+          <div class="dash-pose" id="poseReadout">yaw —<br/>pitch —</div>
+          <div class="face-rig" id="faceDash"></div>
+          <div class="dash-preview"><video id="previewDash" playsinline autoplay muted></video></div>
         </div>
+
+        <div class="chart-wrap"><canvas id="chart"></canvas></div>
         <div class="mini-card" data-go="positions">
           <div>
-            <div class="sym">US100 · BUY 0.03</div>
-            <div class="meta">Trail ON · TP1 done · TP2 pending</div>
+            <div style="font-weight:700">US100 · BUY 0.03</div>
+            <div class="meta">Trail ON · TP1 done</div>
           </div>
           <div class="pnl-up" id="floatPnl">+€126.40</div>
         </div>
       </section>
 
-      <!-- POSITIONS -->
       <section class="screen" id="positions">
         <div class="page-title">Positions</div>
-        <div class="pos-list">
-          <article class="pos">
-            <div class="pos-head">
-              <div>
-                <div class="sym" style="font-weight:700">US100</div>
-                <div class="meta" style="font-size:12px;color:var(--muted)">BUY · 0.03 lot</div>
-              </div>
-              <div class="pnl-up" id="pos1">+€126.40</div>
-            </div>
-            <div class="badges">
-              <span class="badge hot">Trail ON</span>
-              <span class="badge hot">TP1 ✓</span>
-              <span class="badge">TP2</span>
-              <span class="badge">TP3</span>
-            </div>
-            <div class="tp-bar">
-              <div class="done"><i></i></div>
-              <div class="active"><i></i></div>
-              <div><i></i></div>
-            </div>
-            <div class="trail-line">Trail SL → <em id="trailSl">21,842.5</em> · seko cenai</div>
-          </article>
-
-          <article class="pos">
-            <div class="pos-head">
-              <div>
-                <div style="font-weight:700">GOLD</div>
-                <div style="font-size:12px;color:var(--muted)">SELL · 0.02 lot</div>
-              </div>
-              <div class="pnl-down" id="pos2">-€8.40</div>
-            </div>
-            <div class="badges">
-              <span class="badge hot">BE armed</span>
-              <span class="badge">Single TP</span>
-            </div>
-            <div class="trail-line">SL pie entry + offset · gaida trail start</div>
-          </article>
+        <div class="pos">
+          <div class="pos-head">
+            <div><b>US100</b><div class="meta">BUY · 0.03</div></div>
+            <div class="pnl-up" id="pos1">+€126.40</div>
+          </div>
+          <div class="badges">
+            <span class="badge hot">Trail ON</span>
+            <span class="badge hot">TP1 ✓</span>
+            <span class="badge">TP2</span>
+          </div>
+        </div>
+        <div class="pos">
+          <div class="pos-head">
+            <div><b>GOLD</b><div class="meta">SELL · 0.02</div></div>
+            <div class="pnl-down">-€8.40</div>
+          </div>
+          <div class="badges"><span class="badge hot">BE</span></div>
         </div>
       </section>
 
-      <!-- PROFILE -->
       <section class="screen" id="profile">
         <div class="hello">Private client</div>
         <div class="mono-ak">AK</div>
         <div class="row"><span>Name</span><b>Anna K.</b></div>
         <div class="row"><span>Strategy</span><b>SCALPING · US100</b></div>
-        <div class="row"><span>Desk</span><b>Tikai Tavs konts</b></div>
+        <div class="row"><span>Face track</span><b style="color:var(--teal)">LIVE</b></div>
         <div class="row">
           <span>Face ID</span>
-          <button class="toggle on" id="faceToggle" aria-label="Face ID"><i></i></button>
+          <button class="toggle on" id="faceToggle"><i></i></button>
         </div>
-        <div class="row"><span>Risk lock</span><b style="color:var(--teal)">ON</b></div>
-        <button class="lock-again" id="lockAgain">Lock with Face ID</button>
+        <button class="lock-again" id="lockAgain">Lock screen</button>
       </section>
 
       <nav class="tabs" id="tabs">
-        <button data-tab="home" class="on">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-8.5z"/></svg>
-          Home
-        </button>
-        <button data-tab="home">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V5M4 19h16M7 15l3-4 3 2 4-6"/></svg>
-          Chart
-        </button>
-        <button data-tab="positions">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 7h13M8 12h13M8 17h13M3 7h.01M3 12h.01M3 17h.01"/></svg>
-          Positions
-        </button>
-        <button data-tab="profile">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.5"/><path d="M5 19c1.5-3.5 4-5 7-5s5.5 1.5 7 5"/></svg>
-          Profile
-        </button>
+        <button data-tab="home" class="on">Home</button>
+        <button data-tab="home">Chart</button>
+        <button data-tab="positions">Positions</button>
+        <button data-tab="profile">Profile</button>
       </nav>
     </div>
   </div>
 
-  <script>
-    const $ = (s, el = document) => el.querySelector(s);
-    const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  <script type="module">
+    const FACE_SVG = `
+      <svg viewBox="0 0 200 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#00ffc2" stop-opacity="0.95"/>
+            <stop offset="1" stop-color="#4de8ff" stop-opacity="0.55"/>
+          </linearGradient>
+        </defs>
+        <ellipse cx="100" cy="118" rx="62" ry="78" stroke="url(#g)" stroke-width="1.2"/>
+        <ellipse cx="100" cy="118" rx="48" ry="62" stroke="#00ffc2" stroke-width="0.7" opacity="0.45"/>
+        <path d="M55 95 C70 70, 130 70, 145 95" stroke="#00ffc2" stroke-width="0.8" opacity="0.7"/>
+        <path d="M60 150 C80 175, 120 175, 140 150" stroke="#00ffc2" stroke-width="0.8" opacity="0.55"/>
+        <path d="M100 78 V155" stroke="#00ffc2" stroke-width="0.5" opacity="0.35"/>
+        <ellipse cx="78" cy="110" rx="10" ry="7" stroke="#00ffc2" stroke-width="1"/>
+        <ellipse cx="122" cy="110" rx="10" ry="7" stroke="#00ffc2" stroke-width="1"/>
+        <circle cx="78" cy="110" r="2.2" fill="#00ffc2"/>
+        <circle cx="122" cy="110" r="2.2" fill="#00ffc2"/>
+        <path d="M92 138 C100 146, 108 146, 116 138" stroke="#00ffc2" stroke-width="1.1"/>
+        <path d="M100 118 L100 136" stroke="#00ffc2" stroke-width="0.8" opacity="0.7"/>
+        <path d="M55 118 C70 100, 130 100, 145 118" stroke="#00ffc2" stroke-width="0.4" opacity="0.35"/>
+        <path d="M58 135 C75 155, 125 155, 142 135" stroke="#00ffc2" stroke-width="0.4" opacity="0.3"/>
+      </svg>`;
 
-    const face = $("#face");
-    const lock = $("#lock");
-    const tabs = $("#tabs");
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => [...document.querySelectorAll(s)];
+    $("#faceLock").innerHTML = FACE_SVG;
+    $("#faceDash").innerHTML = FACE_SVG;
+
+    const cam = $("#cam");
     const toast = $("#toast");
+    let landmarker = null;
+    let stream = null;
     let unlocked = false;
-    let scanning = false;
+    let raf = 0;
+    let smooth = { yaw: 0, pitch: 0, roll: 0 };
 
     function showToast(msg) {
       toast.textContent = msg;
@@ -738,74 +448,138 @@
 
     function setScreen(id) {
       $$(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
-      $$(".tabs button").forEach((b) => {
-        b.classList.toggle("on", b.dataset.tab === id || (id === "home" && b.dataset.tab === "home" && b === $$(".tabs button")[0]));
-      });
-      // highlight correct tab
       $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
-      if (id === "home") $$(".tabs button")[0]?.classList.add("on");
     }
 
-    function unlock() {
-      if (scanning || unlocked) return;
-      scanning = true;
-      face.classList.add("scanning");
-      showToast("Scanning…");
-      setTimeout(() => {
-        face.classList.remove("scanning");
-        unlocked = true;
-        scanning = false;
-        lock.classList.remove("active");
-        tabs.classList.add("show");
-        setScreen("home");
-        showToast("Face ID OK · Welcome Anna");
-        startLive();
-      }, 900);
+    function applyPose(yaw, pitch, roll) {
+      // smooth
+      const a = 0.35;
+      smooth.yaw += (yaw - smooth.yaw) * a;
+      smooth.pitch += (pitch - smooth.pitch) * a;
+      smooth.roll += (roll - smooth.roll) * a;
+
+      const ry = Math.max(-38, Math.min(38, smooth.yaw));
+      const rx = Math.max(-28, Math.min(28, smooth.pitch));
+      const rz = Math.max(-18, Math.min(18, smooth.roll));
+      const t = `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg)`;
+      $("#faceLock").style.transform = t;
+      $("#faceDash").style.transform = t;
+      $("#poseReadout").innerHTML =
+        `yaw ${ry.toFixed(0)}°<br/>pitch ${rx.toFixed(0)}°`;
     }
 
-    // Head-follow: pointer / touch tilts the mesh
-    function tiltFromEvent(e) {
-      const rect = lock.getBoundingClientRect();
-      const point = e.touches ? e.touches[0] : e;
-      if (!point) return;
-      const x = (point.clientX - rect.left) / rect.width;
-      const y = (point.clientY - rect.top) / rect.height;
-      const rx = (0.5 - y) * 34;
-      const ry = (x - 0.5) * 42;
-      face.style.transform = `rotateX(${rx}deg) rotateY(${ry}deg)`;
+    // Estimate head pose from MediaPipe face landmarks (no matrix needed)
+    function poseFromLandmarks(lm) {
+      // key indices: nose 1, left eye outer 33, right eye outer 263, chin 152, forehead 10
+      const nose = lm[1];
+      const left = lm[33];
+      const right = lm[263];
+      const chin = lm[152];
+      const brow = lm[10];
+
+      const midX = (left.x + right.x) / 2;
+      const eyeDist = Math.hypot(right.x - left.x, right.y - left.y) || 0.01;
+
+      // yaw: nose offset from eye midline (mirrored cam → flip)
+      const yaw = ((midX - nose.x) / eyeDist) * 55;
+      // pitch: nose vs brow/chin vertical
+      const faceH = Math.hypot(chin.x - brow.x, chin.y - brow.y) || 0.01;
+      const midY = (brow.y + chin.y) / 2;
+      const pitch = ((nose.y - midY) / faceH) * -70;
+      // roll: eye line angle
+      const roll = Math.atan2(right.y - left.y, right.x - left.x) * (180 / Math.PI);
+
+      return { yaw, pitch, roll };
     }
-    lock.addEventListener("pointermove", tiltFromEvent);
-    lock.addEventListener("touchmove", tiltFromEvent, { passive: true });
-    lock.addEventListener("pointerleave", () => {
-      if (!scanning) face.style.transform = "rotateX(0deg) rotateY(0deg)";
-    });
-    lock.addEventListener("click", unlock);
 
-    // Tabs
-    tabs.addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-tab]");
-      if (!btn) return;
-      setScreen(btn.dataset.tab);
-    });
-    $$("[data-go]").forEach((el) => {
-      el.addEventListener("click", () => setScreen(el.dataset.go));
-    });
+    async function initLandmarker() {
+      const { FaceLandmarker, FilesetResolver } = await import(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm"
+      );
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+      );
+      landmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "GPU",
+        },
+        runningMode: "VIDEO",
+        numFaces: 1,
+      });
+    }
 
+    async function startCamera() {
+      $("#camStatus").textContent = "Ielādē Face model…";
+      try {
+        if (!landmarker) await initLandmarker();
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+        cam.srcObject = stream;
+        await cam.play();
+
+        // clone stream to mini previews
+        $("#previewLock").srcObject = stream;
+        $("#previewDash").srcObject = stream;
+        $("#previewLock").play().catch(() => {});
+        $("#previewDash").play().catch(() => {});
+
+        $("#permBox").style.display = "none";
+        $("#lockStage").style.display = "grid";
+        $("#unlockWrap").style.display = "block";
+        $("#camStatus").textContent = "Kamera: ON · seko sejai";
+        $("#camStatus").classList.add("on");
+        showToast("Face track live");
+        loop();
+      } catch (err) {
+        console.error(err);
+        $("#camStatus").textContent = "Kamera neizdevās — atļauj piekļuvi";
+        showToast("Camera permission needed");
+      }
+    }
+
+    let lastVideoTime = -1;
+    function loop() {
+      raf = requestAnimationFrame(loop);
+      if (!landmarker || cam.readyState < 2) return;
+      if (cam.currentTime === lastVideoTime) return;
+      lastVideoTime = cam.currentTime;
+      const res = landmarker.detectForVideo(cam, performance.now());
+      if (res.faceLandmarks?.[0]) {
+        const { yaw, pitch, roll } = poseFromLandmarks(res.faceLandmarks[0]);
+        applyPose(yaw, pitch, roll);
+      }
+    }
+
+    $("#startCam").addEventListener("click", startCamera);
+    $("#unlockBtn").addEventListener("click", () => {
+      unlocked = true;
+      $("#tabs").classList.add("show");
+      setScreen("home");
+      showToast("Dashboard · face still live");
+      startLiveChart();
+    });
     $("#lockAgain").addEventListener("click", () => {
       unlocked = false;
-      tabs.classList.remove("show");
-      $$(".screen").forEach((s) => s.classList.remove("active"));
-      lock.classList.add("active");
-      face.style.transform = "";
-      showToast("Locked");
+      $("#tabs").classList.remove("show");
+      setScreen("lock");
+      $("#lockStage").style.display = stream ? "grid" : "none";
+      $("#unlockWrap").style.display = stream ? "block" : "none";
     });
-
+    $("#tabs").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-tab]");
+      if (b) setScreen(b.dataset.tab);
+    });
+    $$("[data-go]").forEach((el) =>
+      el.addEventListener("click", () => setScreen(el.dataset.go))
+    );
     $("#faceToggle").addEventListener("click", (e) => {
       e.currentTarget.classList.toggle("on");
-      showToast(e.currentTarget.classList.contains("on") ? "Face ID ON" : "Face ID OFF");
     });
 
-    // Clock
     function tickClock() {
       const d = new Date();
       $("#clock").textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -813,137 +587,69 @@
     tickClock();
     setInterval(tickClock, 10000);
 
-    // Chart
+    // chart
     const canvas = $("#chart");
     const ctx = canvas.getContext("2d");
     let prices = [];
-    let tf = "15m";
-
-    function resizeChart() {
+    function seed() {
+      prices = [];
+      let p = 21820;
+      for (let i = 0; i < 50; i++) { p += (Math.random() - 0.45) * 14; prices.push(p); }
+    }
+    function resize() {
       const wrap = canvas.parentElement;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(devicePixelRatio || 1, 2);
       canvas.width = wrap.clientWidth * dpr;
       canvas.height = wrap.clientHeight * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawChart();
+      draw();
     }
-
-    function seedPrices() {
-      prices = [];
-      let p = 21820;
-      for (let i = 0; i < 60; i++) {
-        p += (Math.random() - 0.45) * (tf === "15m" ? 12 : tf === "1H" ? 22 : 35);
-        prices.push(p);
-      }
-    }
-
-    function drawChart() {
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+    function draw() {
+      const w = canvas.clientWidth, h = canvas.clientHeight;
       ctx.clearRect(0, 0, w, h);
       if (prices.length < 2) return;
-      const min = Math.min(...prices);
-      const max = Math.max(...prices);
-      const pad = 16;
-      const span = max - min || 1;
-
-      // grid
-      ctx.strokeStyle = "rgba(255,255,255,0.05)";
-      ctx.lineWidth = 1;
-      for (let i = 0; i < 4; i++) {
-        const y = pad + ((h - pad * 2) * i) / 3;
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(w, y);
-        ctx.stroke();
-      }
-
-      // area
-      const path = new Path2D();
-      prices.forEach((p, i) => {
-        const x = (i / (prices.length - 1)) * w;
-        const y = pad + (1 - (p - min) / span) * (h - pad * 2);
-        if (i === 0) path.moveTo(x, y);
-        else path.lineTo(x, y);
-      });
-
+      const min = Math.min(...prices), max = Math.max(...prices), pad = 10, span = max - min || 1;
       ctx.beginPath();
       ctx.moveTo(0, h);
       prices.forEach((p, i) => {
         const x = (i / (prices.length - 1)) * w;
         const y = pad + (1 - (p - min) / span) * (h - pad * 2);
-        if (i === 0) ctx.lineTo(x, y);
-        else ctx.lineTo(x, y);
+        i === 0 ? ctx.lineTo(x, y) : ctx.lineTo(x, y);
       });
-      ctx.lineTo(w, h);
-      ctx.closePath();
-      const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, "rgba(0,255,194,0.28)");
-      grad.addColorStop(1, "rgba(0,255,194,0)");
-      ctx.fillStyle = grad;
-      ctx.fill();
-
-      ctx.strokeStyle = "#00ffc2";
-      ctx.lineWidth = 2;
-      ctx.lineJoin = "round";
-      ctx.stroke(path);
-
-      // trailing SL dashed
-      const sl = prices[prices.length - 1] - 28;
-      const sly = pad + (1 - (sl - min) / span) * (h - pad * 2);
-      ctx.setLineDash([6, 6]);
-      ctx.strokeStyle = "#ffd166";
-      ctx.lineWidth = 1.2;
+      ctx.lineTo(w, h); ctx.closePath();
+      const g = ctx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, "rgba(0,255,194,0.25)"); g.addColorStop(1, "rgba(0,255,194,0)");
+      ctx.fillStyle = g; ctx.fill();
       ctx.beginPath();
-      ctx.moveTo(0, sly);
-      ctx.lineTo(w, sly);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    $$(".tf button").forEach((b) => {
-      b.addEventListener("click", (e) => {
-        e.stopPropagation();
-        $$(".tf button").forEach((x) => x.classList.remove("on"));
-        b.classList.add("on");
-        tf = b.dataset.tf;
-        seedPrices();
-        drawChart();
+      prices.forEach((p, i) => {
+        const x = (i / (prices.length - 1)) * w;
+        const y = pad + (1 - (p - min) / span) * (h - pad * 2);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       });
-    });
-
-    let liveTimer;
-    function startLive() {
-      seedPrices();
-      resizeChart();
-      clearInterval(liveTimer);
-      liveTimer = setInterval(() => {
+      ctx.strokeStyle = "#00ffc2"; ctx.lineWidth = 2; ctx.stroke();
+    }
+    function startLiveChart() {
+      seed(); resize();
+      setInterval(() => {
         if (!unlocked) return;
         const last = prices[prices.length - 1];
-        const next = last + (Math.random() - 0.48) * 10;
-        prices.push(next);
-        if (prices.length > 60) prices.shift();
-        drawChart();
-
-        // animate pnl / trail
-        const base = 126.4 + (next - 21820) * 0.08;
-        $("#floatPnl").textContent = (base >= 0 ? "+" : "") + "€" + base.toFixed(2);
-        $("#floatPnl").className = base >= 0 ? "pnl-up" : "pnl-down";
-        $("#pos1").textContent = $("#floatPnl").textContent;
-        $("#pos1").className = $("#floatPnl").className;
-        $("#trailSl").textContent = (next - 28).toFixed(1);
-        const eq = 8240 + base * 0.3;
-        $("#equity").textContent = "€" + eq.toLocaleString("en-US", { maximumFractionDigits: 0 });
-        $("#pos2").textContent = (-8.4 + (Math.random() - 0.5) * 0.4).toFixed(2).replace(/^-/, "-€").replace(/^([^-])/, "-€$1");
-        // keep GOLD mildly red
-        $("#pos2").textContent = "-€" + (8.2 + Math.random() * 0.6).toFixed(2);
+        prices.push(last + (Math.random() - 0.48) * 10);
+        if (prices.length > 50) prices.shift();
+        draw();
+        const base = 126.4 + (prices.at(-1) - 21820) * 0.08;
+        const t = (base >= 0 ? "+" : "") + "€" + base.toFixed(2);
+        $("#floatPnl").textContent = t;
+        $("#pos1").textContent = t;
+        $("#equity").textContent = "€" + (8240 + base * 0.3).toLocaleString("en-US", { maximumFractionDigits: 0 });
       }, 900);
     }
+    window.addEventListener("resize", resize);
+    seed(); requestAnimationFrame(resize);
 
-    window.addEventListener("resize", resizeChart);
-    seedPrices();
-    // initial size after layout
-    requestAnimationFrame(resizeChart);
+    // Auto-prompt friendly: if secure context, user still clicks (required on iOS)
+    if (!window.isSecureContext && location.hostname !== "localhost") {
+      $("#camStatus").textContent = "Vajag HTTPS kamerai";
+    }
   </script>
 </body>
 </html>
