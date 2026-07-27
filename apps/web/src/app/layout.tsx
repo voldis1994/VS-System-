@@ -1,16 +1,16 @@
 import { Providers } from "@/components/providers";
 import type { Metadata } from "next";
-import { JetBrains_Mono, Outfit, Syne } from "next/font/google";
+import { JetBrains_Mono, Orbitron, Rajdhani } from "next/font/google";
 import "./globals.css";
 
-const display = Syne({
+const display = Orbitron({
   subsets: ["latin"],
   weight: ["500", "600", "700", "800"],
   variable: "--font-display",
   display: "swap",
 });
 
-const body = Outfit({
+const body = Rajdhani({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   variable: "--font-body",

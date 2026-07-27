@@ -48,16 +48,16 @@ export function CommandHero() {
             <img
               src="/vs-system-logo.png"
               alt="VS System"
-              className="h-16 w-16 rounded-xl object-cover ring-1 ring-accent/40 md:h-20 md:w-20"
+              className="h-16 w-16 object-cover ring-1 ring-accent/40 md:h-20 md:w-20"
             />
             <div>
               <div className="flex items-center gap-2">
                 <LiveDot />
-                <span className="text-[11px] uppercase tracking-[0.22em] text-accent-soft">
+                <span className="text-[11px] uppercase tracking-[0.28em] text-accent-soft">
                   Command deck
                 </span>
               </div>
-              <h1 className="font-display mt-1 text-4xl font-extrabold tracking-tight text-white md:text-5xl lg:text-6xl">
+              <h1 className="font-display mt-1 text-4xl font-extrabold tracking-[0.06em] text-white md:text-5xl lg:text-6xl">
                 VS <span className="text-accent">System</span>
               </h1>
               <p className="mt-2 max-w-md text-sm text-white/55 md:text-base">
