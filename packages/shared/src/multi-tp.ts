@@ -9,6 +9,35 @@ export type MultiTpLevelPlan = {
 };
 
 /**
+ * Split total volume into `count` whole-step slices (remainder → earliest levels).
+ * Returns [] when fewer than 2 executable slices are possible.
+ */
+export function splitVolumeIntoSteps(
+  totalVolume: number,
+  count: number,
+  volumeStep = 0.01,
+): number[] {
+  const step = Math.max(volumeStep, 0.00000001);
+  const volume = Number(totalVolume);
+  if (!Number.isFinite(volume) || volume < step * 2) return [];
+
+  const totalSteps = Math.floor(volume / step + 1e-12);
+  if (totalSteps < 2) return [];
+
+  const requested = Math.max(2, Math.min(10, Math.floor(count)));
+  const n = Math.min(requested, totalSteps);
+  const baseSteps = Math.floor(totalSteps / n);
+  let remainder = totalSteps - baseSteps * n;
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const extra = remainder > 0 ? 1 : 0;
+    if (remainder > 0) remainder -= 1;
+    out.push(Number(((baseSteps + extra) * step).toFixed(8)));
+  }
+  return out.filter((v) => v > 0).length >= 2 ? out : [];
+}
+
+/**
  * Split entry lot into N equal take-profit levels (whole broker steps).
  * Prices step evenly from first to final ATR× target.
  *
@@ -26,28 +55,17 @@ export function buildEqualMultiTpPlan(input: {
   volumeStep?: number;
 }): MultiTpLevelPlan[] {
   const step = Math.max(input.volumeStep ?? 0.01, 0.00000001);
+  const rawVolumes = splitVolumeIntoSteps(
+    input.initialVolume,
+    input.count,
+    step,
+  );
+  if (rawVolumes.length < 2) return [];
+
+  const count = rawVolumes.length;
   const volume = Number(input.initialVolume);
-  if (!Number.isFinite(volume) || volume < step * 2) return [];
-
-  const totalSteps = Math.floor(volume / step + 1e-12);
-  if (totalSteps < 2) return [];
-
-  const requested = Math.max(2, Math.min(10, Math.floor(input.count)));
-  const count = Math.min(requested, totalSteps);
-
   const atrDist = Math.max(input.atr * Math.max(input.atrTpMult, 0.1), step);
   const priceStep = atrDist / count;
-
-  // Distribute whole steps as evenly as possible; remainder to earliest levels
-  // so intermediate partials actually fire before the final close.
-  const baseSteps = Math.floor(totalSteps / count);
-  let remainder = totalSteps - baseSteps * count;
-  const rawVolumes: number[] = [];
-  for (let i = 0; i < count; i++) {
-    const extra = remainder > 0 ? 1 : 0;
-    if (remainder > 0) remainder -= 1;
-    rawVolumes.push(Number(((baseSteps + extra) * step).toFixed(8)));
-  }
 
   const levels: MultiTpLevelPlan[] = [];
   for (let i = 0; i < count; i++) {
@@ -67,7 +85,6 @@ export function buildEqualMultiTpPlan(input: {
     });
   }
 
-  // Must have ≥2 executable partial/final levels for true multi-TP
   return levels.length >= 2 ? levels : [];
 }
 
@@ -114,4 +131,13 @@ export function minLotForMultiTp(count: number, volumeStep = 0.01): number {
   const n = Math.max(2, Math.min(10, Math.floor(count) || 2));
   const step = Math.max(volumeStep, 0.00000001);
   return Number((n * step).toFixed(8));
+}
+
+/** Next level still waiting to scale out (FAILED is retried). */
+export function multiTpPendingIndex(
+  levels: Array<{ status: string }>,
+): number {
+  return levels.findIndex(
+    (l) => l.status === "PENDING" || l.status === "FAILED",
+  );
 }

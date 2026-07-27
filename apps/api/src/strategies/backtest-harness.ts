@@ -260,25 +260,48 @@ export function runStrategyBacktest(input: {
           : position.beDone
             ? "be_sl"
             : "sl";
-      } else if (
-        position.takeProfit != null &&
-        hitTp(position.direction, low, high, position.takeProfit)
-      ) {
-        exitPrice = position.takeProfit;
-        exitReason = "tp";
       }
 
-      // Multi TP scale-out before full SL/TP
-      if (position.multiLevels.length > 0) {
-        const pending = position.multiLevels.find((l) => l.status === "PENDING");
+      // Multi TP partials first — never let final native TP swallow the full lot
+      if (!exitPrice && position.multiLevels.length >= 2) {
         const probe = position.direction === "BUY" ? high : low;
-        if (pending && multiTpHit(position.direction, probe, Number(pending.price))) {
-          const isLast =
-            position.multiLevels.filter((l) => l.status === "PENDING").length <= 1;
-          const closeVol = isLast
+        while (position && position.remainingVolume > 0) {
+          const pendingIdx = position.multiLevels.findIndex(
+            (l) => l.status === "PENDING" || l.status === "FAILED",
+          );
+          if (pendingIdx < 0) break;
+          const pending = position.multiLevels[pendingIdx]!;
+          if (!multiTpHit(position.direction, probe, Number(pending.price))) {
+            break;
+          }
+          const laterPending = position.multiLevels
+            .slice(pendingIdx + 1)
+            .some((l) => l.status === "PENDING" || l.status === "FAILED");
+          const isLast = !laterPending;
+          const planned = Number(pending.closeVolume);
+          const step = 0.01;
+          let useVol = isLast
             ? position.remainingVolume
-            : Math.min(Number(pending.closeVolume), position.remainingVolume);
-          const pnl = pnlOf(position.direction, position.entry, Number(pending.price), closeVol);
+            : Math.min(
+                Number.isFinite(planned) && planned > 0
+                  ? planned
+                  : position.remainingVolume,
+                position.remainingVolume,
+              );
+          if (!isLast && position.remainingVolume > step) {
+            useVol = Math.min(useVol, position.remainingVolume - step);
+            useVol = Math.floor(useVol / step + 1e-12) * step;
+          }
+          if (!isLast && useVol < step) {
+            pending.status = "EXECUTED";
+            continue;
+          }
+          const pnl = pnlOf(
+            position.direction,
+            position.entry,
+            Number(pending.price),
+            useVol,
+          );
           equity += pnl;
           peak = Math.max(peak, equity);
           maxDd = Math.max(maxDd, peak - equity);
@@ -288,20 +311,36 @@ export function runStrategyBacktest(input: {
             pnl,
             direction: position.direction,
             time: bar.closeTime ?? bar.openTime ?? new Date(),
-            exitReason: `tp${pending.index}`,
+            exitReason: isLast
+              ? `tp${pending.index}`
+              : `tp${pending.index}_partial`,
             barsHeld: i - position.openedAt,
           });
           pending.status = "EXECUTED";
-          position.remainingVolume = Math.max(0, position.remainingVolume - closeVol);
+          position.remainingVolume = Math.max(
+            0,
+            Number((position.remainingVolume - useVol).toFixed(8)),
+          );
           if (isLast || position.remainingVolume <= 0.00000001) {
             position = null;
-            continue;
+            break;
           }
         }
+        if (!position) continue;
+      } else if (
+        !exitPrice &&
+        position.takeProfit != null &&
+        hitTp(position.direction, low, high, position.takeProfit)
+      ) {
+        exitPrice = position.takeProfit;
+        exitReason = "tp";
       }
 
       if (exitPrice != null) {
-        const vol = position.remainingVolume > 0 ? position.remainingVolume : position.initialVolume;
+        const vol =
+          position.remainingVolume > 0
+            ? position.remainingVolume
+            : position.initialVolume;
         const pnl = pnlOf(position.direction, position.entry, exitPrice, vol);
         equity += pnl;
         peak = Math.max(peak, equity);
@@ -483,8 +522,10 @@ export function runStrategyBacktest(input: {
         atrTpMult,
         volumeStep: 0.01,
       });
-      if (multiLevels.length > 0) {
+      if (multiLevels.length >= 2) {
         openTp = Number(multiLevels[multiLevels.length - 1]!.price);
+      } else {
+        multiLevels = [];
       }
     }
 

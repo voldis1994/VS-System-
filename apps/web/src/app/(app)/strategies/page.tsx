@@ -748,9 +748,24 @@ export default function StrategiesPage() {
                       />
                       <p className="mt-1 text-[11px] text-white/35">
                         Katrs TP aizver daļu lota (nevis visu). Min lot = TP skaits ×
-                        0.01 (piem. 3 TP → ≥0.03). Mazākam lotam sistēma krīt atpakaļ
-                        uz Single TP.
+                        0.01 (piem. 3 TP → ≥0.03). Mazākam lotam → Single TP.
                       </p>
+                      {draft.sizeMode === "LOT" &&
+                      Number(draft.lotSize) > 0 &&
+                      Number(draft.lotSize) + 1e-12 <
+                        Math.max(2, Math.floor(Number(draft.multiTpCount) || 3)) *
+                          0.01 ? (
+                        <p className="mt-1 text-[11px] text-loss">
+                          Lot {draft.lotSize} par mazu šim Multi TP — vajag ≥
+                          {(
+                            Math.max(
+                              2,
+                              Math.floor(Number(draft.multiTpCount) || 3),
+                            ) * 0.01
+                          ).toFixed(2)}
+                          .
+                        </p>
+                      ) : null}
                     </Field>
                   ) : null}
                   <Field label="SL ATR×">

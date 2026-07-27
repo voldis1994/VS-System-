@@ -8,7 +8,7 @@ import {
   PlaceOrderSchema,
   VolumeMode,
 } from "@nexus/domain";
-import { d, newId } from "@nexus/shared";
+import { d, newId, splitVolumeIntoSteps } from "@nexus/shared";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
@@ -308,10 +308,9 @@ export class OrdersService {
       price: input.entryPrice,
       stopLoss: input.stopLoss,
       takeProfit: input.takeProfit,
-      trailingStop: Boolean(input.trailingEnabled),
-      stopDistance: input.trailingEnabled
-        ? input.trailingDistance
-        : undefined,
+      // Never arm broker native trail at fill — autoManage software-trails after activation pips
+      trailingStop: false,
+      stopDistance: undefined,
       comment: input.comment,
     });
 
@@ -389,32 +388,32 @@ export class OrdersService {
           currentPrice: brokerResponse.averageFillPrice,
           stopLoss: input.stopLoss,
           takeProfit: input.takeProfit,
-          takeProfitsJson: input.takeProfits
-            ? (input.takeProfits.map((tp, idx, arr) => {
-                const fill = Number(brokerResponse.filledVolume);
-                const step = 0.01;
-                const totalSteps = Math.floor(fill / step + 1e-12);
-                const count = arr.length;
-                // Whole-step split (same as buildEqualMultiTpPlan) — % alone
-                // rounds 0.03×33.33% → 0 and dumps full lot onto the last TP.
-                const baseSteps = Math.floor(totalSteps / count);
-                let rem = totalSteps - baseSteps * count;
-                const volumes: number[] = [];
-                for (let i = 0; i < count; i++) {
-                  const extra = rem > 0 ? 1 : 0;
-                  if (rem > 0) rem -= 1;
-                  volumes.push((baseSteps + extra) * step);
-                }
-                const closeVolume = volumes[idx] ?? 0;
-                return {
-                  index: idx + 1,
-                  price: tp.price,
-                  closePercent: tp.closePercent,
-                  closeVolume: closeVolume.toFixed(8),
-                  status: "PENDING",
-                };
-              }) as unknown as object)
-            : undefined,
+          takeProfitsJson: (() => {
+            if (!input.takeProfits?.length) return undefined;
+            const fill = Number(brokerResponse.filledVolume);
+            const volumes = splitVolumeIntoSteps(
+              fill,
+              input.takeProfits.length,
+              0.01,
+            );
+            // Cannot fund ≥2 partials — leave null; strategy may rebuild or use Single TP
+            if (volumes.length < 2) return undefined;
+            return volumes.map((closeVolume, idx) => {
+              const src =
+                idx === volumes.length - 1
+                  ? input.takeProfits![input.takeProfits!.length - 1]!
+                  : input.takeProfits![
+                      Math.min(idx, input.takeProfits!.length - 1)
+                    ]!;
+              return {
+                index: idx + 1,
+                price: src.price,
+                closePercent: Number(((closeVolume / fill) * 100).toFixed(4)),
+                closeVolume: closeVolume.toFixed(8),
+                status: "PENDING",
+              };
+            }) as unknown as object;
+          })(),
           status: "OPEN",
           source: input.strategyId ? OrderSource.STRATEGY : OrderSource.MANUAL,
           strategyId: input.strategyId,
@@ -425,33 +424,7 @@ export class OrdersService {
           breakEvenOffset: input.breakEvenOffset,
         },
       });
-      // Fix last multi-TP volume = remainder so % sums to fill
-      if (input.takeProfits && input.takeProfits.length > 0 && position) {
-        const fill = Number(brokerResponse.filledVolume);
-        const levels = (
-          Array.isArray(position.takeProfitsJson)
-            ? position.takeProfitsJson
-            : []
-        ) as Array<{
-          index: number;
-          price: string;
-          closePercent: number;
-          closeVolume: string;
-          status: string;
-        }>;
-        if (levels.length > 0) {
-          let used = 0;
-          for (let i = 0; i < levels.length - 1; i++) {
-            used += Number(levels[i]!.closeVolume);
-          }
-          const last = levels[levels.length - 1]!;
-          last.closeVolume = Math.max(0, fill - used).toFixed(8);
-          position = await this.prisma.position.update({
-            where: { id: position.id },
-            data: { takeProfitsJson: levels as unknown as object },
-          });
-        }
-      }      await this.events.publish({
+      await this.events.publish({
         eventType: DomainEventType.PositionOpened,
         aggregateId: position.id,
         organizationId,
