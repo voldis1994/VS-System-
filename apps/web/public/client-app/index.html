@@ -3,291 +3,157 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <title>VS System — Live Face Dashboard</title>
+  <title>VS System — Real Face Contour</title>
   <style>
     :root {
       --teal: #00ffc2;
-      --teal-dim: rgba(0, 255, 194, 0.14);
       --text: #f4f7f6;
-      --muted: rgba(244, 247, 246, 0.55);
-      --loss: #ff5c7a;
-      --line: rgba(255, 255, 255, 0.08);
+      --muted: rgba(244,247,246,.55);
+      --line: rgba(255,255,255,.08);
       --phone-w: 390px;
       --phone-h: 844px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       min-height: 100%;
-      background:
-        radial-gradient(1200px 600px at 50% -10%, rgba(0, 255, 194, 0.08), transparent 55%),
-        linear-gradient(180deg, #07090c, #020304 70%);
+      background: radial-gradient(1200px 600px at 50% -10%, rgba(0,255,194,.08), transparent 55%), #07090c;
       color: var(--text);
       font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-      -webkit-font-smoothing: antialiased;
     }
-    .stage {
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 24px 16px 40px;
-      gap: 14px;
-    }
-    .hint {
-      max-width: 440px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
-    }
+    .stage { min-height: 100vh; display: grid; place-items: center; padding: 20px 14px 36px; gap: 12px; }
+    .hint { max-width: 460px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.45; }
     .hint strong { color: var(--teal); }
     .phone {
-      width: min(100%, var(--phone-w));
-      height: min(92vh, var(--phone-h));
-      border-radius: 42px;
-      background: #000;
-      border: 1px solid rgba(255,255,255,0.14);
-      box-shadow: 0 40px 100px rgba(0,0,0,0.65), 0 0 80px rgba(0,255,194,0.06);
-      position: relative;
-      overflow: hidden;
+      width: min(100%, var(--phone-w)); height: min(92vh, var(--phone-h));
+      border-radius: 42px; background: #000; border: 1px solid rgba(255,255,255,.14);
+      box-shadow: 0 40px 100px rgba(0,0,0,.65); position: relative; overflow: hidden;
     }
     .notch {
       position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-      width: 120px; height: 34px; background: #000; border-radius: 20px; z-index: 50;
+      width: 120px; height: 34px; background: #000; border-radius: 20px; z-index: 40;
     }
     .status {
-      position: absolute; top: 14px; left: 0; right: 0; z-index: 40;
-      display: flex; justify-content: space-between; padding: 0 28px;
+      position: absolute; top: 14px; left: 0; right: 0; z-index: 35;
+      display: flex; justify-content: space-between; padding: 0 26px;
       font-size: 12px; font-weight: 600; pointer-events: none;
     }
     .screen {
       position: absolute; inset: 0; display: none; flex-direction: column;
-      padding: 62px 18px 92px;
-      background:
-        radial-gradient(600px 280px at 80% 0%, rgba(0,255,194,0.12), transparent 50%),
-        linear-gradient(165deg, #0a0d12 0%, #050608 48%, #020303 100%);
-      overflow: hidden;
+      padding: 58px 16px 88px;
+      background: radial-gradient(700px 320px at 85% -5%, rgba(0,255,194,.14), transparent 50%), #050608;
     }
     .screen.active { display: flex; }
 
-    .brand { font-size: 48px; font-weight: 800; letter-spacing: -0.06em; line-height: 0.85; }
-    .brand span {
-      display: block; font-size: 11px; letter-spacing: 0.42em; margin-top: 6px;
-      color: var(--muted); font-weight: 500;
-    }
+    .brand { font-size: 52px; font-weight: 800; letter-spacing: -.06em; line-height: .85; }
+    .brand span { display: block; font-size: 11px; letter-spacing: .42em; margin-top: 6px; color: var(--muted); }
 
-    /* hidden cam */
-    #cam, #overlay {
-      position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;
+    .top-meta {
+      display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; align-items: flex-start;
+    }
+    .client { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); }
+    .client b { display: block; color: #fff; font-size: 13px; letter-spacing: .04em; margin-top: 3px; }
+    .stats { text-align: right; font-size: 10px; line-height: 1.65; color: var(--muted); }
+    .stats b { color: #fff; }
+
+    .view {
+      position: relative; flex: 1; margin: 14px 0 12px; border-radius: 22px; overflow: hidden;
+      border: 1px solid rgba(0,255,194,.25);
+      background: #000;
+      min-height: 280px;
+    }
+    .view video, .view canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    .view canvas { z-index: 2; }
+    .view video { z-index: 1; filter: brightness(.55) contrast(1.1) saturate(.7); }
+    .corners { position: absolute; inset: 14px; z-index: 3; pointer-events: none; }
+    .c { position: absolute; width: 28px; height: 28px; border: 2px solid var(--teal); }
+    .c.tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+    .c.tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+    .c.bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+    .c.br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+    .streak {
+      position: absolute; left: -20%; top: 40%; width: 140%; height: 2px; z-index: 3; pointer-events: none;
+      background: linear-gradient(90deg, transparent, var(--teal), transparent);
+      transform: rotate(-28deg); opacity: .55; animation: streak 2.6s ease-in-out infinite;
+    }
+    @keyframes streak {
+      0%,100% { opacity: .2; transform: rotate(-28deg) translateY(-40px); }
+      50% { opacity: .9; transform: rotate(-28deg) translateY(40px); }
     }
 
     .perm {
-      margin-top: 18px;
-      padding: 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(0,255,194,0.3);
-      background: rgba(0,255,194,0.06);
-      text-align: center;
-      font-size: 13px;
-      line-height: 1.4;
+      position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
+      background: rgba(0,0,0,.72); padding: 20px; text-align: center;
     }
     .perm button {
-      margin-top: 10px;
-      border: 0;
-      background: var(--teal);
-      color: #031410;
-      font-weight: 800;
-      padding: 12px 18px;
-      border-radius: 999px;
-      cursor: pointer;
-      width: 100%;
+      margin-top: 12px; border: 0; background: var(--teal); color: #031410;
+      font-weight: 800; padding: 12px 18px; border-radius: 999px; cursor: pointer; width: min(100%, 240px);
     }
-    .cam-status {
-      margin-top: 8px;
-      font-size: 11px;
-      color: var(--muted);
-      text-align: center;
-    }
+    .cam-status { font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 8px; }
     .cam-status.on { color: var(--teal); }
 
-    .face-stage {
-      flex: 1; display: grid; place-items: center; position: relative; margin: 6px 0;
-    }
-    .scan-frame {
-      width: min(82%, 270px); aspect-ratio: 1; position: relative;
-      display: grid; place-items: center;
-    }
-    .corner {
-      position: absolute; width: 26px; height: 26px; border: 2px solid var(--teal); opacity: 0.85;
-    }
-    .corner.tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
-    .corner.tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
-    .corner.bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
-    .corner.br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
-    .streak {
-      position: absolute; width: 140%; height: 2px;
-      background: linear-gradient(90deg, transparent, var(--teal), transparent);
-      transform: rotate(-28deg); opacity: 0.5; pointer-events: none;
-      animation: streak 2.8s ease-in-out infinite;
-    }
-    @keyframes streak {
-      0%,100% { opacity: .2; transform: rotate(-28deg) translateY(-28px); }
-      50% { opacity: .85; transform: rotate(-28deg) translateY(28px); }
-    }
-
-    .face-rig {
-      width: 72%; height: 72%;
-      transform-style: preserve-3d;
-      will-change: transform;
-      transition: transform 0.05s linear;
-      filter: drop-shadow(0 0 22px rgba(0,255,194,0.35));
-    }
-    .face-rig svg { width: 100%; height: 100%; display: block; }
-
-    .mini-preview {
-      position: absolute;
-      right: 10px; bottom: 10px;
-      width: 72px; height: 96px;
-      border-radius: 12px;
-      overflow: hidden;
-      border: 1px solid rgba(0,255,194,0.35);
-      background: #000;
-      z-index: 5;
-    }
-    .mini-preview video {
-      width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);
-    }
-
     .unlock-btn {
-      margin: 0 auto; display: inline-flex; align-items: center; gap: 10px;
-      padding: 14px 20px; border-radius: 999px;
-      border: 1px solid rgba(0,255,194,0.35); background: rgba(0,255,194,0.08);
-      color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      width: 100%; padding: 14px; border-radius: 999px; cursor: pointer;
+      border: 1px solid rgba(0,255,194,.35); background: rgba(0,255,194,.08);
+      color: #fff; font-weight: 700;
     }
-    .lock-cta { text-align: center; }
-    .lock-hint { margin-top: 8px; font-size: 11px; color: var(--muted); }
 
-    /* HOME / DASHBOARD with live face */
-    .hello { font-size: 12px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
-    .equity { font-size: 44px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
-    .equity-row {
-      display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 6px 0 12px;
-    }
+    .hello { font-size: 12px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+    .equity { font-size: 42px; font-weight: 800; letter-spacing: -.04em; }
+    .equity-row { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 10px; }
     .pill {
-      font-size: 11px; padding: 6px 10px; border-radius: 999px;
-      background: var(--teal-dim); color: var(--teal);
-      border: 1px solid rgba(0,255,194,0.25); white-space: nowrap;
+      font-size: 11px; padding: 6px 10px; border-radius: 999px; color: var(--teal);
+      background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.25);
     }
-
-    .dash-face {
-      position: relative;
-      height: 210px;
-      border-radius: 22px;
-      border: 1px solid var(--line);
-      background: radial-gradient(circle at 50% 40%, rgba(0,255,194,0.12), transparent 55%),
-                  rgba(255,255,255,0.02);
-      margin-bottom: 12px;
-      overflow: hidden;
-      display: grid;
-      place-items: center;
-    }
-    .dash-face .face-rig { width: 150px; height: 180px; }
-    .dash-label {
-      position: absolute; top: 12px; left: 12px;
-      font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--teal);
-    }
-    .dash-pose {
-      position: absolute; top: 12px; right: 12px;
-      font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
-      text-align: right; line-height: 1.45;
-    }
-    .dash-preview {
-      position: absolute; left: 12px; bottom: 12px;
-      width: 56px; height: 74px; border-radius: 10px; overflow: hidden;
-      border: 1px solid rgba(0,255,194,0.3);
-    }
-    .dash-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-
+    .dash-view { height: 230px; margin-bottom: 10px; }
     .chart-wrap {
-      flex: 1; min-height: 140px; border-radius: 18px; border: 1px solid var(--line);
-      background: rgba(255,255,255,0.02); position: relative; overflow: hidden; margin-bottom: 10px;
+      flex: 1; min-height: 120px; border-radius: 16px; border: 1px solid var(--line);
+      overflow: hidden; margin-bottom: 10px; background: rgba(255,255,255,.02);
     }
-    .chart-wrap canvas { width: 100%; height: 100%; display: block; }
-
+    .chart-wrap canvas { width: 100%; height: 100%; display: block; transform: none !important; }
     .mini-card {
       border: 1px solid var(--line); border-radius: 16px; padding: 12px;
-      background: rgba(255,255,255,0.03);
-      display: flex; justify-content: space-between; align-items: center; cursor: pointer;
+      display: flex; justify-content: space-between; background: rgba(255,255,255,.03); cursor: pointer;
     }
     .pnl-up { color: var(--teal); font-weight: 700; }
-    .pnl-down { color: var(--loss); font-weight: 700; }
     .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
-
     .page-title { font-size: 26px; font-weight: 800; margin-bottom: 12px; }
-    .pos {
-      border: 1px solid var(--line); border-radius: 18px; padding: 14px;
-      background: rgba(255,255,255,0.025); margin-bottom: 10px;
-    }
-    .pos-head { display: flex; justify-content: space-between; margin-bottom: 8px; }
-    .badges { display: flex; flex-wrap: wrap; gap: 6px; }
-    .badge {
-      font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase;
-      padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted);
-    }
-    .badge.hot { color: var(--teal); border-color: rgba(0,255,194,0.3); background: var(--teal-dim); }
-
+    .pos { border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 10px; }
+    .pos-head { display: flex; justify-content: space-between; }
     .mono-ak {
-      font-size: 88px; font-weight: 800; letter-spacing: -0.08em; line-height: 0.8;
-      background: linear-gradient(180deg, #fff 20%, rgba(0,255,194,0.55));
-      -webkit-background-clip: text; background-clip: text; color: transparent;
-      margin: 8px 0 16px;
+      font-size: 84px; font-weight: 800; letter-spacing: -.08em;
+      background: linear-gradient(180deg,#fff,rgba(0,255,194,.55));
+      -webkit-background-clip: text; background-clip: text; color: transparent; margin: 8px 0 14px;
     }
-    .row {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 13px 0; border-bottom: 1px solid var(--line); font-size: 14px;
-    }
+    .row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
     .row span { color: var(--muted); }
-    .toggle {
-      width: 48px; height: 28px; border-radius: 999px; background: rgba(255,255,255,0.12);
-      position: relative; cursor: pointer; border: 0;
-    }
-    .toggle.on { background: var(--teal); }
-    .toggle i {
-      position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
-      border-radius: 50%; background: #fff; transition: transform .2s;
-    }
-    .toggle.on i { transform: translateX(20px); }
     .lock-again {
-      margin-top: 20px; width: 100%; border: 1px solid rgba(0,255,194,0.3);
-      background: transparent; color: var(--teal); border-radius: 14px; padding: 14px;
-      font-weight: 700; cursor: pointer;
+      margin-top: 18px; width: 100%; border: 1px solid rgba(0,255,194,.3); background: transparent;
+      color: var(--teal); border-radius: 14px; padding: 14px; font-weight: 700; cursor: pointer;
     }
-
     .tabs {
-      position: absolute; left: 14px; right: 14px; bottom: 18px; height: 64px;
-      border-radius: 22px; background: rgba(10,12,16,0.9);
-      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(16px);
-      display: none; grid-template-columns: repeat(4, 1fr); z-index: 30;
+      position: absolute; left: 14px; right: 14px; bottom: 18px; height: 62px; border-radius: 22px;
+      background: rgba(10,12,16,.92); border: 1px solid rgba(255,255,255,.1);
+      display: none; grid-template-columns: repeat(4,1fr); z-index: 30;
     }
     .tabs.show { display: grid; }
     .tabs button {
       border: 0; background: transparent; color: var(--muted); font-size: 10px;
-      letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer;
-      display: grid; place-items: center; gap: 4px; padding-top: 8px;
+      letter-spacing: .04em; text-transform: uppercase; cursor: pointer;
     }
     .tabs button.on { color: var(--teal); }
-
     .toast {
-      position: absolute; left: 50%; top: 70px; transform: translateX(-50%) translateY(-10px);
-      background: rgba(0,255,194,0.12); border: 1px solid rgba(0,255,194,0.35);
-      color: var(--teal); padding: 10px 14px; border-radius: 12px; font-size: 12px;
-      font-weight: 600; opacity: 0; transition: .25s; z-index: 60; pointer-events: none;
-      white-space: nowrap;
+      position: absolute; left: 50%; top: 68px; transform: translateX(-50%) translateY(-8px);
+      background: rgba(0,255,194,.12); border: 1px solid rgba(0,255,194,.35); color: var(--teal);
+      padding: 10px 14px; border-radius: 12px; font-size: 12px; font-weight: 600;
+      opacity: 0; transition: .25s; z-index: 60; pointer-events: none; white-space: nowrap;
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-
     @media (max-width: 480px) {
-      .stage { padding: 0; }
-      .hint { display: none; }
+      .stage { padding: 0; } .hint { display: none; }
       .phone { width: 100%; height: 100vh; height: 100dvh; border-radius: 0; border: 0; box-shadow: none; }
       .notch { display: none; }
     }
@@ -296,59 +162,61 @@
 <body>
   <div class="stage">
     <p class="hint">
-      <strong>Live Face Tracking</strong> — atļauj kameru, tad pagriez galvu.<br />
-      Wireframe Dashboardā kustas līdzi Tavai sejai (nevis pelei).
+      <strong>Īstā sejas kontūra</strong> — MediaPipe zīmē wireframe uz Tavas sejas no kameras.<br />
+      Atļauj kameru, tad kustini galvu.
     </p>
 
     <div class="phone">
       <div class="notch"></div>
-      <div class="status"><span id="clock">9:41</span><span>5G · CAM</span></div>
+      <div class="status"><span id="clock">9:41</span><span>FACE MESH</span></div>
       <div class="toast" id="toast">…</div>
 
-      <video id="cam" playsinline autoplay muted></video>
-      <canvas id="overlay"></canvas>
-
-      <!-- LOCK -->
       <section class="screen active" id="lock">
         <div class="brand">VS<span>SYSTEM</span></div>
-        <div class="cam-status" id="camStatus">Kamera: gaida atļauju…</div>
-
-        <div class="perm" id="permBox">
-          Lai seja kustās līdzi galvai, vajag kameru.<br />
-          <button id="startCam">Ieslēgt kameru + Face track</button>
+        <div class="top-meta">
+          <div class="client">Client<b>ANNA K · PRIVATE</b></div>
+          <div class="stats">
+            EQUITY <b>+24.18%</b><br />
+            TRADES <b>37</b><br />
+            STATUS <b style="color:var(--teal)">SECURE</b>
+          </div>
         </div>
+        <div class="cam-status" id="camStatus">Gaida kameru…</div>
 
-        <div class="face-stage" id="lockStage" style="display:none">
-          <div class="scan-frame">
-            <div class="corner tl"></div><div class="corner tr"></div>
-            <div class="corner bl"></div><div class="corner br"></div>
-            <div class="streak"></div>
-            <div class="face-rig" id="faceLock"></div>
-            <div class="mini-preview"><video id="previewLock" playsinline autoplay muted></video></div>
+        <div class="view" id="lockView">
+          <video id="camLock" playsinline autoplay muted></video>
+          <canvas id="meshLock"></canvas>
+          <div class="corners">
+            <div class="c tl"></div><div class="c tr"></div>
+            <div class="c bl"></div><div class="c br"></div>
+          </div>
+          <div class="streak"></div>
+          <div class="perm" id="permBox">
+            <div>
+              Ieslēdz kameru, lai redzētu<br /><strong style="color:var(--teal)">īsto sejas kontūru</strong>
+              <br /><button id="startCam">Start Face Mesh</button>
+            </div>
           </div>
         </div>
 
-        <div class="lock-cta" id="unlockWrap" style="display:none">
-          <button class="unlock-btn" id="unlockBtn">Face ID · Enter Dashboard</button>
-          <div class="lock-hint">Pagriez galvu — mesh seko. Tad spied Enter.</div>
-        </div>
+        <button class="unlock-btn" id="unlockBtn" style="display:none">Face ID or Passcode · Enter</button>
       </section>
 
-      <!-- HOME / DASHBOARD -->
       <section class="screen" id="home">
-        <div class="hello">Labdien, Anna · Private</div>
+        <div class="hello">Labdien, Anna · live face</div>
         <div class="equity-row">
           <div class="equity" id="equity">€8,240</div>
-          <div class="pill">LIVE · FACE</div>
+          <div class="pill">MESH · ON</div>
         </div>
-
-        <div class="dash-face">
-          <div class="dash-label">Face lock · live</div>
-          <div class="dash-pose" id="poseReadout">yaw —<br/>pitch —</div>
-          <div class="face-rig" id="faceDash"></div>
-          <div class="dash-preview"><video id="previewDash" playsinline autoplay muted></video></div>
+        <div class="view dash-view" id="dashView">
+          <video id="camDash" playsinline autoplay muted></video>
+          <canvas id="meshDash"></canvas>
+          <div class="corners">
+            <div class="c tl"></div><div class="c tr"></div>
+            <div class="c bl"></div><div class="c br"></div>
+          </div>
+          <div class="streak"></div>
         </div>
-
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
         <div class="mini-card" data-go="positions">
           <div>
@@ -366,18 +234,12 @@
             <div><b>US100</b><div class="meta">BUY · 0.03</div></div>
             <div class="pnl-up" id="pos1">+€126.40</div>
           </div>
-          <div class="badges">
-            <span class="badge hot">Trail ON</span>
-            <span class="badge hot">TP1 ✓</span>
-            <span class="badge">TP2</span>
-          </div>
         </div>
         <div class="pos">
           <div class="pos-head">
             <div><b>GOLD</b><div class="meta">SELL · 0.02</div></div>
-            <div class="pnl-down">-€8.40</div>
+            <div style="color:#ff5c7a;font-weight:700">-€8.40</div>
           </div>
-          <div class="badges"><span class="badge hot">BE</span></div>
         </div>
       </section>
 
@@ -385,13 +247,9 @@
         <div class="hello">Private client</div>
         <div class="mono-ak">AK</div>
         <div class="row"><span>Name</span><b>Anna K.</b></div>
+        <div class="row"><span>Face mesh</span><b style="color:var(--teal)">REAL CONTOUR</b></div>
         <div class="row"><span>Strategy</span><b>SCALPING · US100</b></div>
-        <div class="row"><span>Face track</span><b style="color:var(--teal)">LIVE</b></div>
-        <div class="row">
-          <span>Face ID</span>
-          <button class="toggle on" id="faceToggle"><i></i></button>
-        </div>
-        <button class="lock-again" id="lockAgain">Lock screen</button>
+        <button class="lock-again" id="lockAgain">Lock</button>
       </section>
 
       <nav class="tabs" id="tabs">
@@ -404,92 +262,127 @@
   </div>
 
   <script type="module">
-    const FACE_SVG = `
-      <svg viewBox="0 0 200 240" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-            <stop stop-color="#00ffc2" stop-opacity="0.95"/>
-            <stop offset="1" stop-color="#4de8ff" stop-opacity="0.55"/>
-          </linearGradient>
-        </defs>
-        <ellipse cx="100" cy="118" rx="62" ry="78" stroke="url(#g)" stroke-width="1.2"/>
-        <ellipse cx="100" cy="118" rx="48" ry="62" stroke="#00ffc2" stroke-width="0.7" opacity="0.45"/>
-        <path d="M55 95 C70 70, 130 70, 145 95" stroke="#00ffc2" stroke-width="0.8" opacity="0.7"/>
-        <path d="M60 150 C80 175, 120 175, 140 150" stroke="#00ffc2" stroke-width="0.8" opacity="0.55"/>
-        <path d="M100 78 V155" stroke="#00ffc2" stroke-width="0.5" opacity="0.35"/>
-        <ellipse cx="78" cy="110" rx="10" ry="7" stroke="#00ffc2" stroke-width="1"/>
-        <ellipse cx="122" cy="110" rx="10" ry="7" stroke="#00ffc2" stroke-width="1"/>
-        <circle cx="78" cy="110" r="2.2" fill="#00ffc2"/>
-        <circle cx="122" cy="110" r="2.2" fill="#00ffc2"/>
-        <path d="M92 138 C100 146, 108 146, 116 138" stroke="#00ffc2" stroke-width="1.1"/>
-        <path d="M100 118 L100 136" stroke="#00ffc2" stroke-width="0.8" opacity="0.7"/>
-        <path d="M55 118 C70 100, 130 100, 145 118" stroke="#00ffc2" stroke-width="0.4" opacity="0.35"/>
-        <path d="M58 135 C75 155, 125 155, 142 135" stroke="#00ffc2" stroke-width="0.4" opacity="0.3"/>
-      </svg>`;
-
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
-    $("#faceLock").innerHTML = FACE_SVG;
-    $("#faceDash").innerHTML = FACE_SVG;
 
-    const cam = $("#cam");
-    const toast = $("#toast");
+    // Face oval + feature contours (MediaPipe indices) — real face outline like the mockup
+    const OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+    const LIP_OUT = [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185];
+    const LIP_IN = [78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191];
+    const LEFT_EYE = [33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246];
+    const RIGHT_EYE = [263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466];
+    const LEFT_BROW = [70,63,105,66,107,55,65,52,53,46];
+    const RIGHT_BROW = [300,293,334,296,336,285,295,282,283,276];
+    const NOSE = [168,6,197,195,5,4,1,19,94,2,164,0,11,12,13,14,15,16,17,18,200,199,175];
+    // Tessellation-ish cheek/mesh lines for “wireframe face” look
+    const MESH_LINES = [
+      [234,93,132,58,172,136,150,149,176,148,152],
+      [454,323,361,288,397,365,379,378,400,377,152],
+      [127,162,21,54,103,67,109,10],
+      [356,389,251,284,332,297,338,10],
+      [33,133,362,263],
+      [61,291],
+      [1,4,5,195,197,6,168,8,9,151,10],
+      [234,127,162,21,54,103,67,109,10,338,297,332,284,251,389,356,454],
+    ];
+
     let landmarker = null;
     let stream = null;
     let unlocked = false;
-    let raf = 0;
-    let smooth = { yaw: 0, pitch: 0, roll: 0 };
+    let lastVideoTime = -1;
+    const camLock = $("#camLock");
+    const camDash = $("#camDash");
+    const meshLock = $("#meshLock");
+    const meshDash = $("#meshDash");
+    const ctxLock = meshLock.getContext("2d");
+    const ctxDash = meshDash.getContext("2d");
 
-    function showToast(msg) {
-      toast.textContent = msg;
-      toast.classList.add("show");
-      setTimeout(() => toast.classList.remove("show"), 1600);
+    function showToast(m) {
+      const t = $("#toast");
+      t.textContent = m; t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), 1500);
     }
-
     function setScreen(id) {
       $$(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
       $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
+      resizeMeshes();
     }
 
-    function applyPose(yaw, pitch, roll) {
-      // smooth
-      const a = 0.35;
-      smooth.yaw += (yaw - smooth.yaw) * a;
-      smooth.pitch += (pitch - smooth.pitch) * a;
-      smooth.roll += (roll - smooth.roll) * a;
-
-      const ry = Math.max(-38, Math.min(38, smooth.yaw));
-      const rx = Math.max(-28, Math.min(28, smooth.pitch));
-      const rz = Math.max(-18, Math.min(18, smooth.roll));
-      const t = `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg)`;
-      $("#faceLock").style.transform = t;
-      $("#faceDash").style.transform = t;
-      $("#poseReadout").innerHTML =
-        `yaw ${ry.toFixed(0)}°<br/>pitch ${rx.toFixed(0)}°`;
+    function fitCanvas(video, canvas) {
+      const w = video.clientWidth || video.videoWidth;
+      const h = video.clientHeight || video.videoHeight;
+      if (!w || !h) return;
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    // Estimate head pose from MediaPipe face landmarks (no matrix needed)
-    function poseFromLandmarks(lm) {
-      // key indices: nose 1, left eye outer 33, right eye outer 263, chin 152, forehead 10
-      const nose = lm[1];
-      const left = lm[33];
-      const right = lm[263];
-      const chin = lm[152];
-      const brow = lm[10];
+    function resizeMeshes() {
+      fitCanvas(camLock, meshLock);
+      fitCanvas(camDash, meshDash);
+    }
 
-      const midX = (left.x + right.x) / 2;
-      const eyeDist = Math.hypot(right.x - left.x, right.y - left.y) || 0.01;
+    function drawPath(ctx, lm, idx, w, h, close = true) {
+      if (!idx.length) return;
+      ctx.beginPath();
+      idx.forEach((i, n) => {
+        const p = lm[i];
+        const x = p.x * w;
+        const y = p.y * h;
+        n ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      if (close) ctx.closePath();
+      ctx.stroke();
+    }
 
-      // yaw: nose offset from eye midline (mirrored cam → flip)
-      const yaw = ((midX - nose.x) / eyeDist) * 55;
-      // pitch: nose vs brow/chin vertical
-      const faceH = Math.hypot(chin.x - brow.x, chin.y - brow.y) || 0.01;
-      const midY = (brow.y + chin.y) / 2;
-      const pitch = ((nose.y - midY) / faceH) * -70;
-      // roll: eye line angle
-      const roll = Math.atan2(right.y - left.y, right.x - left.x) * (180 / Math.PI);
+    function drawMesh(ctx, lm, w, h) {
+      ctx.clearRect(0, 0, w, h);
+      if (!lm) return;
 
-      return { yaw, pitch, roll };
+      // soft glow underlay
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,255,194,0.25)";
+      ctx.lineWidth = 3.5;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      drawPath(ctx, lm, OVAL, w, h, true);
+
+      // main teal contour
+      ctx.strokeStyle = "#00ffc2";
+      ctx.lineWidth = 1.35;
+      ctx.shadowColor = "rgba(0,255,194,0.75)";
+      ctx.shadowBlur = 10;
+      drawPath(ctx, lm, OVAL, w, h, true);
+
+      ctx.lineWidth = 1.1;
+      ctx.shadowBlur = 6;
+      drawPath(ctx, lm, LEFT_EYE, w, h, true);
+      drawPath(ctx, lm, RIGHT_EYE, w, h, true);
+      drawPath(ctx, lm, LEFT_BROW, w, h, false);
+      drawPath(ctx, lm, RIGHT_BROW, w, h, false);
+      drawPath(ctx, lm, LIP_OUT, w, h, true);
+      ctx.lineWidth = 0.8;
+      drawPath(ctx, lm, LIP_IN, w, h, true);
+
+      // wireframe density like mockup
+      ctx.strokeStyle = "rgba(0,255,194,0.45)";
+      ctx.lineWidth = 0.7;
+      ctx.shadowBlur = 0;
+      for (const line of MESH_LINES) drawPath(ctx, lm, line, w, h, false);
+
+      // landmark dots on key points (subtle)
+      ctx.fillStyle = "#00ffc2";
+      for (const i of [1, 33, 263, 61, 291, 10, 152]) {
+        const p = lm[i];
+        ctx.beginPath();
+        ctx.arc(p.x * w, p.y * h, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
 
     async function initLandmarker() {
@@ -511,47 +404,44 @@
     }
 
     async function startCamera() {
-      $("#camStatus").textContent = "Ielādē Face model…";
+      $("#camStatus").textContent = "Ielādē face model…";
       try {
         if (!landmarker) await initLandmarker();
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 960 } },
           audio: false,
         });
-        cam.srcObject = stream;
-        await cam.play();
-
-        // clone stream to mini previews
-        $("#previewLock").srcObject = stream;
-        $("#previewDash").srcObject = stream;
-        $("#previewLock").play().catch(() => {});
-        $("#previewDash").play().catch(() => {});
-
+        camLock.srcObject = stream;
+        camDash.srcObject = stream;
+        await camLock.play();
+        await camDash.play().catch(() => {});
         $("#permBox").style.display = "none";
-        $("#lockStage").style.display = "grid";
-        $("#unlockWrap").style.display = "block";
-        $("#camStatus").textContent = "Kamera: ON · seko sejai";
+        $("#unlockBtn").style.display = "flex";
+        $("#camStatus").textContent = "Live · īstā sejas kontūra";
         $("#camStatus").classList.add("on");
-        showToast("Face track live");
+        showToast("Face contour ON");
+        resizeMeshes();
         loop();
-      } catch (err) {
-        console.error(err);
-        $("#camStatus").textContent = "Kamera neizdevās — atļauj piekļuvi";
+      } catch (e) {
+        console.error(e);
+        $("#camStatus").textContent = "Atļauj kameru browserī";
         showToast("Camera permission needed");
       }
     }
 
-    let lastVideoTime = -1;
     function loop() {
-      raf = requestAnimationFrame(loop);
-      if (!landmarker || cam.readyState < 2) return;
-      if (cam.currentTime === lastVideoTime) return;
-      lastVideoTime = cam.currentTime;
-      const res = landmarker.detectForVideo(cam, performance.now());
-      if (res.faceLandmarks?.[0]) {
-        const { yaw, pitch, roll } = poseFromLandmarks(res.faceLandmarks[0]);
-        applyPose(yaw, pitch, roll);
-      }
+      requestAnimationFrame(loop);
+      if (!landmarker || camLock.readyState < 2) return;
+      if (camLock.currentTime === lastVideoTime) return;
+      lastVideoTime = camLock.currentTime;
+
+      const res = landmarker.detectForVideo(camLock, performance.now());
+      const lm = res.faceLandmarks?.[0] || null;
+
+      const wL = camLock.clientWidth, hL = camLock.clientHeight;
+      const wD = camDash.clientWidth, hD = camDash.clientHeight;
+      if (wL && hL) drawMesh(ctxLock, lm, wL, hL);
+      if (unlocked && wD && hD) drawMesh(ctxDash, lm, wD, hD);
     }
 
     $("#startCam").addEventListener("click", startCamera);
@@ -559,97 +449,81 @@
       unlocked = true;
       $("#tabs").classList.add("show");
       setScreen("home");
-      showToast("Dashboard · face still live");
-      startLiveChart();
+      showToast("Dashboard · face mesh live");
+      startChart();
     });
     $("#lockAgain").addEventListener("click", () => {
       unlocked = false;
       $("#tabs").classList.remove("show");
       setScreen("lock");
-      $("#lockStage").style.display = stream ? "grid" : "none";
-      $("#unlockWrap").style.display = stream ? "block" : "none";
     });
     $("#tabs").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-tab]");
       if (b) setScreen(b.dataset.tab);
     });
-    $$("[data-go]").forEach((el) =>
-      el.addEventListener("click", () => setScreen(el.dataset.go))
-    );
-    $("#faceToggle").addEventListener("click", (e) => {
-      e.currentTarget.classList.toggle("on");
-    });
+    $$("[data-go]").forEach((el) => el.addEventListener("click", () => setScreen(el.dataset.go)));
+    window.addEventListener("resize", resizeMeshes);
 
-    function tickClock() {
-      const d = new Date();
-      $("#clock").textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    }
-    tickClock();
-    setInterval(tickClock, 10000);
+    // clock + chart
+    const tick = () => {
+      $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    };
+    tick(); setInterval(tick, 10000);
 
-    // chart
-    const canvas = $("#chart");
-    const ctx = canvas.getContext("2d");
+    const chart = $("#chart");
+    const cctx = chart.getContext("2d");
     let prices = [];
     function seed() {
-      prices = [];
-      let p = 21820;
-      for (let i = 0; i < 50; i++) { p += (Math.random() - 0.45) * 14; prices.push(p); }
+      prices = []; let p = 21820;
+      for (let i = 0; i < 50; i++) { p += (Math.random() - .45) * 12; prices.push(p); }
     }
-    function resize() {
-      const wrap = canvas.parentElement;
+    function resizeChart() {
+      const wrap = chart.parentElement;
       const dpr = Math.min(devicePixelRatio || 1, 2);
-      canvas.width = wrap.clientWidth * dpr;
-      canvas.height = wrap.clientHeight * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      draw();
+      chart.width = wrap.clientWidth * dpr;
+      chart.height = wrap.clientHeight * dpr;
+      cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawChart();
     }
-    function draw() {
-      const w = canvas.clientWidth, h = canvas.clientHeight;
-      ctx.clearRect(0, 0, w, h);
+    function drawChart() {
+      const w = chart.clientWidth, h = chart.clientHeight;
+      cctx.clearRect(0, 0, w, h);
       if (prices.length < 2) return;
-      const min = Math.min(...prices), max = Math.max(...prices), pad = 10, span = max - min || 1;
-      ctx.beginPath();
-      ctx.moveTo(0, h);
+      const min = Math.min(...prices), max = Math.max(...prices), pad = 8, span = max - min || 1;
+      cctx.beginPath(); cctx.moveTo(0, h);
       prices.forEach((p, i) => {
         const x = (i / (prices.length - 1)) * w;
         const y = pad + (1 - (p - min) / span) * (h - pad * 2);
-        i === 0 ? ctx.lineTo(x, y) : ctx.lineTo(x, y);
+        cctx.lineTo(x, y);
       });
-      ctx.lineTo(w, h); ctx.closePath();
-      const g = ctx.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, "rgba(0,255,194,0.25)"); g.addColorStop(1, "rgba(0,255,194,0)");
-      ctx.fillStyle = g; ctx.fill();
-      ctx.beginPath();
+      cctx.lineTo(w, h); cctx.closePath();
+      const g = cctx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, "rgba(0,255,194,.25)"); g.addColorStop(1, "rgba(0,255,194,0)");
+      cctx.fillStyle = g; cctx.fill();
+      cctx.beginPath();
       prices.forEach((p, i) => {
         const x = (i / (prices.length - 1)) * w;
         const y = pad + (1 - (p - min) / span) * (h - pad * 2);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        i ? cctx.lineTo(x, y) : cctx.moveTo(x, y);
       });
-      ctx.strokeStyle = "#00ffc2"; ctx.lineWidth = 2; ctx.stroke();
+      cctx.strokeStyle = "#00ffc2"; cctx.lineWidth = 2; cctx.stroke();
     }
-    function startLiveChart() {
-      seed(); resize();
+    function startChart() {
+      seed(); resizeChart();
       setInterval(() => {
         if (!unlocked) return;
-        const last = prices[prices.length - 1];
-        prices.push(last + (Math.random() - 0.48) * 10);
+        prices.push(prices.at(-1) + (Math.random() - .48) * 9);
         if (prices.length > 50) prices.shift();
-        draw();
-        const base = 126.4 + (prices.at(-1) - 21820) * 0.08;
+        drawChart();
+        const base = 126.4 + (prices.at(-1) - 21820) * .08;
         const t = (base >= 0 ? "+" : "") + "€" + base.toFixed(2);
         $("#floatPnl").textContent = t;
         $("#pos1").textContent = t;
-        $("#equity").textContent = "€" + (8240 + base * 0.3).toLocaleString("en-US", { maximumFractionDigits: 0 });
+        $("#equity").textContent = "€" + (8240 + base * .3).toLocaleString("en-US", { maximumFractionDigits: 0 });
       }, 900);
     }
-    window.addEventListener("resize", resize);
-    seed(); requestAnimationFrame(resize);
-
-    // Auto-prompt friendly: if secure context, user still clicks (required on iOS)
-    if (!window.isSecureContext && location.hostname !== "localhost") {
-      $("#camStatus").textContent = "Vajag HTTPS kamerai";
-    }
+    window.addEventListener("resize", resizeChart);
+    seed(); requestAnimationFrame(resizeChart);
   </script>
 </body>
 </html>
