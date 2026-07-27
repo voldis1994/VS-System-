@@ -134,6 +134,39 @@ const EXIT_PRESETS: Record<
   },
 };
 
+/** Prefer liquid CFDs — never default a new bot to first numeric share epic (e.g. 0001). */
+const PREFERRED_DESK_EPICS = [
+  "GOLD",
+  "US100",
+  "EURUSD",
+  "GBPUSD",
+  "US500",
+  "US30",
+  "BITCOIN",
+  "SILVER",
+  "USDJPY",
+  "GERMANY40",
+] as const;
+
+function pickPreferredEpic(markets: CapitalMarket[]): string {
+  if (!markets.length) return "GOLD";
+  for (const pref of PREFERRED_DESK_EPICS) {
+    const hit = markets.find((m) => m.epic.toUpperCase() === pref);
+    if (hit) return hit.epic;
+  }
+  const named = markets.find((m) => !/^\d+$/.test(m.epic));
+  return named?.epic ?? markets[0]!.epic;
+}
+
+function looksLikeShareEpic(epic: string): boolean {
+  return /^\d{3,5}$/.test(String(epic || "").trim());
+}
+
+function marketOptionLabel(m: CapitalMarket): string {
+  if (m.label?.includes("epic ")) return m.label;
+  return `${m.name} · epic ${m.epic}${m.code ? ` · #${m.code}` : ""}`;
+}
+
 function defaultDraft(epic = ""): AccountDraft {
   return {
     mode: StrategyMode.SCALPING,
@@ -323,27 +356,28 @@ export default function StrategiesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  const preferredEpic = useMemo(() => pickPreferredEpic(markets), [markets]);
+
   // Hydrate per-account drafts from existing strategies / defaults
   useEffect(() => {
-    const defaultEpic = markets[0]?.epic ?? "";
     setDrafts((prev) => {
       const next = { ...prev };
       for (const acc of allAccounts) {
         if (next[acc.id]) continue;
         const bound = strategyForAccount(strategies, acc.id);
         next[acc.id] = bound
-          ? draftFromStrategy(bound, defaultEpic)
-          : defaultDraft(defaultEpic);
+          ? draftFromStrategy(bound, preferredEpic)
+          : defaultDraft(preferredEpic);
       }
       return next;
     });
-  }, [allAccounts, strategies, markets]);
+  }, [allAccounts, strategies, preferredEpic]);
 
   function patchDraft(accountId: string, patch: Partial<AccountDraft>) {
     setDrafts((prev) => ({
       ...prev,
       [accountId]: {
-        ...(prev[accountId] ?? defaultDraft(markets[0]?.epic ?? "")),
+        ...(prev[accountId] ?? defaultDraft(preferredEpic)),
         ...patch,
       },
     }));
@@ -378,11 +412,21 @@ export default function StrategiesPage() {
     account: TradingAccount,
     action: "start" | "stop" | "save",
   ) {
-    const draft = drafts[account.id] ?? defaultDraft(markets[0]?.epic ?? "");
-    const epic = draft.marketEpic || markets[0]?.epic;
+    const draft = drafts[account.id] ?? defaultDraft(preferredEpic);
+    const epic = draft.marketEpic || preferredEpic;
     if (action !== "stop" && !epic) {
       toast.error("Vispirms Sync Capital markets");
       return;
+    }
+    if (
+      (action === "start" || action === "save") &&
+      epic &&
+      looksLikeShareEpic(epic)
+    ) {
+      toast.message(
+        `${account.name}: epic «${epic}» izskatās pēc akciju koda (nevis US100/GOLD). OK, ja gribi tieši to — citādi izvēlies citu tirgu.`,
+        { duration: 9000 },
+      );
     }
 
     setBusyAccountId(account.id);
@@ -415,7 +459,7 @@ export default function StrategiesPage() {
             ? `${draft.lotSize} lot`
             : `risk ${draft.riskPercent}%`;
         toast.success(
-          `${account.name}: ${draft.mode} · ${size} · exit ${draft.exitVersion} (${exits || "SL"}) ON`,
+          `${account.name}: ${draft.mode} · epic ${epic} · ${size} · exit ${draft.exitVersion} (${exits || "SL"}) ON`,
           { duration: 7000 },
         );
       } else if (action === "stop") {
@@ -442,9 +486,10 @@ export default function StrategiesPage() {
     <div className="space-y-4">
       <Panel title="Per-account auto trade">
         <p className="mb-3 text-sm text-white/55">
-          Katram kontam <strong className="text-white">sava stratēģija</strong> un{" "}
-          <strong className="text-white">sava exit versija</strong> (TP / BE / Trail).
-          Konti strādā neatkarīgi — vari palaist vairākus vienlaikus.
+          Katram kontam <strong className="text-white">savs bots</strong> — savs{" "}
+          <strong className="text-white">epic</strong>, režīms, lots un exit (TP / BE / Trail).
+          BOSS un Guntis var darboties <strong className="text-white">vienlaikus ar dažādiem</strong>{" "}
+          iestatījumiem; viens otru nebloķē.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" loading={syncing} onClick={() => void syncMarkets()}>
@@ -480,7 +525,7 @@ export default function StrategiesPage() {
         </Panel>
       ) : (
         allAccounts.map((account) => {
-          const draft = drafts[account.id] ?? defaultDraft(markets[0]?.epic ?? "");
+          const draft = drafts[account.id] ?? defaultDraft(preferredEpic);
           const bound = strategyForAccount(strategies, account.id);
           const running = bound?.status === "RUNNING";
           const busy = busyAccountId === account.id;
@@ -491,12 +536,17 @@ export default function StrategiesPage() {
               : markets.length > 0
                 ? markets
                 : [];
+          const activeEpic = draft.marketEpic || preferredEpic;
+          const shareWarning = looksLikeShareEpic(activeEpic);
 
           return (
             <Panel
               key={account.id}
               title={`${account.name} · ${account.provider} · ${account.accountType}`}
             >
+              <p className="mb-3 text-[11px] text-white/40">
+                Neatkarīgs bots — izmaiņas šeit neskār citus kontus.
+              </p>
               {!isConnected ? (
                 <div className="mb-3 rounded-md border border-loss/40 bg-loss/10 px-3 py-2 text-xs text-white/80">
                   Konts nav CONNECTED ({account.connectionStatus}). Savieno{" "}
@@ -506,10 +556,20 @@ export default function StrategiesPage() {
                   lapā, tad START.
                 </div>
               ) : null}
+              {shareWarning ? (
+                <div className="mb-3 rounded-md border border-accent/35 bg-accent/10 px-3 py-2 text-xs text-white/80">
+                  Izvēlētais epic <span className="font-mono text-white">{activeEpic}</span> ir
+                  skaitļu akciju kods. Ja gribēji indeksu/FX (US100, GOLD…), maini Tirgus —
+                  saraksta #0001 nav tas pats, kas epic.
+                </div>
+              ) : null}
               <div className="mb-3 flex flex-wrap items-center gap-2">
                 <Badge tone={running ? "profit" : "neutral"}>
                   {running ? "RUNNING" : bound ? bound.status : "IDLE"}
                 </Badge>
+                {activeEpic ? (
+                  <Badge tone={shareWarning ? "warn" : "accent"}>epic {activeEpic}</Badge>
+                ) : null}
                 {bound ? <Badge tone="accent">{bound.mode}</Badge> : null}
                 <Badge tone="neutral">exit {draft.exitVersion}</Badge>
                 <Badge tone="accent">
@@ -556,7 +616,7 @@ export default function StrategiesPage() {
                   </Select>
                 </Field>
 
-                <Field label="Tirgus">
+                <Field label="Tirgus (epic šim kontam)">
                   <Select
                     value={draft.marketEpic}
                     onChange={(e) =>
@@ -568,10 +628,13 @@ export default function StrategiesPage() {
                     ) : null}
                     {marketOptions.map((m) => (
                       <option key={m.epic} value={m.epic}>
-                        {m.label ?? `${m.code ?? "????"} · ${m.epic} — ${m.name}`}
+                        {marketOptionLabel(m)}
                       </option>
                     ))}
                   </Select>
+                  <p className="mt-1 text-[11px] text-white/35">
+                    Epic = Capital simbols. #0007 sarakstā ir tikai kārtas numurs.
+                  </p>
                 </Field>
 
                 <Field label="Izmērs (Lot / Risk %)">

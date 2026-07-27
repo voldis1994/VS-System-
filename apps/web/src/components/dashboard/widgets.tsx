@@ -268,6 +268,15 @@ export function StrategyConstellation() {
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1.5">
+                {(() => {
+                  const symbols = (s?.assignedSymbols as string[] | undefined) ?? [];
+                  const sym = deploy.symbol || symbols[0];
+                  return sym ? (
+                    <Badge tone="accent">epic {sym}</Badge>
+                  ) : (
+                    <Badge tone="warn">nav epic</Badge>
+                  );
+                })()}
                 {s ? <Badge tone="accent">{s.mode}</Badge> : <Badge tone="warn">no strategy</Badge>}
                 {cfg.exitVersion ? <Badge tone="neutral">exit {cfg.exitVersion}</Badge> : null}
                 {cfg.useRiskPercent ? (
@@ -281,12 +290,18 @@ export function StrategyConstellation() {
                 {openOnAcc > 0 ? <Badge tone="warn">{openOnAcc} open</Badge> : null}
               </div>
 
+              <p className="mt-2 text-[11px] text-white/35">
+                Savs bots — simbols/režīms neatkarīgs no citiem kontiem.
+              </p>
+
               {running && s ? (
                 <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between gap-2 text-[11px]">
                     <span className="font-mono text-white/50">
                       {[
-                        deploy.symbol ?? "—",
+                        deploy.symbol ??
+                          ((s.assignedSymbols as string[] | undefined) ?? [])[0] ??
+                          "—",
                         deploy.signal ?? "…",
                         deploy.bias && deploy.bias !== "flat"
                           ? `bias ${deploy.bias}`

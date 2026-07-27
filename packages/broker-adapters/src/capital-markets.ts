@@ -138,17 +138,59 @@ export function resolveCapitalEpic(symbol: string): string {
   return CAPITAL_EPIC_ALIASES[key] ?? raw;
 }
 
-/** Stable display index 0001..N for Capital market lists */
+/** Desk defaults — never fall through to first numeric share epic (0001…). */
+export const PREFERRED_DESK_EPICS = [
+  "GOLD",
+  "US100",
+  "EURUSD",
+  "GBPUSD",
+  "US500",
+  "US30",
+  "BITCOIN",
+  "SILVER",
+  "USDJPY",
+  "GERMANY40",
+] as const;
+
+/** Stable list index for UI only (NOT a Capital epic). */
 export function formatMarketCode(index: number): string {
   return String(index + 1).padStart(4, "0");
 }
 
+/** Pick a sensible default epic for new strategy drafts. */
+export function pickPreferredEpic(
+  markets: Array<{ epic: string }>,
+): string {
+  if (!markets.length) return "GOLD";
+  for (const pref of PREFERRED_DESK_EPICS) {
+    const hit = markets.find(
+      (m) =>
+        m.epic.toUpperCase() === pref ||
+        resolveCapitalEpic(m.epic).toUpperCase() === pref,
+    );
+    if (hit) return hit.epic;
+  }
+  const named = markets.find((m) => !/^\d+$/.test(m.epic));
+  return named?.epic ?? markets[0]!.epic;
+}
+
+/** Popular CFDs first; pure numeric share epics last (avoids 0001 as default). */
+export function prioritizeCapitalMarkets<T extends { epic: string }>(
+  markets: T[],
+): T[] {
+  const rank = (epic: string) => {
+    const resolved = resolveCapitalEpic(epic).toUpperCase();
+    const i = (PREFERRED_DESK_EPICS as readonly string[]).indexOf(resolved);
+    if (i >= 0) return i;
+    if (/^\d+$/.test(epic)) return 10_000 + Number(epic);
+    return 100;
+  };
+  return [...markets].sort(
+    (a, b) => rank(a.epic) - rank(b.epic) || a.epic.localeCompare(b.epic),
+  );
+}
+
 export function sortCapitalMarkets(markets: CapitalMarketInfo[]): CapitalMarketInfo[] {
-  return [...markets].sort((a, b) => {
-    const an = /^\d+$/.test(a.epic) ? Number(a.epic) : NaN;
-    const bn = /^\d+$/.test(b.epic) ? Number(b.epic) : NaN;
-    if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
-    return a.epic.localeCompare(b.epic);
-  });
+  return prioritizeCapitalMarkets(markets);
 }
 

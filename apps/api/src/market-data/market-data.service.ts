@@ -323,8 +323,9 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
   private withMarketCodes(markets: CapitalMarketInfo[]) {
     return markets.map((m, index) => ({
       ...m,
+      // `code` is list order only — never confuse with Capital epic (epic can also be "0001").
       code: formatMarketCode(index),
-      label: `${formatMarketCode(index)} · ${m.epic} — ${m.name}`,
+      label: `${m.name} · epic ${m.epic} · #${formatMarketCode(index)}`,
     }));
   }
 
