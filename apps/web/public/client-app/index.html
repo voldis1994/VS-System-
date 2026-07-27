@@ -382,12 +382,11 @@
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
 
-    // Microsoft Fluent UI 3D emoji (realistic)
-    const CDN = "https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji@main/assets";
+    // Microsoft Fluent UI 3D emoji (local — same as your reference image)
     const IMG = {
-      profit: `${CDN}/Money-mouth%20face/3D/money-mouth_face_3d.png`,
-      loss: `${CDN}/Crying%20face/3D/crying_face_3d.png`,
-      think: `${CDN}/Thinking%20face/3D/thinking_face_3d.png`,
+      profit: "./emoji/profit.png",
+      loss: "./emoji/loss.png",
+      think: "./emoji/think.png",
     };
 
     const MOODS = {
