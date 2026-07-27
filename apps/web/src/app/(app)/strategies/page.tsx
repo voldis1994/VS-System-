@@ -935,9 +935,9 @@ export default function StrategiesPage() {
                   </Field>
                   {draft.trailEnabled ? (
                     <p className="text-[11px] text-zinc-500">
-                      Start = kad trail ieslēdzas. Distance brokerī var tikt
-                      pacelta līdz Capital min (~8 pips FX / ~50 GOLD punkti), bet start
-                      sekos Taviem pipiem.
+                      Start = kad trail ieslēdzas (plusā no entry). Tad SL seko
+                      cenai katros ~3s (BUY↑ / SELL↓). Distance brokerī var tikt
+                      pacelta līdz Capital min (~8 pips FX / ~50 GOLD punkti).
                     </p>
                   ) : null}
                 </div>

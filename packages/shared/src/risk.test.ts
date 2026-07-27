@@ -46,6 +46,22 @@ describe("risk formulas", () => {
     expect(noBack).toBe("1.09100000");
   });
 
+  it("keeps tightening across successive marks (continuous trail)", () => {
+    let sl = trailingStopCandidate("BUY", "1.10000", "0.00100", "1.09500");
+    expect(sl).toBe("1.09900000");
+    sl = trailingStopCandidate("BUY", "1.10100", "0.00100", sl);
+    expect(sl).toBe("1.10000000");
+    sl = trailingStopCandidate("BUY", "1.10200", "0.00100", sl);
+    expect(sl).toBe("1.10100000");
+
+    let sellSl = trailingStopCandidate("SELL", "1.10000", "0.00100", "1.10500");
+    expect(sellSl).toBe("1.10100000");
+    sellSl = trailingStopCandidate("SELL", "1.09900", "0.00100", sellSl);
+    expect(sellSl).toBe("1.10000000");
+    sellSl = trailingStopCandidate("SELL", "1.09800", "0.00100", sellSl);
+    expect(sellSl).toBe("1.09900000");
+  });
+
   it("replaces wrong-side SL so trail can flip direction", () => {
     // SELL position but SL was stuck below price (BUY-style)
     const fixed = trailingStopCandidate("SELL", "2340.00", "1.50", "2330.00");

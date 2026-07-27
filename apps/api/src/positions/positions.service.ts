@@ -613,44 +613,15 @@ export class PositionsService {
       correlationId,
       { silent: opts?.silent },
     );
-    // BE sends stopLevel which clears Capital native trail — re-arm only if trail was already armed
-    let trailRearmed = false;
-    if (
-      position.trailingEnabled &&
-      position.trailingDistance &&
-      position.trailingActivatedAt
-    ) {
-      try {
-        await this.modifySlTp(
-          organizationId,
-          actorId,
-          id,
-          {
-            trailingStop: true,
-            stopDistance: String(position.trailingDistance),
-            takeProfit:
-              position.takeProfit != null ? String(position.takeProfit) : undefined,
-          },
-          correlationId,
-          { silent: true },
-        );
-        trailRearmed = true;
-      } catch {
-        // fall through — clear activated so autoManage can retry after arm threshold
-      }
-    }
+    // Software trailing continues on next tick — preserve arm state.
+    // Do NOT invent trailingActivatedAt here (BE can fire before trail start pips).
     const final = await this.prisma.position.update({
       where: { id },
       data: {
         breakEvenActivatedAt: new Date(),
         breakEvenEnabled: true,
         stopLoss: newSl,
-        // Keep armed timestamp only if re-arm succeeded; otherwise null → autoManage waits for threshold
-        trailingActivatedAt: trailRearmed
-          ? position.trailingActivatedAt
-          : position.trailingActivatedAt && position.trailingEnabled
-            ? null
-            : position.trailingActivatedAt,
+        trailingActivatedAt: position.trailingActivatedAt,
       },
     });
     await this.events.publish({
@@ -706,6 +677,7 @@ export class PositionsService {
       byAccount.set(p.accountId, list);
     }
     const brokerMarks = new Map<string, number>();
+    const brokerStopLoss = new Map<string, string>();
     const missingOnBroker = new Set<string>();
     for (const [accountId, positions] of byAccount) {
       const adapter = this.brokers.get(accountId);
@@ -729,6 +701,9 @@ export class PositionsService {
           if (Number.isFinite(mark) && mark > 0) {
             brokerMarks.set(p.id, mark);
             brokerMarks.set(p.symbol, mark);
+          }
+          if (match.stopLoss != null && String(match.stopLoss).length > 0) {
+            brokerStopLoss.set(p.id, String(match.stopLoss));
           }
         }
       } catch {
@@ -828,76 +803,31 @@ export class PositionsService {
 
           if (!armed) continue;
 
-          const account = await this.prisma.tradingAccount.findFirst({
-            where: { id: position.accountId },
-            select: { provider: true },
-          });
-          const capitalNative = account?.provider === "CAPITAL";
-
-          // Capital native trailing — arm after activation distance; re-arm after BE
-          if (capitalNative) {
-            const needsArm = !fresh.trailingActivatedAt;
-            // After BE, trailingActivatedAt may be null → re-arm here
-            if (needsArm) {
-              let nativeOk = false;
-              try {
-                await this.modifySlTp(
-                  position.organizationId,
-                  "system",
-                  position.id,
-                  {
-                    trailingStop: true,
-                    stopDistance: distance,
-                    takeProfit:
-                      fresh.takeProfit != null
-                        ? String(fresh.takeProfit)
-                        : undefined,
-                  },
-                  correlationId,
-                  { silent: false },
-                );
-                await this.prisma.position.update({
-                  where: { id: position.id },
-                  data: {
-                    trailingEnabled: true,
-                    trailingDistance: distance,
-                    trailingActivatedAt: new Date(),
-                    currentPrice: mark,
-                  },
-                });
-                await this.events.publish({
-                  eventType: DomainEventType.TrailingStopActivated,
-                  aggregateId: position.id,
-                  organizationId: position.organizationId,
-                  actorId: "system",
-                  correlationId,
-                  payload: { stopLoss: "native", distance, direction: dir },
-                });
-                await this.notifications.create({
-                  organizationId: position.organizationId,
-                  userId: null,
-                  title: "Trailing ON",
-                  body: `${position.symbol} ${dir} Capital trail · dist ${distance}`,
-                  severity: "SUCCESS",
-                });
-                nativeOk = true;
-              } catch {
-                // fall through to software trail below
-              }
-              if (nativeOk) continue;
-            } else {
-              // Native trail already active — sync mark only
-              continue;
-            }
-          }
-
+          // Continuous software trail for Paper + Capital.
+          // Capital native trail was arm-once-then-skip: if native failed once,
+          // trailingActivatedAt froze further SL moves. App-managed stopLevel
+          // updates every tick so BUY↑ / SELL↓ trailing actually moves.
+          const liveSl = brokerStopLoss.get(position.id);
+          const existing =
+            liveSl ?? (fresh.stopLoss ? String(fresh.stopLoss) : null);
           const candidate = trailingStopCandidate(
             dir,
             String(mark),
             distance,
-            fresh.stopLoss ? String(fresh.stopLoss) : null,
+            existing,
           );
-          const existing = fresh.stopLoss ? String(fresh.stopLoss) : null;
+
+          // Sync broker SL into DB even when we don't need to push a new level
+          if (
+            liveSl &&
+            (!fresh.stopLoss || !d(liveSl).eq(d(String(fresh.stopLoss))))
+          ) {
+            await this.prisma.position.update({
+              where: { id: position.id },
+              data: { stopLoss: liveSl, currentPrice: mark },
+            });
+          }
+
           if (existing && d(candidate).eq(d(existing))) continue;
 
           const firstArm = !fresh.trailingActivatedAt;
