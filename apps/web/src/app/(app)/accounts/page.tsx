@@ -781,9 +781,9 @@ export default function AccountsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-md rounded-xl border border-accent/40 bg-bg p-5 shadow-2xl">
             <h3 className="text-lg font-semibold text-white">Klienta piekļuve</h3>
-            <p className="mt-1 text-sm text-white/55">
-              {portalCreds.name} — saglabā PIN tagad. Klients ielogojas{" "}
-              <span className="text-accent">/client</span>
+                <p className="mt-1 text-sm text-white/55">
+              {portalCreds.name} — saglabā PIN tagad. Klients instalē app no{" "}
+              <span className="text-accent">/client</span> (Add to Home Screen) vai ielogojas turpat.
             </p>
             <div className="mt-4 space-y-2 rounded-md border border-white/10 bg-white/[0.03] p-3 font-mono text-sm">
               <div>
@@ -798,7 +798,7 @@ export default function AccountsPage() {
                 variant="outline"
                 onClick={() => {
                   void navigator.clipboard.writeText(
-                    `VS System klienta portāls\nURL: ${window.location.origin}/client\nKods: ${portalCreds.code}\nPIN: ${portalCreds.pin}`,
+                    `VS Client app\n1) Atver: ${window.location.origin}/client\n2) iPhone: Share → Add to Home Screen\n3) Kods: ${portalCreds.code}\n4) PIN: ${portalCreds.pin}`,
                   );
                   toast.success("Nokopēts");
                 }}

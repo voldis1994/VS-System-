@@ -1,0 +1,25 @@
+{
+  "name": "@nexus/client-native",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VS System Client — Capacitor phone app shell",
+  "scripts": {
+    "build:web": "node ./scripts/build-www.mjs",
+    "cap:sync": "pnpm build:web && npx cap sync",
+    "cap:ios": "pnpm cap:sync && npx cap open ios",
+    "cap:android": "pnpm cap:sync && npx cap open android",
+    "cap:add:ios": "npx cap add ios",
+    "cap:add:android": "npx cap add android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.2.0",
+    "@capacitor/core": "^7.2.0",
+    "@capacitor/ios": "^7.2.0",
+    "@capacitor/splash-screen": "^7.0.1",
+    "@capacitor/status-bar": "^7.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.2.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "VS System Client",
+  "short_name": "VS Client",
+  "description": "Klienta portāls — tirgus, stratēģija, lot un exit",
+  "start_url": "/client",
+  "scope": "/client",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#07090c",
+  "theme_color": "#07090c",
+  "lang": "lv",
+  "icons": [
+    {
+      "src": "/client-icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/client-icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/client-icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

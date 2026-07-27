@@ -296,11 +296,16 @@ export default function ClientPortalPage() {
 
   if (!token || !account) {
     return (
-      <div className="min-h-screen bg-[#07090c] px-4 py-10 text-[#f4f7f6]">
+      <div className="min-h-[100dvh] bg-[#07090c] px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-[max(2.5rem,env(safe-area-inset-top))] text-[#f4f7f6]">
         <div className="mx-auto w-full max-w-sm">
           <div className="mb-8 text-center">
+            <img
+              src="/client-icons/icon-192.png"
+              alt="VS Client"
+              className="mx-auto mb-4 h-20 w-20 rounded-2xl"
+            />
             <div className="text-5xl font-black tracking-tight">VS</div>
-            <div className="mt-1 text-[11px] tracking-[0.35em] text-white/45">SYSTEM · CLIENT</div>
+            <div className="mt-1 text-[11px] tracking-[0.35em] text-white/45">SYSTEM · CLIENT APP</div>
             <p className="mt-4 text-sm text-white/55">
               Ievadi kodu un PIN, ko saņēmi no operatora.
             </p>
@@ -344,11 +349,11 @@ export default function ClientPortalPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#07090c] px-4 py-6 text-[#f4f7f6]">
+    <div className="min-h-[100dvh] bg-[#07090c] px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))] text-[#f4f7f6]">
       <div className="mx-auto flex w-full max-w-md flex-col gap-4">
         <header className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-[11px] tracking-[0.25em] text-[#00ffc2]">CLIENT PORTAL</div>
+            <div className="text-[11px] tracking-[0.25em] text-[#00ffc2]">VS CLIENT APP</div>
             <h1 className="text-2xl font-bold">{account.name}</h1>
             <p className="text-sm text-white/50">
               Equity {Number(account.equity).toLocaleString()} {account.baseCurrency}
