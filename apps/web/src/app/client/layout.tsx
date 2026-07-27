@@ -36,7 +36,7 @@ export const viewport: Viewport = {
 
 export default function ClientLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="client-app-root min-h-[100dvh] bg-[#07090c] text-[#f4f7f6]">
+    <div className="client-app-root min-h-[100dvh] bg-[#020406] text-[#e6eef6]">
       <ClientPwaRegister />
       {children}
     </div>
