@@ -84,14 +84,18 @@ const EXIT_PRESETS: Record<
     multiTpCount: "3",
     atrTpMult: "1.8",
     atrStopMult: "1.0",
-    stopDistancePips: "",
+    // For strict scalp exit: small trail/start and tight stop
+    // trailActPips and trailPips use small numeric strings (price/pip units shown in UI)
+    stopDistancePips: "0.10",
     takeProfitPips: "",
     beEnabled: true,
     beActivationPips: "15",
     beOffsetPips: "2",
     trailEnabled: true,
-    trailPips: "20",
-    trailActPips: "15",
+    // Lockpoint (distance) — user-requested 0.05
+    trailPips: "0.05",
+    // Trail activation — user-requested +0.01
+    trailActPips: "0.01",
     newsFilterEnabled: true,
     newsMinutesBefore: "30",
     newsMinutesAfter: "15",
