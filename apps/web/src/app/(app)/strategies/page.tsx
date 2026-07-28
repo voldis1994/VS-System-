@@ -616,6 +616,28 @@ export default function StrategiesPage() {
                   </Select>
                 </Field>
 
+                <div className="flex items-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      // Apply a dedicated Scalp Exit quick preset: trailing starts at +0.01, lockpoint distance 0.05, SL = -0.10
+                      patchDraft(account.id, {
+                        exitVersion: "SCALP",
+                        tpEnabled: true,
+                        beEnabled: true,
+                        trailEnabled: true,
+                        trailAct: "0.01",
+                        trailPips: "0.05",
+                        stopDistancePips: "0.10",
+                      });
+                      toast.success("Scalp exit applied: Trail start +0.01, lockpoint 0.05");
+                    }}
+                  >
+                    Scalp Exit
+                  </Button>
+                </div>
+
                 <Field label="Tirgus (epic šim kontam)">
                   <Select
                     value={draft.marketEpic}

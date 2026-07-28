@@ -117,12 +117,12 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     const resolved = resolveCapitalEpic(symbol);
     const key = `${resolved}:${timeframe}`;
     const resolution = timeframeToCapitalResolution(timeframe);
-    // 1m/5m micro direction only needs a handful of bars; HTF needs 55+ for ATR
+    // 10s/1m/5m micro direction only needs a handful of bars; HTF needs 55+ for ATR
     const minAccept =
-      timeframe === "1m" || timeframe === "5m" ? Math.max(8, Math.min(limit, 20)) : 55;
-    const cacheTtlMs = timeframe === "1m" ? 12_000 : 45_000;
+      timeframe === "10s" || timeframe === "1m" || timeframe === "5m" ? Math.max(8, Math.min(limit, 20)) : 55;
+    const cacheTtlMs = timeframe === "10s" || timeframe === "1m" ? 12_000 : 45_000;
     const fetchMax =
-      timeframe === "1m" || timeframe === "5m"
+      timeframe === "10s" || timeframe === "1m" || timeframe === "5m"
         ? Math.min(Math.max(limit, 30), 1000)
         : Math.min(Math.max(limit, 55), 500);
 
@@ -547,17 +547,19 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     let price = d(base.bid);
     const now = Date.now();
     const stepMs =
-      timeframe === "1m"
-        ? 60_000
-        : timeframe === "5m"
-          ? 300_000
-          : timeframe === "15m"
-            ? 900_000
-            : timeframe === "1h"
-              ? 3_600_000
-              : timeframe === "4h"
-                ? 14_400_000
-                : 86_400_000;
+      timeframe === "10s"
+        ? 10_000
+        : timeframe === "1m"
+          ? 60_000
+          : timeframe === "5m"
+            ? 300_000
+            : timeframe === "15m"
+              ? 900_000
+              : timeframe === "1h"
+                ? 3_600_000
+                : timeframe === "4h"
+                  ? 14_400_000
+                  : 86_400_000;
     const candles = [];
     for (let i = limit; i >= 0; i--) {
       const openTime = new Date(now - i * stepMs);
@@ -595,6 +597,9 @@ function DecimalMin(a: ReturnType<typeof d>, b: ReturnType<typeof d>) {
 
 function timeframeToCapitalResolution(tf: string): string {
   switch (tf) {
+    case "10s":
+      // Capital API does not support sub-minute resolutions; use MINUTE as closest live source.
+      return "MINUTE";
     case "1m":
       return "MINUTE";
     case "5m":
@@ -616,6 +621,8 @@ function timeframeToCapitalResolution(tf: string): string {
 
 function timeframeStepMs(tf: string): number {
   switch (tf) {
+    case "10s":
+      return 10_000;
     case "1m":
       return 60_000;
     case "5m":

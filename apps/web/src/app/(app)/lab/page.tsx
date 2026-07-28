@@ -241,16 +241,39 @@ export default function StrategyLabPage() {
             </Field>
 
             <Field label="Timeframe">
-              <Select
-                value={timeframe}
-                onChange={(e) => setTimeframe(e.target.value)}
-              >
-                <option value="auto">Auto (per mode truth)</option>
-                <option value="15m">Force 15m</option>
-                <option value="5m">Force 5m</option>
-                <option value="1m">Force 1m</option>
-                <option value="1h">Force 1h</option>
-              </Select>
+              <div className="flex gap-2 items-end">
+                <Select
+                  value={timeframe}
+                  onChange={(e) => setTimeframe(e.target.value)}
+                >
+                  <option value="auto">Auto (per mode truth)</option>
+                  <option value="15m">Force 15m</option>
+                  <option value="5m">Force 5m</option>
+                  <option value="1m">Force 1m</option>
+                  <option value="10s">Force 10s</option>
+                  <option value="1h">Force 1h</option>
+                </Select>
+
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    // Apply Scalp Exit preset in Lab: 10s TF, TP+BE+Trail, trail starts +0.01, lockpoint 0.05, SL = -0.10
+                    setTimeframe("10s");
+                    setTpEnabled(true);
+                    setBeEnabled(true);
+                    setTrailEnabled(true);
+                    setTrailAct("0.01");
+                    setTrailPips("0.05");
+                    setStopDistancePips("0.10");
+                    toast.success(
+                      "Scalp exit applied to Lab: TF 10s · Trail start +0.01 · lockpoint 0.05 · SL -0.10",
+                    );
+                  }}
+                >
+                  Scalp Exit
+                </Button>
+              </div>
             </Field>
 
             <Toggle
