@@ -709,16 +709,23 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
         const pip = instrumentPipSize(brokerSymbol);
         const minDist = minProtectiveDistance(brokerSymbol, entry);
-        // Pip path: exact pip×size. ATR path: atr×mult. Never silently shrink (old ×0.39 bug).
-        let stopDist =
-          config.stopDistancePips != null
-            ? pip * config.stopDistancePips
-            : Math.max(ind.atr * atrStopMult, entry * 0.00065);
+        // Pip path: exact pip×size or direct price offset when user supplied <1.0. ATR path: atr×mult.
+        let stopDist: number;
+        if (config.stopDistancePips != null) {
+          const v = Number(config.stopDistancePips);
+          stopDist = v > 0 && v < 1 ? v : pip * v;
+        } else {
+          stopDist = Math.max(ind.atr * atrStopMult, entry * 0.00065);
+        }
         stopDist = Math.max(stopDist, minDist);
-        let tpDist =
-          config.takeProfitPips != null
-            ? pip * config.takeProfitPips
-            : Math.max(ind.atr * atrTpMult, pip * 3);
+
+        let tpDist: number;
+        if (config.takeProfitPips != null) {
+          const v = Number(config.takeProfitPips);
+          tpDist = v > 0 && v < 1 ? v : pip * v;
+        } else {
+          tpDist = Math.max(ind.atr * atrTpMult, pip * 3);
+        }
         tpDist = Math.max(tpDist, pip * 2);
 
         const stopLoss =
@@ -783,14 +790,18 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 );
         }
 
-        const beActivationPips = config.breakEvenActivationPips ?? 10;
-        const beOffsetPips = config.breakEvenOffsetPips ?? 1;
-        const trailPips = config.trailingDistancePips ?? 15;
-        // Activation uses user pips (do NOT floor to Capital min — that blocked 1-pip trail start)
-        const beActDist = Math.max(pip * beActivationPips, pip * 0.1);
-        const beOffDist = Math.max(pip * beOffsetPips, pip);
-        // Trail SL distance still floored so Capital accepts modifyPosition
-        const trailDist = Math.max(pip * trailPips, minDist);
+        const beActivationPips = Number(config.breakEvenActivationPips ?? 10);
+        const beOffsetPips = Number(config.breakEvenOffsetPips ?? 1);
+        const trailPips = Number(config.trailingDistancePips ?? 15);
+        // Activation uses user pips — allow direct price offsets when <1
+        const beActDist = (beActivationPips > 0 && beActivationPips < 1)
+          ? Math.max(beActivationPips, pip * 0.1)
+          : Math.max(pip * beActivationPips, pip * 0.1);
+        const beOffDist = (beOffsetPips > 0 && beOffsetPips < 1)
+          ? Math.max(beOffsetPips, pip)
+          : Math.max(pip * beOffsetPips, pip);
+        // Trail SL distance still floored so Capital accepts modifyPosition; allow price offset when <1
+        const trailDist = (trailPips > 0 && trailPips < 1) ? Math.max(trailPips, minDist) : Math.max(pip * trailPips, minDist);
 
         const account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
