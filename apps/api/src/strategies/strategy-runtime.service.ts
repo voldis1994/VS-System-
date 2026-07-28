@@ -272,15 +272,47 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         };
         continue;
       }
-      const ind = computeIndicators(candles);
-      if (!ind || ind.atr <= 0) {
-        lastStatus = {
-          ...lastStatus,
-          symbol: brokerSymbol,
-          skip: "indicators_failed",
-          candleSource,
-        };
-        continue;
+
+      // For very-fast scalping (10s) use 1m indicators to reduce scoring frequency and CPU.
+      let m1: any | undefined;
+      let m1Source: string | undefined;
+      let ind = computeIndicators(candles);
+      if (timeframe === "10s") {
+        m1 = await this.market.getCandles(brokerSymbol, "1m", 60);
+        m1Source = this.market.getCandleSource(brokerSymbol, "1m");
+        if (m1.length < 60) {
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            skip: "not_enough_candles_1m",
+            candles: m1.length,
+            candleSource,
+          };
+          continue;
+        }
+        const m1Ind = computeIndicators(m1);
+        if (!m1Ind || m1Ind.atr <= 0) {
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            skip: "indicators_failed_1m",
+            candleSource,
+            candleSource1m: m1Source,
+          };
+          continue;
+        }
+        // Prefer minute indicators for scoring/bias to lighten 10s load.
+        ind = m1Ind as any;
+      } else {
+        if (!ind || ind.atr <= 0) {
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            skip: "indicators_failed",
+            candleSource,
+          };
+          continue;
+        }
       }
 
       let hasOpenBuy = false;
@@ -318,11 +350,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       );
 
       // 1m×5 timing + candle bias (same rules as TF filter)
-      const m1 = await this.market.getCandles(brokerSymbol, "1m", 30);
-      const m1Source = this.market.getCandleSource(brokerSymbol, "1m");
-      const micro = evaluateMicro1mFive(m1);
+      const m1candles = m1 ?? (await this.market.getCandles(brokerSymbol, "1m", 30));
+      if (!m1Source) m1Source = this.market.getCandleSource(brokerSymbol, "1m");
+      const micro = evaluateMicro1mFive(m1candles);
       // Strategy TF last 5 — mandatory: BUY≠bearish, SELL≠bullish
-      const tfBias = evaluateCandleBiasFive(candles);
+      // For 10s we used 1m indicators/bias above; use m1candles for bias when timeframe===10s
+      const tfBias = timeframe === "10s" ? evaluateCandleBiasFive(m1candles) : evaluateCandleBiasFive(candles);
 
       lastStatus = {
         ...lastStatus,
