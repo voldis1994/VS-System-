@@ -629,7 +629,7 @@ export default function StrategiesPage() {
                           beEnabled: true,
                           trailEnabled: true,
                           // Preserve user's existing values if set, otherwise apply scalp defaults
-                          trailAct: cur.trailAct ? cur.trailAct : "0.01",
+                          trailActPips: cur.trailActPips ? cur.trailActPips : "0.01",
                           trailPips: cur.trailPips ? cur.trailPips : "0.05",
                           stopDistancePips: cur.stopDistancePips ? cur.stopDistancePips : "0.10",
                         });
