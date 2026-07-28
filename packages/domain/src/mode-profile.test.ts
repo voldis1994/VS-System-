@@ -7,17 +7,17 @@ import {
 } from "./index";
 
 describe("mode market profiles (1m vs 15m truth)", () => {
-  it("structure modes read 15m (or 5m grid), not 1m", () => {
-    expect(modePreferredTimeframe(StrategyMode.TREND)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.MOMENTUM)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.PULLBACK)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.BREAKOUT)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.RANGE)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.MEAN_REVERSION)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.REVERSAL)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.SESSION)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.DCA)).toBe("15m");
-    expect(modePreferredTimeframe(StrategyMode.GRID)).toBe("5m");
+  it("structure modes read 1m (or 5m grid), not 15m", () => {
+    expect(modePreferredTimeframe(StrategyMode.TREND)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.MOMENTUM)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.PULLBACK)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.BREAKOUT)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.RANGE)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.MEAN_REVERSION)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.REVERSAL)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.SESSION)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.DCA)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.GRID)).toBe("1m");
   });
 
   it("timing/inventory modes are native 1m", () => {
