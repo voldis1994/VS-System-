@@ -21,7 +21,7 @@ describe("mode market profiles (1m vs 15m truth)", () => {
   });
 
   it("timing/inventory modes are native 1m", () => {
-    expect(modePreferredTimeframe(StrategyMode.SCALPING)).toBe("1m");
+    expect(modePreferredTimeframe(StrategyMode.SCALPING)).toBe("10s");
     expect(modePreferredTimeframe(StrategyMode.NEWS)).toBe("1m");
     expect(modePreferredTimeframe(StrategyMode.ARBITRAGE_SIM)).toBe("1m");
     expect(modePreferredTimeframe(StrategyMode.MARKET_MAKING_SIM)).toBe("1m");
