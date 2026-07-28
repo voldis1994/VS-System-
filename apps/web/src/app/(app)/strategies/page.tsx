@@ -621,16 +621,19 @@ export default function StrategiesPage() {
                     size="sm"
                     variant="secondary"
                     onClick={() => {
-                      // Apply a dedicated Scalp Exit quick preset: trailing starts at +0.01, lockpoint distance 0.05, SL = -0.10
-                      patchDraft(account.id, {
-                        exitVersion: "SCALP",
-                        tpEnabled: true,
-                        beEnabled: true,
-                        trailEnabled: true,
-                        trailAct: "0.01",
-                        trailPips: "0.05",
-                        stopDistancePips: "0.10",
-                      });
+                      // Apply a dedicated Scalp Exit quick preset: use existing per-account settings when present, otherwise defaults
+                        const cur = drafts[account.id] ?? defaultDraft(preferredEpic);
+                        patchDraft(account.id, {
+                          exitVersion: "SCALP",
+                          tpEnabled: true,
+                          beEnabled: true,
+                          trailEnabled: true,
+                          // Preserve user's existing values if set, otherwise apply scalp defaults
+                          trailActPips: cur.trailActPips ? cur.trailActPips : "0.01",
+                          trailPips: cur.trailPips ? cur.trailPips : "0.05",
+                          stopDistancePips: cur.stopDistancePips ? cur.stopDistancePips : "0.10",
+                        });
+
                       toast.success("Scalp exit applied: Trail start +0.01, lockpoint 0.05");
                     }}
                   >
