@@ -161,15 +161,14 @@ export const StrategyExitConfigSchema = z.object({
   /** Number of TP levels when MULTI (2–10). Lot split equally by %. */
   multiTpCount: z.number().int().min(2).max(10).optional(),
   atrTpMult: z.number().min(0.1).max(20).optional(),
-  // allow decimals >= 0 so small values (e.g. 0.01) can be interpreted as direct price offsets
-  takeProfitPips: z.number().min(0).max(5000).optional(),
+  takeProfitPips: z.number().min(1).max(5000).optional(),
   atrStopMult: z.number().min(0.1).max(20).optional(),
-  stopDistancePips: z.number().min(0).max(5000).optional(),
+  stopDistancePips: z.number().min(1).max(5000).optional(),
   breakEvenEnabled: z.boolean().default(false),
   breakEvenActivationPips: z.number().min(0).max(2000).default(10),
   breakEvenOffsetPips: z.number().min(0).max(500).default(1),
   trailingEnabled: z.boolean().default(false),
-  trailingDistancePips: z.number().min(0).max(2000).default(15),
+  trailingDistancePips: z.number().min(1).max(2000).default(15),
   trailingActivationPips: z.number().min(0).max(2000).optional(),
   /** Named exit preset: SCALP | SWING | RUNNER | CUSTOM */
   exitVersion: z.string().max(32).optional(),
