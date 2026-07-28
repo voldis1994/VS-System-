@@ -483,7 +483,12 @@ export function runStrategyBacktest(input: {
     let stopDist: number;
     if (cfg.stopDistancePips != null) {
       const v = Number(cfg.stopDistancePips);
-      stopDist = v > 0 && v < 1 ? v : pip * v;
+      if (cfg.timeframe === "10s") {
+        // For 10s treat stop as direct price offset
+        stopDist = v;
+      } else {
+        stopDist = v > 0 && v < 1 ? v : pip * v;
+      }
     } else {
       stopDist = Math.max(ind.atr * atrStopMult, entry * 0.00065);
     }
@@ -492,7 +497,12 @@ export function runStrategyBacktest(input: {
     let tpDist: number;
     if (cfg.takeProfitPips != null) {
       const v = Number(cfg.takeProfitPips);
-      tpDist = v > 0 && v < 1 ? v : pip * v;
+      if (cfg.timeframe === "10s") {
+        // 10s: treat TP values as direct price offsets
+        tpDist = v;
+      } else {
+        tpDist = v > 0 && v < 1 ? v : pip * v;
+      }
     } else {
       tpDist = Math.max(ind.atr * atrTpMult, pip * 3);
     }
@@ -510,15 +520,25 @@ export function runStrategyBacktest(input: {
     const beOffPips = Number(cfg.breakEvenOffsetPips ?? 1);
     const trailPips = Number(cfg.trailingDistancePips ?? 15);
 
-    const beAct = (beActPips > 0 && beActPips < 1)
-      ? Math.max(beActPips, pip * 0.1)
-      : Math.max(pip * beActPips, pip * 0.1);
+    let beAct: number;
+    let beOff: number;
+    let trailDist: number;
+    if (cfg.timeframe === "10s") {
+      // 10s: treat BE/trail inputs as direct price offsets
+      beAct = Math.max(beActPips, pip * 0.1);
+      beOff = Math.max(beOffPips, pip);
+      trailDist = Math.max(trailPips, minDist);
+    } else {
+      beAct = (beActPips > 0 && beActPips < 1)
+        ? Math.max(beActPips, pip * 0.1)
+        : Math.max(pip * beActPips, pip * 0.1);
 
-    const beOff = (beOffPips > 0 && beOffPips < 1)
-      ? Math.max(beOffPips, pip)
-      : Math.max(pip * Math.max(beOffPips, 0), pip);
+      beOff = (beOffPips > 0 && beOffPips < 1)
+        ? Math.max(beOffPips, pip)
+        : Math.max(pip * Math.max(beOffPips, 0), pip);
 
-    const trailDist = (trailPips > 0 && trailPips < 1) ? Math.max(trailPips, minDist) : Math.max(pip * trailPips, minDist);
+      trailDist = (trailPips > 0 && trailPips < 1) ? Math.max(trailPips, minDist) : Math.max(pip * trailPips, minDist);
+    }
 
     const trailArm = trailingArmThreshold(symbol, {
       trailingActivationPips: cfg.trailingActivationPips,

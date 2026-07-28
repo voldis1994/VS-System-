@@ -713,7 +713,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         let stopDist: number;
         if (config.stopDistancePips != null) {
           const v = Number(config.stopDistancePips);
-          stopDist = v > 0 && v < 1 ? v : pip * v;
+          if (timeframe === "10s") {
+            // For 10s scalping treat user-supplied values as direct price offsets
+            stopDist = v;
+          } else {
+            stopDist = v > 0 && v < 1 ? v : pip * v;
+          }
         } else {
           stopDist = Math.max(ind.atr * atrStopMult, entry * 0.00065);
         }
@@ -722,7 +727,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         let tpDist: number;
         if (config.takeProfitPips != null) {
           const v = Number(config.takeProfitPips);
-          tpDist = v > 0 && v < 1 ? v : pip * v;
+          if (timeframe === "10s") {
+            // 10s: treat TP values as direct price offsets
+            tpDist = v;
+          } else {
+            tpDist = v > 0 && v < 1 ? v : pip * v;
+          }
         } else {
           tpDist = Math.max(ind.atr * atrTpMult, pip * 3);
         }
@@ -793,15 +803,25 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const beActivationPips = Number(config.breakEvenActivationPips ?? 10);
         const beOffsetPips = Number(config.breakEvenOffsetPips ?? 1);
         const trailPips = Number(config.trailingDistancePips ?? 15);
-        // Activation uses user pips — allow direct price offsets when <1
-        const beActDist = (beActivationPips > 0 && beActivationPips < 1)
-          ? Math.max(beActivationPips, pip * 0.1)
-          : Math.max(pip * beActivationPips, pip * 0.1);
-        const beOffDist = (beOffsetPips > 0 && beOffsetPips < 1)
-          ? Math.max(beOffsetPips, pip)
-          : Math.max(pip * beOffsetPips, pip);
-        // Trail SL distance still floored so Capital accepts modifyPosition; allow price offset when <1
-        const trailDist = (trailPips > 0 && trailPips < 1) ? Math.max(trailPips, minDist) : Math.max(pip * trailPips, minDist);
+        // For 10s scalping treat user-supplied BE/trail values as direct price offsets
+        let beActDist: number;
+        let beOffDist: number;
+        let trailDist: number;
+        if (timeframe === "10s") {
+          beActDist = Math.max(beActivationPips, pip * 0.1);
+          beOffDist = Math.max(beOffsetPips, pip);
+          trailDist = Math.max(trailPips, minDist);
+        } else {
+          // Activation uses user pips — allow direct price offsets when <1
+          beActDist = (beActivationPips > 0 && beActivationPips < 1)
+            ? Math.max(beActivationPips, pip * 0.1)
+            : Math.max(pip * beActivationPips, pip * 0.1);
+          beOffDist = (beOffsetPips > 0 && beOffsetPips < 1)
+            ? Math.max(beOffsetPips, pip)
+            : Math.max(pip * beOffsetPips, pip);
+          // Trail SL distance still floored so Capital accepts modifyPosition; allow price offset when <1
+          trailDist = (trailPips > 0 && trailPips < 1) ? Math.max(trailPips, minDist) : Math.max(pip * trailPips, minDist);
+        }
 
         const account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
