@@ -254,6 +254,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       const brokerSymbol = resolveCapitalEpic(symbol);
       const timeframe =
         config.timeframe ?? modePreferredTimeframe(mode);
+      const forceEntry = timeframe === "10s"; // when true, bypass entry gating for aggressive 10s live trading
 
       // Strategy TF candles → mode (TREND/SCALP/…) decides BUY/SELL
       const candles = await this.market.getCandles(
@@ -392,12 +393,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         candleDirectionFilter: true,
       };
 
-      if (
+      if (!forceEntry && (
         candleSource === "sim" ||
         m1Source === "sim" ||
         candleSource === "unknown" ||
         m1Source === "unknown"
-      ) {
+      )) {
         lastStatus = {
           ...lastStatus,
           signal: scored.signal,
@@ -447,7 +448,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      if (scored.signal === "HOLD") {
+      if (scored.signal === "HOLD" && !forceEntry) {
         lastStatus = {
           ...lastStatus,
           signal: "HOLD",
@@ -489,20 +490,26 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             ? ("bear" as const)
             : ("flat" as const);
 
-      const resolved = resolveEntryWithCandleFlip(
+      let resolved = resolveEntryWithCandleFlip(
         scored.signal,
         tfBias.bias,
         microBias,
       );
+      if (forceEntry) {
+        // Force acceptance of the engine signal for 10s aggressive mode
+        resolved = { signal: scored.signal, flipped: false, from: undefined, skip: undefined, reason: undefined } as any;
+      }
       if (!resolved.signal) {
-        lastStatus = {
-          ...lastStatus,
-          signal: scored.signal,
-          skip: resolved.skip ?? "candle_filter",
-          reason: resolved.reason,
-          gate: resolved.skip ?? "candle_filter",
-        };
-        continue;
+        if (!forceEntry) {
+          lastStatus = {
+            ...lastStatus,
+            signal: scored.signal,
+            skip: resolved.skip ?? "candle_filter",
+            reason: resolved.reason,
+            gate: resolved.skip ?? "candle_filter",
+          };
+          continue;
+        }
       }
 
       // Flip only if opposite side independently clears mode minScore
@@ -587,7 +594,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
         const lastAt = this.lastSignalAt.get(key) ?? 0;
         const cooldownLeftMs = cooldownMs - (Date.now() - lastAt);
-        if (cooldownLeftMs > 0) {
+        if (!forceEntry && cooldownLeftMs > 0) {
           lastStatus = {
             ...lastStatus,
             symbol: brokerSymbol,
@@ -598,7 +605,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           };
           continue;
         }
-        if (this.lastFingerprint.get(key) === fingerprint) {
+        if (!forceEntry && this.lastFingerprint.get(key) === fingerprint) {
           const openSame = await this.prisma.position.count({
             where: {
               organizationId: strategy.organizationId,
@@ -633,8 +640,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         );
         const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
 
-        const hasOtherSymbolOpen =
-          oneTradeOnly &&
+        const hasOtherSymbolOpen = !forceEntry && oneTradeOnly &&
           openAnywhere.some(
             (p) => p.symbol !== brokerSymbol && p.symbol !== symbol,
           );
@@ -661,7 +667,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             );
             _acted = true;
           }
-          if (closeOnlyNoFlip) {
+          if (closeOnlyNoFlip && !forceEntry) {
             lastStatus = {
               ...lastStatus,
               skip: "closed_opposite_no_flip",
@@ -672,7 +678,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
 
         const sameSide = openOnSymbol.filter((p) => p.direction === signal);
-        if (sameSide.length > 0) {
+        if (sameSide.length > 0 && !forceEntry) {
           lastStatus = {
             ...lastStatus,
             skip: "waiting_open_close",
@@ -683,7 +689,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        if (oneTradeOnly && openAnywhere.length > 0 && opposite.length === 0) {
+        if (!forceEntry && oneTradeOnly && openAnywhere.length > 0 && opposite.length === 0) {
           lastStatus = {
             ...lastStatus,
             skip: "waiting_open_close",
