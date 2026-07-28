@@ -315,6 +315,17 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      // Extra defensive guard to convince TypeScript this is non-null before downstream use.
+      if (ind == null) {
+        lastStatus = {
+          ...lastStatus,
+          symbol: brokerSymbol,
+          skip: "indicators_null_guard",
+          candleSource,
+        };
+        continue;
+      }
+
       let hasOpenBuy = false;
       let hasOpenSell = false;
       for (const accountId of accountIds) {
