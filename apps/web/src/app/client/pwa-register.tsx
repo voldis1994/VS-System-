@@ -47,13 +47,13 @@ export function ClientPwaRegister() {
       <div className="fixed inset-x-0 bottom-0 z-50 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <button
           type="button"
-          className="w-full rounded-2xl bg-[#00ffc2] px-4 py-3 text-sm font-bold text-[#031410] shadow-lg"
+          className="w-full border border-[#5ee7ff] bg-[#5ee7ff] px-4 py-3 text-sm font-bold tracking-wide text-[#041018] shadow-[0_0_28px_rgba(94,231,255,0.35)]"
           onClick={async () => {
             await deferred.prompt();
             setDeferred(null);
           }}
         >
-          Instalēt VS Client aplikāciju
+          Instalēt VS Client
         </button>
       </div>
     );
@@ -62,8 +62,8 @@ export function ClientPwaRegister() {
   if (iosHint) {
     return (
       <div className="fixed inset-x-0 bottom-0 z-50 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        <div className="rounded-2xl border border-white/15 bg-[#0d1117]/95 px-4 py-3 text-center text-[12px] leading-relaxed text-white/80 backdrop-blur">
-          <strong className="text-[#00ffc2]">Pievienot kā app:</strong> Safari → Share →{" "}
+        <div className="border border-[#5ee7ff]/25 bg-[#070d14]/95 px-4 py-3 text-center text-[12px] leading-relaxed text-[#8aa3b8] backdrop-blur">
+          <strong className="text-[#5ee7ff]">Pievienot kā app:</strong> Safari → Share →{" "}
           <em>Add to Home Screen</em> → Add
         </div>
       </div>

@@ -15,11 +15,11 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const variants: Record<Variant, string> = {
   primary:
-    "bg-accent text-white hover:bg-accent-soft shadow-glow disabled:shadow-none",
+    "bg-accent text-[#041018] hover:bg-accent-soft shadow-glow disabled:shadow-none font-semibold",
   secondary: "bg-white/5 text-white hover:bg-white/10 border border-white/10",
   ghost: "bg-transparent text-white/80 hover:bg-white/5 hover:text-white",
   danger: "bg-loss/90 text-white hover:bg-loss",
-  success: "bg-profit/90 text-white hover:bg-profit",
+  success: "bg-profit/90 text-[#041018] hover:bg-profit font-semibold",
   outline: "border border-accent/50 text-accent-soft hover:bg-accent-muted",
 };
 

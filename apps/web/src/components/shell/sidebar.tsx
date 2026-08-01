@@ -46,14 +46,14 @@ export function Sidebar() {
           <img
             src="/vs-system-logo.png"
             alt="VS System"
-            className="h-10 w-10 rounded-xl object-cover ring-1 ring-accent/25"
+            className="h-10 w-10 object-cover ring-1 ring-accent/35"
           />
           <div>
-            <div className="font-display text-lg font-bold tracking-tight text-white">
-              VS <span className="text-accent">System</span>
+            <div className="font-display text-base font-bold tracking-[0.08em] text-white">
+              VS <span className="text-accent">SYSTEM</span>
             </div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-white/35">
-              Trading Platform
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.28em] text-accent/50">
+              Command Deck
             </div>
           </div>
         </div>
