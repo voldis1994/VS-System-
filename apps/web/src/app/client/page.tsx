@@ -1,6 +1,6 @@
 "use client";
 
-import { StrategyMode } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe } from "@nexus/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
   apiBaseFromConfig,
@@ -39,6 +39,14 @@ type CapitalMarket = {
 
 type ExitVersion = "SCALP" | "SWING" | "RUNNER";
 
+type ExitParams = {
+  atrStopMult: number;
+  atrTpMult: number;
+  beActivationPips: number;
+  trailPips: number;
+  trailActPips: number;
+};
+
 const MODES = [
   StrategyMode.TREND,
   StrategyMode.MOMENTUM,
@@ -52,58 +60,274 @@ const MODES = [
 
 const LOTS = ["0.01", "0.02", "0.05", "0.1", "0.2", "0.5"] as const;
 
+/** Client-facing Latvian guide for every strategy mode. */
+const STRATEGY_GUIDE: Record<
+  string,
+  { summary: string; when: string; risk: string; tf: string }
+> = {
+  [StrategyMode.TREND]: {
+    summary: "Seko galvenajai tendencei — ieiet pēc atvilkuma, nevis pret trendu.",
+    when: "Labāk, kad tirgus skaidri iet uz augšu vai leju.",
+    risk: "Range dienās var dabūt viltus signālus.",
+    tf: "15m struktūra + 1m ieeja",
+  },
+  [StrategyMode.MOMENTUM]: {
+    summary: "Ķer spēcīgu izrāvienu / paātrinājumu, kad cena “aizskrien”.",
+    when: "Volatilitātes un ziņu impulsos.",
+    risk: "Vēla ieeja = pērc virsotni / pārdod dibenu.",
+    tf: "15m ekspansija + 1m timing",
+  },
+  [StrategyMode.PULLBACK]: {
+    summary: "Gaida atvilkumu trendā (pie EMA zonām) un tad turpina virzienu.",
+    when: "Stabilā trendā ar tīriem pullbackiem.",
+    risk: "Ja trends jau beidzies, pullback kļūst par apgriezienu.",
+    tf: "15m pull + 1m apstiprinājums",
+  },
+  [StrategyMode.BREAKOUT]: {
+    summary: "Gaida saspiešanu un izlaušanos no līmeņa / diapazona.",
+    when: "Pēc klusas konsolidācijas.",
+    risk: "Daudz false break — SL jābūt loģiskam.",
+    tf: "15m break + 1m apstiprinājums",
+  },
+  [StrategyMode.SCALPING]: {
+    summary: "Ātri, mazi gājieni uz 1m — biežākas darījumi, mazāks mērķis.",
+    when: "Aktīvās sesijās ar labu likviditāti.",
+    risk: "Spread un komisija “apēd” peļņu, ja lot/exit pārāk agresīvs.",
+    tf: "Native 1m",
+  },
+  [StrategyMode.MEAN_REVERSION]: {
+    summary: "Fade ekstremumus — gaida atgriešanos pie vidējā, nevis turpinājumu.",
+    when: "Klusā, zema ADX / sideways tirgū.",
+    risk: "Stiprā trendā mean-reversion sāp.",
+    tf: "15m ekstremumi",
+  },
+  [StrategyMode.REVERSAL]: {
+    summary: "Meklē apgriezienu pēc ekstremuma / divergences.",
+    when: "Pēc ilgstoša move un noguruma pazīmēm.",
+    risk: "Agri griezt pret trendu = lieli SL.",
+    tf: "15m divergences",
+  },
+  [StrategyMode.RANGE]: {
+    summary: "Tirgojas diapazonā: pirkt zemu, pārdot augstu robežās.",
+    when: "Skaidrs sideways ar definētām robežām.",
+    risk: "Breakout dienās range loģika sabrūk.",
+    tf: "15m range",
+  },
+};
+
+function tipModeSwitch(from: string, to: string): string[] {
+  if (from === to) return [];
+  const a = STRATEGY_GUIDE[from];
+  const b = STRATEGY_GUIDE[to];
+  const lines = [`Stratēģija ${from} → ${to}.`];
+  if (b) {
+    lines.push(b.summary);
+    lines.push(`Kad: ${b.when}`);
+    lines.push(`TF: ${b.tf} (sistēma lasa tirgu uz ${modePreferredTimeframe(to)}).`);
+    if (a && modePreferredTimeframe(from) !== modePreferredTimeframe(to)) {
+      lines.push(
+        `Timeframe mainās ${modePreferredTimeframe(from)} → ${modePreferredTimeframe(to)} — signāli būs citādi “biezi”.`,
+      );
+    }
+    lines.push(`Uzmanies: ${b.risk}`);
+  } else {
+    lines.push(`Režīms ${to} — TF ${modePreferredTimeframe(to)}.`);
+  }
+  return lines;
+}
+
+function tipLot(now: string, prev: string): string {
+  const n = Number(now);
+  const p = Number(prev);
+  if (!Number.isFinite(n) || !Number.isFinite(p) || n === p) {
+    return "Lot = darījuma izmērs. Mazākam kontam sāc ar 0.01. Lielāks lot = lielāka peļņa un zaudējums.";
+  }
+  const ratio = n / p;
+  if (n > p) {
+    return `Lot palielināts ${prev} → ${now} (×${fmtNum(ratio, 2)}). Risks un peļņa uz pipu arī ×${fmtNum(ratio, 2)} pret iepriekšējo.`;
+  }
+  return `Lot samazināts ${prev} → ${now}. Risks uz pipu mazāks — drošāks, bet peļņa arī mazāka.`;
+}
+
+function tipMarket(epic: string, label?: string): string {
+  const name = label || epic;
+  if (/gold|xau/i.test(epic) || /gold|xau/i.test(name)) {
+    return `${name}: augsta volatilitāte — SL/TP ATR× jūtami ietekmē rezultātu. Scalp + mazs lot bieži saprātīgāk.`;
+  }
+  if (/silver|xag/i.test(epic) || /silver|xag/i.test(name)) {
+    return `${name}: līdzīgi zeltam, bet citādāks pip — pārbaudi lot pirms START.`;
+  }
+  if (/usd|eur|gbp|jpy|aud|cad|chf|nzd/i.test(epic)) {
+    return `${name}: FX pāris — parasti mierīgāks par zeltu; exit var būt nedaudz plašāks.`;
+  }
+  if (/oil|brent|wti|usoil/i.test(epic) || /oil/i.test(name)) {
+    return `${name}: nafta — ziņu un sesiju jutīga; Trail/BE noder runner dienās.`;
+  }
+  if (/us500|nas|spx|ger|uk100|index/i.test(epic) || /index|wall/i.test(name)) {
+    return `${name}: indekss — bieži seko sesijām; Trend/Momentum derīgāki nekā tīrs Range.`;
+  }
+  return `${name} (${epic}): pārliecinies, ka epic sakrīt ar to, ko redzi Capital kontā.`;
+}
+
+/** Safe baseline every client can restore if they misconfigured settings. */
+const CLIENT_DEFAULTS = {
+  mode: StrategyMode.TREND as string,
+  lotSize: "0.01",
+  exit: "SCALP" as ExitVersion,
+  epic: "GOLD",
+};
+
 const EXITS: Record<
   ExitVersion,
   {
     label: string;
     hint: string;
+    blurb: string;
     tpEnabled: boolean;
     beEnabled: boolean;
     trailEnabled: boolean;
-    atrStopMult: string;
-    atrTpMult: string;
-    beActivationPips: string;
-    trailPips: string;
-    trailActPips: string;
+    atrStopMult: number;
+    atrTpMult: number;
+    beActivationPips: number;
+    trailPips: number;
+    trailActPips: number;
   }
 > = {
   SCALP: {
     label: "Scalp",
     hint: "TP · BE · Trail",
+    blurb: "Ciešs exits — TP, BE un trailing aktīvi.",
     tpEnabled: true,
     beEnabled: true,
     trailEnabled: true,
-    atrStopMult: "1.0",
-    atrTpMult: "1.8",
-    beActivationPips: "15",
-    trailPips: "20",
-    trailActPips: "15",
+    atrStopMult: 1.0,
+    atrTpMult: 1.8,
+    beActivationPips: 15,
+    trailPips: 20,
+    trailActPips: 15,
   },
   SWING: {
     label: "Swing",
     hint: "TP · BE",
+    blurb: "Plašāks TP/SL — bez trailing, ar BE.",
     tpEnabled: true,
     beEnabled: true,
     trailEnabled: false,
-    atrStopMult: "1.4",
-    atrTpMult: "2.4",
-    beActivationPips: "25",
-    trailPips: "30",
-    trailActPips: "25",
+    atrStopMult: 1.4,
+    atrTpMult: 2.4,
+    beActivationPips: 25,
+    trailPips: 30,
+    trailActPips: 25,
   },
   RUNNER: {
     label: "Runner",
     hint: "BE · Trail",
+    blurb: "Bez fiksēta TP — BE + trailing ved peļņu.",
     tpEnabled: false,
     beEnabled: true,
     trailEnabled: true,
-    atrStopMult: "1.6",
-    atrTpMult: "3.0",
-    beActivationPips: "20",
-    trailPips: "35",
-    trailActPips: "20",
+    atrStopMult: 1.6,
+    atrTpMult: 3.0,
+    beActivationPips: 20,
+    trailPips: 35,
+    trailActPips: 20,
   },
 };
+
+function paramsFromExit(v: ExitVersion): ExitParams {
+  const e = EXITS[v];
+  return {
+    atrStopMult: e.atrStopMult,
+    atrTpMult: e.atrTpMult,
+    beActivationPips: e.beActivationPips,
+    trailPips: e.trailPips,
+    trailActPips: e.trailActPips,
+  };
+}
+
+function fmtNum(n: number, digits = 1) {
+  return Number.isInteger(n) ? String(n) : n.toFixed(digits).replace(/\.0$/, "");
+}
+
+function tipAtrTp(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Šajā exit versijā fiksēts TP ir izslēgts — peļņu ved BE/Trail.";
+  if (now === prev) return "TP distance = ATR × šis skaitlis. Mazāks = TP tuvāk ieejai.";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `TP sāksies tuvāk — apm. ${fmtNum(d)}× ATR agrāk nekā iepriekš (${fmtNum(prev)} → ${fmtNum(now)}).`;
+  }
+  return `TP būs tālāk — vajadzēs +${fmtNum(d)}× ATR peļņu pret iepriekšējo (${fmtNum(prev)} → ${fmtNum(now)}).`;
+}
+
+function tipAtrSl(now: number, prev: number): string {
+  if (now === prev) return "SL distance = ATR × šis skaitlis. Mazāks = ciešāks stops (vairāk riska tikt izsists).";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `SL kļūst ciešāks — apm. ${fmtNum(d)}× ATR tuvāk nekā iepriekš (${fmtNum(prev)} → ${fmtNum(now)}).`;
+  }
+  return `SL kļūst plašāks — +${fmtNum(d)}× ATR elpas pret iepriekšējo (${fmtNum(prev)} → ${fmtNum(now)}).`;
+}
+
+function tipBe(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Break-even šajā versijā ir izslēgts.";
+  if (now === prev) return "Cik pipus peļņā jāsasniedz, lai SL pārvietotos uz BE (apm. ieejas līmeni).";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `BE ieslēgsies agrāk — par ${d} pips ātrāk nekā iepriekš (${prev} → ${now}).`;
+  }
+  return `BE ieslēgsies vēlāk — vajadzēs +${d} pips peļņu pret iepriekšējo (${prev} → ${now}).`;
+}
+
+function tipTrailDist(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Trailing šajā versijā ir izslēgts.";
+  if (now === prev) return "Cik tālu trailing SL seko cenai (pips). Mazāks = ciešāks trail.";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `Trail seko ciešāk — ${d} pips tuvāk nekā iepriekš (${prev} → ${now}).`;
+  }
+  return `Trail seko brīvāk — +${d} pips distance pret iepriekšējo (${prev} → ${now}).`;
+}
+
+function tipTrailAct(now: number, prev: number, enabled: boolean): string {
+  if (!enabled) return "Trailing šajā versijā ir izslēgts.";
+  if (now === prev) return "Cik pipus peļņā jāsasniedz, pirms trailing sāk kustēties.";
+  const d = Math.abs(now - prev);
+  if (now < prev) {
+    return `Trail sāksies agrāk — par ${d} pips ātrāk nekā iepriekš (${prev} → ${now}).`;
+  }
+  return `Trail sāksies vēlāk — +${d} pips peļņa pret iepriekšējo (${prev} → ${now}).`;
+}
+
+function tipExitSwitch(from: ExitVersion, to: ExitVersion): string[] {
+  if (from === to) return [];
+  const a = EXITS[from];
+  const b = EXITS[to];
+  const lines: string[] = [`Pāreja ${a.label} → ${b.label}. ${b.blurb}`];
+  if (a.tpEnabled && b.tpEnabled && a.atrTpMult !== b.atrTpMult) {
+    lines.push(tipAtrTp(b.atrTpMult, a.atrTpMult, true));
+  } else if (a.tpEnabled && !b.tpEnabled) {
+    lines.push("Fiksētais TP tiek izslēgts — turpmāk peļņu ved BE un/vai Trail.");
+  } else if (!a.tpEnabled && b.tpEnabled) {
+    lines.push(`Fiksētais TP ieslēgts — mērķis apm. ATR × ${fmtNum(b.atrTpMult)}.`);
+  }
+  if (a.atrStopMult !== b.atrStopMult) {
+    lines.push(tipAtrSl(b.atrStopMult, a.atrStopMult));
+  }
+  if (a.beEnabled && b.beEnabled && a.beActivationPips !== b.beActivationPips) {
+    lines.push(tipBe(b.beActivationPips, a.beActivationPips, true));
+  }
+  if (a.trailEnabled !== b.trailEnabled) {
+    lines.push(
+      b.trailEnabled
+        ? `Trailing ieslēgts — distance ${b.trailPips} pips, aktivācija ${b.trailActPips} pips.`
+        : "Trailing tiek izslēgts šajā versijā.",
+    );
+  } else if (a.trailEnabled && b.trailEnabled) {
+    if (a.trailPips !== b.trailPips) lines.push(tipTrailDist(b.trailPips, a.trailPips, true));
+    if (a.trailActPips !== b.trailActPips) lines.push(tipTrailAct(b.trailActPips, a.trailActPips, true));
+  }
+  return lines;
+}
 
 async function portalApi<T>(
   apiBase: string,
@@ -125,10 +349,16 @@ async function portalApi<T>(
   return data as T;
 }
 
-function buildConfig(input: { lotSize: string; exit: ExitVersion }) {
+function buildConfig(input: {
+  lotSize: string;
+  exit: ExitVersion;
+  params: ExitParams;
+  mode: string;
+}) {
   const e = EXITS[input.exit];
+  const p = input.params;
   return {
-    timeframe: "M5",
+    timeframe: modePreferredTimeframe(input.mode),
     riskPercent: 0.5,
     useRiskPercent: false,
     volume: input.lotSize,
@@ -136,21 +366,73 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion }) {
     closeOnlyNoFlip: false,
     autoAggressive: false,
     minScore: 50,
-    atrStopMult: Number(e.atrStopMult),
-    atrTpMult: Number(e.atrTpMult),
+    atrStopMult: p.atrStopMult,
+    atrTpMult: p.atrTpMult,
     takeProfitEnabled: e.tpEnabled,
     takeProfitMode: "SINGLE",
     multiTpCount: 3,
     breakEvenEnabled: e.beEnabled,
-    breakEvenActivationPips: Number(e.beActivationPips),
+    breakEvenActivationPips: p.beActivationPips,
     breakEvenOffsetPips: 1,
     trailingEnabled: e.trailEnabled,
-    trailingDistancePips: Number(e.trailPips),
-    trailingActivationPips: Number(e.trailActPips),
+    trailingDistancePips: p.trailPips,
+    trailingActivationPips: p.trailActPips,
     exitVersion: input.exit,
     newsFilterEnabled: false,
     cooldownSeconds: 30,
   };
+}
+
+function Stepper({
+  label,
+  value,
+  step,
+  min,
+  max,
+  digits,
+  onChange,
+  tip,
+}: {
+  label: string;
+  value: number;
+  step: number;
+  min: number;
+  max: number;
+  digits?: number;
+  onChange: (n: number) => void;
+  tip: string;
+}) {
+  const round = (n: number) => {
+    const f = 10 ** (digits ?? (step < 1 ? 1 : 0));
+    return Math.round(n * f) / f;
+  };
+  return (
+    <div className="border border-[#1e2a38] bg-[#06090d] px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] tracking-[0.2em] text-[#6b7f94]">{label}</span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className="h-8 w-8 border border-[#243041] text-[#9aabbc]"
+            onClick={() => onChange(round(Math.max(min, value - step)))}
+          >
+            −
+          </button>
+          <span className="min-w-[3.25rem] text-center font-mono text-[14px] text-[#e8eef5]">
+            {fmtNum(value, digits ?? 1)}
+          </span>
+          <button
+            type="button"
+            className="h-8 w-8 border border-[#243041] text-[#9aabbc]"
+            onClick={() => onChange(round(Math.min(max, value + step)))}
+          >
+            +
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{tip}</p>
+    </div>
+  );
 }
 
 const shell =
@@ -170,13 +452,30 @@ export default function ClientPortalPage() {
   const [strategy, setStrategy] = useState<PortalStrategy | null>(null);
   const [openPositions, setOpenPositions] = useState(0);
 
-  const [mode, setMode] = useState<string>(StrategyMode.TREND);
-  const [lotSize, setLotSize] = useState("0.01");
-  const [exit, setExit] = useState<ExitVersion>("SCALP");
-  const [epic, setEpic] = useState("GOLD");
+  const [mode, setMode] = useState<string>(CLIENT_DEFAULTS.mode);
+  const [prevMode, setPrevMode] = useState<string>(CLIENT_DEFAULTS.mode);
+  const [modeSwitchTips, setModeSwitchTips] = useState<string[]>([]);
+  const [lotSize, setLotSize] = useState(CLIENT_DEFAULTS.lotSize);
+  const [prevLot, setPrevLot] = useState(CLIENT_DEFAULTS.lotSize);
+  const [exit, setExit] = useState<ExitVersion>(CLIENT_DEFAULTS.exit);
+  const [exitParams, setExitParams] = useState<ExitParams>(() => paramsFromExit(CLIENT_DEFAULTS.exit));
+  const [prevParams, setPrevParams] = useState<ExitParams>(() => paramsFromExit(CLIENT_DEFAULTS.exit));
+  const [exitSwitchTips, setExitSwitchTips] = useState<string[]>([]);
+  const [epic, setEpic] = useState(CLIENT_DEFAULTS.epic);
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [marketQ, setMarketQ] = useState("");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  const selectedMarket = useMemo(
+    () => markets.find((m) => m.epic === epic),
+    [markets, epic],
+  );
+  const marketTip = useMemo(
+    () => tipMarket(epic, selectedMarket?.label || selectedMarket?.name),
+    [epic, selectedMarket],
+  );
+  const modeGuide = STRATEGY_GUIDE[mode];
+  const lotTip = useMemo(() => tipLot(lotSize, prevLot), [lotSize, prevLot]);
 
   useEffect(() => {
     const cfg = loadServerConfig();
@@ -243,13 +542,40 @@ export default function ClientPortalPage() {
       setOpenPositions(session.openPositions);
       if (session.strategy) {
         setMode(session.strategy.mode);
+        setPrevMode(session.strategy.mode);
+        setModeSwitchTips([]);
         const syms = (session.strategy.assignedSymbols as string[]) ?? [];
         if (syms[0]) setEpic(syms[0]);
         const cfg = session.strategy.configuration ?? {};
-        if (typeof cfg.volume === "string") setLotSize(cfg.volume);
-        if (cfg.exitVersion === "SWING" || cfg.exitVersion === "RUNNER" || cfg.exitVersion === "SCALP") {
-          setExit(cfg.exitVersion);
+        if (typeof cfg.volume === "string") {
+          setLotSize(cfg.volume);
+          setPrevLot(cfg.volume);
         }
+        const nextExit: ExitVersion =
+          cfg.exitVersion === "SWING" || cfg.exitVersion === "RUNNER" || cfg.exitVersion === "SCALP"
+            ? cfg.exitVersion
+            : "SCALP";
+        setExit(nextExit);
+        const loaded: ExitParams = {
+          atrStopMult:
+            typeof cfg.atrStopMult === "number" ? cfg.atrStopMult : EXITS[nextExit].atrStopMult,
+          atrTpMult: typeof cfg.atrTpMult === "number" ? cfg.atrTpMult : EXITS[nextExit].atrTpMult,
+          beActivationPips:
+            typeof cfg.breakEvenActivationPips === "number"
+              ? cfg.breakEvenActivationPips
+              : EXITS[nextExit].beActivationPips,
+          trailPips:
+            typeof cfg.trailingDistancePips === "number"
+              ? cfg.trailingDistancePips
+              : EXITS[nextExit].trailPips,
+          trailActPips:
+            typeof cfg.trailingActivationPips === "number"
+              ? cfg.trailingActivationPips
+              : EXITS[nextExit].trailActPips,
+        };
+        setExitParams(loaded);
+        setPrevParams(loaded);
+        setExitSwitchTips([]);
       }
       try {
         const m = await portalApi<{ markets: CapitalMarket[] }>(
@@ -316,13 +642,84 @@ export default function ClientPortalPage() {
           mode,
           assignedSymbols: [epic],
           action,
-          configuration: buildConfig({ lotSize, exit }),
+          configuration: buildConfig({ lotSize, exit, params: exitParams, mode }),
         }),
       });
       setStatusMsg(action === "stop" ? "Apturēts" : action === "save" ? "Saglabāts" : "Palaists");
       await loadSession(token);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Neizdevās");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function applyMode(next: string) {
+    setModeSwitchTips(tipModeSwitch(mode, next));
+    setPrevMode(mode);
+    setMode(next);
+  }
+
+  function applyLot(next: string) {
+    setPrevLot(lotSize);
+    setLotSize(next);
+  }
+
+  function applyExitVersion(next: ExitVersion) {
+    const tips = tipExitSwitch(exit, next);
+    const nextParams = paramsFromExit(next);
+    setPrevParams(exitParams);
+    setExit(next);
+    setExitParams(nextParams);
+    setExitSwitchTips(tips);
+  }
+
+  function patchParams(patch: Partial<ExitParams>) {
+    setPrevParams(exitParams);
+    setExitParams((cur) => ({ ...cur, ...patch }));
+    setExitSwitchTips([]);
+  }
+
+  async function resetToDefaults() {
+    if (!token || !server) return;
+    setBusy(true);
+    setError(null);
+    setStatusMsg(null);
+    const d = CLIENT_DEFAULTS;
+    const params = paramsFromExit(d.exit);
+    setMode(d.mode);
+    setPrevMode(d.mode);
+    setModeSwitchTips([]);
+    setLotSize(d.lotSize);
+    setPrevLot(d.lotSize);
+    setExit(d.exit);
+    setExitParams(params);
+    setPrevParams(params);
+    setExitSwitchTips([]);
+    setEpic(d.epic);
+    setMarketQ("");
+    const body = {
+      mode: d.mode,
+      assignedSymbols: [d.epic],
+      configuration: buildConfig({ lotSize: d.lotSize, exit: d.exit, params, mode: d.mode }),
+    };
+    try {
+      if (strategy?.status === "RUNNING") {
+        await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
+          method: "POST",
+          token,
+          body: JSON.stringify({ ...body, action: "stop" }),
+        });
+      }
+      await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ ...body, action: "save" }),
+      });
+      setStatusMsg("Default režīms atjaunots");
+      await loadSession(token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Neizdevās atjaunot default");
     } finally {
       setBusy(false);
     }
@@ -490,6 +887,7 @@ export default function ClientPortalPage() {
               </option>
             ))}
           </select>
+          <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{marketTip}</p>
         </section>
 
         <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
@@ -497,14 +895,42 @@ export default function ClientPortalPage() {
           <select
             className="w-full border border-[#243041] bg-[#06090d] px-3 py-3 text-[13px]"
             value={mode}
-            onChange={(e) => setMode(e.target.value)}
+            onChange={(e) => applyMode(e.target.value)}
           >
             {MODES.map((m) => (
               <option key={m} value={m}>
-                {m}
+                {m} · {modePreferredTimeframe(m)}
               </option>
             ))}
           </select>
+          {modeGuide ? (
+            <div className="mt-2 space-y-1.5">
+              <p className="text-[11px] leading-snug text-[#c5d4e3]">{modeGuide.summary}</p>
+              <p className="text-[11px] leading-snug text-[#7d8fa3]">
+                Kad: {modeGuide.when}
+              </p>
+              <p className="text-[11px] leading-snug text-[#7d8fa3]">
+                TF: {modeGuide.tf} · sistēma: {modePreferredTimeframe(mode)}
+              </p>
+              <p className="text-[11px] leading-snug text-[#9a8a7a]">
+                Uzmanies: {modeGuide.risk}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">
+              Režīms {mode} — TF {modePreferredTimeframe(mode)}.
+            </p>
+          )}
+          {modeSwitchTips.length > 0 && prevMode !== mode ? (
+            <div className="mt-2 space-y-1.5 border border-[#243041] bg-[#0c1219] px-3 py-2.5">
+              <p className="text-[9px] tracking-[0.22em] text-[#8aa0b8]">KAS MAINĪJĀS</p>
+              {modeSwitchTips.map((t, i) => (
+                <p key={i} className="text-[11px] leading-snug text-[#9aabbc]">
+                  {t}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </section>
 
         <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
@@ -514,7 +940,7 @@ export default function ClientPortalPage() {
               <button
                 key={l}
                 type="button"
-                onClick={() => setLotSize(l)}
+                onClick={() => applyLot(l)}
                 className={`border py-2.5 font-mono text-[13px] ${
                   lotSize === l
                     ? "border-[#9eb6cc] bg-[#141c26] text-[#e8eef5]"
@@ -525,6 +951,7 @@ export default function ClientPortalPage() {
               </button>
             ))}
           </div>
+          <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{lotTip}</p>
         </section>
 
         <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
@@ -534,7 +961,7 @@ export default function ClientPortalPage() {
               <button
                 key={k}
                 type="button"
-                onClick={() => setExit(k)}
+                onClick={() => applyExitVersion(k)}
                 className={`flex w-full items-center justify-between border px-3 py-3 text-left ${
                   exit === k ? "border-[#9eb6cc] bg-[#141c26]" : "border-[#243041]"
                 }`}
@@ -546,10 +973,109 @@ export default function ClientPortalPage() {
               </button>
             ))}
           </div>
+          <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">{EXITS[exit].blurb}</p>
+          {exitSwitchTips.length > 0 ? (
+            <div className="mt-2 space-y-1.5 border border-[#243041] bg-[#0c1219] px-3 py-2.5">
+              <p className="text-[9px] tracking-[0.22em] text-[#8aa0b8]">KAS MAINĪJĀS</p>
+              {exitSwitchTips.map((t, i) => (
+                <p key={i} className="text-[11px] leading-snug text-[#9aabbc]">
+                  {t}
+                </p>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mt-3 space-y-2">
+            <p className="text-[9px] tracking-[0.28em] text-[#6b7f94]">FINE TUNE</p>
+            {EXITS[exit].tpEnabled ? (
+              <Stepper
+                label="TP ATR×"
+                value={exitParams.atrTpMult}
+                step={0.1}
+                min={0.5}
+                max={6}
+                digits={1}
+                onChange={(n) => patchParams({ atrTpMult: n })}
+                tip={tipAtrTp(exitParams.atrTpMult, prevParams.atrTpMult, true)}
+              />
+            ) : (
+              <div className="border border-[#1e2a38] bg-[#06090d] px-3 py-2.5">
+                <p className="text-[10px] tracking-[0.2em] text-[#6b7f94]">TP ATR×</p>
+                <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">
+                  {tipAtrTp(exitParams.atrTpMult, prevParams.atrTpMult, false)}
+                </p>
+              </div>
+            )}
+            <Stepper
+              label="SL ATR×"
+              value={exitParams.atrStopMult}
+              step={0.1}
+              min={0.4}
+              max={4}
+              digits={1}
+              onChange={(n) => patchParams({ atrStopMult: n })}
+              tip={tipAtrSl(exitParams.atrStopMult, prevParams.atrStopMult)}
+            />
+            {EXITS[exit].beEnabled ? (
+              <Stepper
+                label="BE aktivācija (pips)"
+                value={exitParams.beActivationPips}
+                step={1}
+                min={5}
+                max={80}
+                digits={0}
+                onChange={(n) => patchParams({ beActivationPips: n })}
+                tip={tipBe(exitParams.beActivationPips, prevParams.beActivationPips, true)}
+              />
+            ) : null}
+            {EXITS[exit].trailEnabled ? (
+              <>
+                <Stepper
+                  label="Trail distance (pips)"
+                  value={exitParams.trailPips}
+                  step={1}
+                  min={5}
+                  max={80}
+                  digits={0}
+                  onChange={(n) => patchParams({ trailPips: n })}
+                  tip={tipTrailDist(exitParams.trailPips, prevParams.trailPips, true)}
+                />
+                <Stepper
+                  label="Trail aktivācija (pips)"
+                  value={exitParams.trailActPips}
+                  step={1}
+                  min={5}
+                  max={80}
+                  digits={0}
+                  onChange={(n) => patchParams({ trailActPips: n })}
+                  tip={tipTrailAct(exitParams.trailActPips, prevParams.trailActPips, true)}
+                />
+              </>
+            ) : (
+              <div className="border border-[#1e2a38] bg-[#06090d] px-3 py-2.5">
+                <p className="text-[10px] tracking-[0.2em] text-[#6b7f94]">TRAILING</p>
+                <p className="mt-2 text-[11px] leading-snug text-[#7d8fa3]">
+                  {tipTrailDist(exitParams.trailPips, prevParams.trailPips, false)}
+                </p>
+              </div>
+            )}
+          </div>
         </section>
 
         {error ? <p className="text-[13px] text-[#c97a8a]">{error}</p> : null}
         {statusMsg ? <p className="text-[13px] text-[#9dceb4]">{statusMsg}</p> : null}
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void resetToDefaults()}
+          className="mt-1 w-full border border-[#3a4d62] bg-[#0c1219] py-3.5 text-[11px] font-semibold tracking-[0.2em] text-[#c5d4e3] disabled:opacity-40"
+        >
+          DEFAULT
+        </button>
+        <p className="text-center text-[10px] leading-relaxed text-[#5c6d80]">
+          TREND · GOLD · 0.01 · Scalp — aptur un atjauno sākuma režīmu
+        </p>
 
         <div className="grid grid-cols-3 gap-1.5 pt-1">
           <button
