@@ -22,9 +22,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexus_pro?schema=public
-      JWT_SECRET: ci-secret-change-me-32chars-minimum
-      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
