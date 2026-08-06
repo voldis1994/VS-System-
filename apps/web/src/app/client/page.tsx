@@ -51,20 +51,7 @@ const MODES = [
   StrategyMode.RANGE,
 ] as const;
 
-const LOTS = ["0.01", "0.02", "0.05", "0.1", "0.2", "0.5"] as const;
-
-/** Capital equity indices usually reject FX-style 0.01 — min ≈ 0.1 */
-function capitalIndexMinLot(epic: string): number | null {
-  const s = String(epic ?? "").toUpperCase();
-  if (
-    /US100|US500|US30|NDX|SPX|DJI|GER40|DE40|UK100|FTSE|FRA40|EU50|ESP35|JP225|AUS200|HK50|NASDAQ|DOW/.test(
-      s,
-    )
-  ) {
-    return 0.1;
-  }
-  return null;
-}
+const LOTS = ["0.001", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5"] as const;
 
 const EXITS: Record<
   ExitVersion,
@@ -727,18 +714,9 @@ export default function ClientPortalPage() {
               </button>
             ))}
           </div>
-          {capitalIndexMinLot(epic) != null &&
-          Number(lotSize) > 0 &&
-          Number(lotSize) + 1e-12 < (capitalIndexMinLot(epic) as number) ? (
-            <p className="mt-2 text-[11px] leading-snug text-amber-300/90">
-              {epic}: Capital min lot ≈ {capitalIndexMinLot(epic)} — {lotSize} tiks
-              noraidīts (error.size). Izvēlies ≥ 0.1.
-            </p>
-          ) : capitalIndexMinLot(epic) != null ? (
-            <p className="mt-2 text-[11px] leading-snug text-[#8aa3b8]">
-              Indekss {epic}: tipiski min {capitalIndexMinLot(epic)} lot.
-            </p>
-          ) : null}
+          <p className="mt-2 text-[11px] leading-snug text-[#8aa3b8]">
+            US100 Capital bieži atļauj 0.001 contracts (kā app).
+          </p>
         </section>
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">

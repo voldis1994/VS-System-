@@ -9,7 +9,7 @@ import {
   VolumeMode,
 } from "@nexus/domain";
 import { d, newId, splitVolumeIntoSteps } from "@nexus/shared";
-import { capitalDealRulesFallback, isCapitalSizeError, capitalSizeErrorHint } from "@nexus/broker-adapters";
+import { capitalDealRulesFallback, isCapitalSizeError, capitalSizeErrorHint, volumePrecisionForStep } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
@@ -144,6 +144,7 @@ export class OrdersService {
         account.provider === "CAPITAL"
           ? capitalDealRulesFallback(epic)
           : { minSize: 0.01, maxSize: 500, step: 0.01 };
+      const volPrec = volumePrecisionForStep(rules.step);
       symbol = await this.prisma.symbol.create({
         data: {
           organizationId,
@@ -154,7 +155,7 @@ export class OrdersService {
           baseAsset: fx ? epic.slice(0, 3) : epic,
           quoteAsset: fx ? epic.slice(3) : "USD",
           pricePrecision: fx ? 5 : 2,
-          volumePrecision: rules.step < 0.01 ? 3 : 2,
+          volumePrecision: volPrec,
           minVolume: String(rules.minSize),
           maxVolume: String(rules.maxSize),
           volumeStep: String(rules.step),
@@ -166,20 +167,23 @@ export class OrdersService {
           active: true,
         },
       });
-    } else if (
-      account.provider === "CAPITAL" &&
-      String(symbol.minVolume) === "0.01"
-    ) {
-      // Heal stale auto-created index symbols that still claim FX min 0.01
+    } else if (account.provider === "CAPITAL") {
+      // Heal: volumePrecision 2 turns 0.001 → "0.00" (Capital size reject).
+      // Also unwind prior wrong index min 0.1 fallback.
       const rules = capitalDealRulesFallback(symbol.brokerSymbol);
-      if (rules.minSize > 0.01 + 1e-12) {
+      const volPrec = volumePrecisionForStep(rules.step);
+      const curMin = Number(symbol.minVolume);
+      const needsHeal =
+        Number(symbol.volumePrecision) < volPrec ||
+        (rules.minSize <= 0.001 + 1e-12 && curMin >= 0.01 - 1e-12);
+      if (needsHeal) {
         symbol = await this.prisma.symbol.update({
           where: { id: symbol.id },
           data: {
             minVolume: String(rules.minSize),
             maxVolume: String(rules.maxSize),
             volumeStep: String(rules.step),
-            volumePrecision: rules.step < 0.01 ? 3 : 2,
+            volumePrecision: volPrec,
           },
         });
       }

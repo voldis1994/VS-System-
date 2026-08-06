@@ -5,20 +5,27 @@ import {
   isCapitalSizeError,
   normalizeCapitalDealSize,
   parseCapitalDealRules,
+  volumePrecisionForStep,
 } from "./capital-size";
 
 describe("capital-size", () => {
-  it("US100 min is 0.1 not 0.01", () => {
+  it("US100 allows 0.001 (Capital retail)", () => {
     const r = capitalDealRulesFallback("US100");
-    expect(r.minSize).toBe(0.1);
-    expect(r.step).toBe(0.1);
+    expect(r.minSize).toBe(0.001);
+    expect(r.step).toBe(0.001);
+    expect(volumePrecisionForStep(r.step)).toBe(3);
   });
 
-  it("normalizes 0.001 up to US100 min", () => {
+  it("keeps 0.001 without bumping to 0.1", () => {
     const r = capitalDealRulesFallback("US100");
     const n = normalizeCapitalDealSize(0.001, r);
-    expect(n.size).toBe(0.1);
-    expect(n.adjusted).toBe(true);
+    expect(n.size).toBe(0.001);
+    expect(n.adjusted).toBe(false);
+  });
+
+  it("volumePrecision 2 would wipe 0.001 — we use 3", () => {
+    expect((0.001).toFixed(2)).toBe("0.00");
+    expect((0.001).toFixed(volumePrecisionForStep(0.001))).toBe("0.001");
   });
 
   it("detects Capital size error code", () => {
@@ -27,24 +34,24 @@ describe("capital-size", () => {
         'Capital.com HTTP 400: {"errorCode":"error.positive.createpositionrequest.size"}',
       ),
     ).toBe(true);
-    expect(capitalSizeErrorHint("US100", "0.001")).toContain("0.1");
+    expect(capitalSizeErrorHint("US100", "0.00")).toContain("0.001");
   });
 
-  it("rounds 0.15 up to US100 step 0.1 → 0.2", () => {
+  it("rounds 0.0015 up to US100 step 0.001 → 0.002", () => {
     const r = capitalDealRulesFallback("US100");
-    const n = normalizeCapitalDealSize(0.15, r);
-    expect(n.size).toBe(0.2);
+    const n = normalizeCapitalDealSize(0.0015, r);
+    expect(n.size).toBe(0.002);
   });
 
   it("parses Capital dealingRules payload", () => {
     const parsed = parseCapitalDealRules({
       dealingRules: {
-        minDealSize: { value: 0.1 },
+        minDealSize: { value: 0.001 },
         maxDealSize: { value: 100 },
-        dealSizeStep: { value: 0.1 },
+        dealSizeStep: { value: 0.001 },
       },
     });
-    expect(parsed?.minSize).toBe(0.1);
-    expect(parsed?.step).toBe(0.1);
+    expect(parsed?.minSize).toBe(0.001);
+    expect(parsed?.step).toBe(0.001);
   });
 });

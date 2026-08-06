@@ -16,6 +16,7 @@ import {
   isCapitalSizeError,
   normalizeCapitalDealSize,
   parseCapitalDealRules,
+  volumePrecisionForStep,
   type CapitalDealRules,
 } from "./capital-size";
 import { parseCapitalStreamQuote } from "./capital-stream";
@@ -569,6 +570,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     const epic = m.epic;
     const fx = /^[A-Z]{6}$/.test(epic);
     const rules = capitalDealRulesFallback(epic);
+    const volPrec = volumePrecisionForStep(rules.step);
     return {
       brokerSymbol: epic,
       canonicalSymbol: epic,
@@ -576,7 +578,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       baseAsset: fx ? epic.slice(0, 3) : epic,
       quoteAsset: fx ? epic.slice(3) : "USD",
       pricePrecision: fx ? 5 : 2,
-      volumePrecision: rules.step < 0.01 ? 3 : 2,
+      volumePrecision: volPrec,
       minVolume: String(rules.minSize),
       maxVolume: String(rules.maxSize),
       volumeStep: String(rules.step),
@@ -623,9 +625,10 @@ export class CapitalComAdapter implements BrokerAdapter {
     const rules = await this.resolveDealRules(epic);
     const raw = Number(rawVolume);
     const n = normalizeCapitalDealSize(raw, rules);
-    const sizeStr = String(n.size);
+    const prec = volumePrecisionForStep(rules.step);
+    const sizeStr = n.size.toFixed(prec);
     return {
-      size: n.size,
+      size: Number(sizeStr),
       sizeStr,
       note: n.adjusted ? n.reason : undefined,
     };

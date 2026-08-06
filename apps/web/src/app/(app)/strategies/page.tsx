@@ -70,7 +70,7 @@ const STRATEGY_MODES = [
   StrategyMode.MARKET_MAKING_SIM,
 ] as const;
 
-const LOT_PRESETS = ["0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1"] as const;
+const LOT_PRESETS = ["0.001", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1"] as const;
 
 const EXIT_PRESETS: Record<
   Exclude<ExitVersion, "CUSTOM">,
@@ -165,19 +165,6 @@ function pickPreferredEpic(markets: CapitalMarket[]): string {
 
 function looksLikeShareEpic(epic: string): boolean {
   return /^\d{3,5}$/.test(String(epic || "").trim());
-}
-
-/** Capital equity indices usually reject FX-style 0.01 — min ≈ 0.1 */
-function capitalIndexMinLot(epic: string): number | null {
-  const s = String(epic ?? "").toUpperCase();
-  if (
-    /US100|US500|US30|NDX|SPX|DJI|GER40|DE40|UK100|FTSE|FRA40|EU50|ESP35|JP225|AUS200|HK50|NASDAQ|DOW/.test(
-      s,
-    )
-  ) {
-    return 0.1;
-  }
-  return null;
 }
 
 function marketOptionLabel(m: CapitalMarket): string {
@@ -792,18 +779,8 @@ export default function StrategiesPage() {
                       />
                     </div>
                     <p className="mt-1 text-[11px] text-white/35">
-                      Mazam kontam (~$40) sāc ar 0.01 (FX/GOLD). Indeksiem (US100…) Capital min
-                      parasti ≈ 0.1.
+                      Mazam kontam: US100 Capital bieži atļauj 0.001. FX/GOLD tipiski no 0.01.
                     </p>
-                    {capitalIndexMinLot(activeEpic) != null &&
-                    Number(draft.lotSize) > 0 &&
-                    Number(draft.lotSize) + 1e-12 <
-                      (capitalIndexMinLot(activeEpic) as number) ? (
-                      <p className="mt-1 text-[11px] text-amber-300/90">
-                        Lot {draft.lotSize} par mazu priekš {activeEpic} — Capital noraida size.
-                        Iestati ≥ {capitalIndexMinLot(activeEpic)} (piem. 0.1).
-                      </p>
-                    ) : null}
                   </Field>
                 ) : (
                   <Field label="Risk % / trade">
