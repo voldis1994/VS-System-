@@ -59,7 +59,7 @@ export const MODE_MARKET_PROFILES: Record<StrategyMode, ModeMarketProfile> = {
     preferredTimeframe: "10s",
     readRole: "timing",
     uses1mTiming: false,
-    truth: "EMA1/EMA3 cross on 10s with live tick price; trail SL on EMA3; BE at 1R.",
+    truth: "Separate from SCALPING: fresh EMA1×EMA3 cross + divergence only; trail SL on EMA3; BE at 1R; exit opposite cross / through EMA3.",
   },
 
   [StrategyMode.MEAN_REVERSION]: {
