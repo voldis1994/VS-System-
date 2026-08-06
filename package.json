@@ -17,7 +17,8 @@
     "db:generate": "pnpm --filter @nexus/api prisma:generate",
     "db:migrate": "pnpm --filter @nexus/api prisma:migrate",
     "db:seed": "pnpm --filter @nexus/api prisma:seed",
-    "db:studio": "pnpm --filter @nexus/api prisma:studio"
+    "db:studio": "pnpm --filter @nexus/api prisma:studio",
+    "tunnel": "node scripts/start-tunnel.mjs"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

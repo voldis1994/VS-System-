@@ -163,6 +163,10 @@ echo.
 echo   Saglabats faila: client-url.txt  ^(nosuti klientam^)
 echo   PC un telefons = VIENA Wi-Fi. Bez localhost.
 echo.
+echo   --- Bez Wi-Fi (jebkur internetā) ---
+echo   Palaid otru failu: start-vs-remote.bat
+echo   Tas dos https://....trycloudflare.com/client
+echo.
 echo   Login desk: owner@nexus.pro / NexusOwner123!
 echo   PIN desk:   123456
 echo ========================================

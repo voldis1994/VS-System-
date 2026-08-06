@@ -17,3 +17,6 @@ tmp
 playwright-report
 test-results
 client-url.txt
+remote-client-url.txt
+tools/cloudflared
+tools/cloudflared.exe

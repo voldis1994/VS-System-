@@ -137,7 +137,8 @@ export default function LoginPage() {
             Multi-account trading command deck
           </p>
           <p className="mt-3 text-[11px] leading-relaxed text-white/35">
-            Klientiem: atver <span className="font-mono text-accent-soft">/client</span> ar PC Wi‑Fi IP — nevis /dashboard.
+            Klientiem: <span className="font-mono text-accent-soft">/client</span> (Wi‑Fi IP vai
+            remote tunnel links) — nevis /dashboard.
           </p>
         </div>
 
