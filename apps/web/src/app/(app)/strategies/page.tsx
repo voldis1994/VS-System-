@@ -528,7 +528,8 @@ export default function StrategiesPage() {
       <Panel title="Per-account auto trade">
         <p className="mb-3 text-sm text-white/55">
           Katram kontam <strong className="text-white">savs bots</strong> — savs{" "}
-          <strong className="text-white">epic</strong>, režīms, lots un exit (TP / BE / Trail).
+          <strong className="text-white">epic</strong>, režīms, lots. SCALPING / EMA 1/3 — exit AUTO
+          (bez TP/Trail picker). Mode un tirgu vari mainīt jebkurā brīdī.
           BOSS un Guntis var darboties <strong className="text-white">vienlaikus ar dažādiem</strong>{" "}
           iestatījumiem; viens otru nebloķē.
         </p>
@@ -612,15 +613,27 @@ export default function StrategiesPage() {
                   <Badge tone={shareWarning ? "warn" : "accent"}>epic {activeEpic}</Badge>
                 ) : null}
                 {bound ? <Badge tone="accent">{bound.mode}</Badge> : null}
-                <Badge tone="neutral">exit {draft.exitVersion}</Badge>
+                {modeHidesExitPickers(draft.mode) ? (
+                  <Badge tone="profit">exit AUTO</Badge>
+                ) : (
+                  <Badge tone="neutral">exit {draft.exitVersion}</Badge>
+                )}
                 <Badge tone="accent">
                   {draft.sizeMode === "LOT"
                     ? `${draft.lotSize} lot`
                     : `risk ${draft.riskPercent}%`}
                 </Badge>
-                {draft.tpEnabled ? <Badge tone="profit">TP</Badge> : null}
-                {draft.beEnabled ? <Badge tone="accent">BE</Badge> : null}
-                {draft.trailEnabled ? <Badge tone="accent">Trail</Badge> : null}
+                {!modeHidesExitPickers(draft.mode) && draft.tpEnabled ? (
+                  <Badge tone="profit">TP</Badge>
+                ) : null}
+                {draft.mode === StrategyMode.SCALPING || draft.beEnabled ? (
+                  <Badge tone="accent">BE</Badge>
+                ) : null}
+                {draft.mode === StrategyMode.SCALPING ? (
+                  <Badge tone="accent">Trail tight</Badge>
+                ) : draft.trailEnabled ? (
+                  <Badge tone="accent">Trail</Badge>
+                ) : null}
                 <span className="font-mono text-[11px] text-white/40">
                   eq {Number(account.equity).toFixed(2)} {account.baseCurrency}
                 </span>
