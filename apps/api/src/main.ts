@@ -43,12 +43,20 @@ async function bootstrap() {
         callback(null, true);
         return;
       }
-      // Phone client on LAN (PC as server)
+      // Phone / LAN
       if (
         /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) ||
         /^https?:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/i.test(
           origin,
         )
+      ) {
+        callback(null, true);
+        return;
+      }
+      // Cloudflare quick tunnel / named tunnel hostnames
+      if (
+        /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(origin) ||
+        /^https:\/\/[a-z0-9.-]+\.cfargotunnel\.com$/i.test(origin)
       ) {
         callback(null, true);
         return;

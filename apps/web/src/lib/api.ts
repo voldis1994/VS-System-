@@ -7,17 +7,15 @@ export type ApiError = Error & {
 };
 
 /**
- * Resolve API base for both PC (localhost) and phones on LAN.
- * Hardcoding localhost breaks dashboard when the UI is opened via PC IP.
+ * Same-origin by default so LAN IP and Cloudflare Tunnel both work with one URL.
+ * Next.js rewrites /api/* → local API :4000.
  */
 export function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
   }
   if (typeof window !== "undefined") {
-    const host = window.location.hostname || "127.0.0.1";
-    const port = process.env.NEXT_PUBLIC_API_PORT || "4000";
-    return `http://${host}:${port}`;
+    return "";
   }
   return "http://127.0.0.1:4000";
 }

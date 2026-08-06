@@ -183,36 +183,35 @@ export default function ClientPortalPage() {
     const saved = sessionStorage.getItem("vs_client_portal_token");
     if (saved) setToken(saved);
 
-    const stored = loadServerConfig();
-    if (stored?.host) {
-      setServer(stored);
-      setServerDraft(stored);
-      setBooting(false);
-      return;
-    }
+    const boot = async () => {
+      // Prefer same-origin (works for LAN IP and Cloudflare Tunnel with one URL).
+      const auto = { ...defaultServerConfig(), sameOrigin: true as const };
+      try {
+        const res = await fetch(`${apiBaseFromConfig(auto)}/api/health`);
+        if (!res.ok) throw new Error("health");
+        saveServerConfig(auto);
+        setServer(auto);
+        setServerDraft(auto);
+        setBooting(false);
+        return;
+      } catch {
+        // fall through to stored / manual
+      }
 
-    const auto = defaultServerConfig();
-    setServerDraft(auto);
-    // Opened via http://PC-IP:3000/client → auto-wire API to same host, skip manual IP.
-    if (auto.host) {
-      const tryAuto = async () => {
-        try {
-          const base = apiBaseFromConfig(auto);
-          const res = await fetch(`${base}/api/health`);
-          if (!res.ok) throw new Error("health");
-          saveServerConfig(auto);
-          setServer(auto);
-        } catch {
-          setShowServer(true);
-        } finally {
-          setBooting(false);
-        }
-      };
-      void tryAuto();
-    } else {
+      const stored = loadServerConfig();
+      if (stored?.host || stored?.sameOrigin) {
+        setServer(stored);
+        setServerDraft(stored);
+        setBooting(false);
+        return;
+      }
+
+      setServerDraft(auto);
       setShowServer(true);
       setBooting(false);
-    }
+    };
+
+    void boot();
   }, []);
 
   useEffect(() => {
@@ -247,7 +246,7 @@ export default function ClientPortalPage() {
     } catch (e) {
       setError(
         e instanceof Error
-          ? `${e.message}. PC un iPhone vienā Wi‑Fi; firewall 3000/4000.`
+          ? `${e.message}. Pārbaudi ka VS System skrien uz PC. Wi‑Fi: tāds pats tīkls. Remote: lieto tunnel linku.`
           : "Nevar savienoties",
       );
     } finally {
@@ -372,7 +371,7 @@ export default function ClientPortalPage() {
             Client
           </h1>
           <p className="mt-2 text-center text-[13px] leading-relaxed text-[#7d8fa3]">
-            Savieno ar galveno serveri — Tava datora IP.
+            Parasti nevajag — atver linku no PC (Wi‑Fi IP vai remote tunnel). Šeit tikai ja auto savienojums neizdevās.
           </p>
           <div className="mt-8 space-y-3 border border-[#1a2330] bg-[#0a0e14]/90 p-5">
             <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
