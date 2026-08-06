@@ -1,0 +1,16 @@
+{
+  "name": "NEXUS PRO",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/pg-up.sh",
+  "terminals": [
+    {
+      "name": "api",
+      "command": "pnpm dev:api"
+    },
+    {
+      "name": "web",
+      "command": "pnpm dev:web"
+    }
+  ]
+}
