@@ -1,6 +1,6 @@
 "use client";
 
-import { StrategyMode, modePreferredTimeframe } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers } from "@nexus/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
   apiBaseFromConfig,
@@ -155,7 +155,36 @@ async function portalApi<T>(
 
 function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }) {
   const e = EXITS[input.exit];
-  const isEmaTick = input.mode === StrategyMode.EMA_TICK_SCALP;
+  const auto = modeAutoExit(input.mode);
+  if (auto) {
+    return {
+      timeframe: modePreferredTimeframe(input.mode),
+      riskPercent: 0.5,
+      useRiskPercent: false,
+      volume: input.lotSize,
+      oneTradeOnly: true,
+      closeOnlyNoFlip: false,
+      autoAggressive: false,
+      minScore: 50,
+      atrStopMult: auto.atrStopMult,
+      atrTpMult: auto.atrTpMult,
+      takeProfitEnabled: auto.takeProfitEnabled,
+      takeProfitMode: "SINGLE" as const,
+      multiTpCount: 3,
+      breakEvenEnabled: auto.breakEvenEnabled,
+      breakEvenActivationPips: auto.breakEvenActivationPips,
+      breakEvenOffsetPips: auto.breakEvenOffsetPips,
+      trailingEnabled: auto.trailingEnabled,
+      trailingDistancePips: auto.trailingDistancePips,
+      trailingActivationPips: auto.trailingActivationPips,
+      trailArmImmediate: auto.trailArmImmediate,
+      priceOffsetMode: auto.priceOffsetMode,
+      stopDistancePips: auto.stopDistancePips,
+      exitVersion: auto.exitVersion,
+      newsFilterEnabled: false,
+      cooldownSeconds: auto.cooldownSeconds,
+    };
+  }
   return {
     timeframe: modePreferredTimeframe(input.mode),
     riskPercent: 0.5,
@@ -167,19 +196,18 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
     minScore: 50,
     atrStopMult: Number(e.atrStopMult),
     atrTpMult: Number(e.atrTpMult),
-    // EMA tick scalp: exit via cross / EMA3 trail / BE — no fixed TP or distance trail
-    takeProfitEnabled: isEmaTick ? false : e.tpEnabled,
-    takeProfitMode: "SINGLE",
+    takeProfitEnabled: e.tpEnabled,
+    takeProfitMode: "SINGLE" as const,
     multiTpCount: 3,
-    breakEvenEnabled: isEmaTick ? true : e.beEnabled,
+    breakEvenEnabled: e.beEnabled,
     breakEvenActivationPips: Number(e.beActivationPips),
     breakEvenOffsetPips: 1,
-    trailingEnabled: isEmaTick ? false : e.trailEnabled,
+    trailingEnabled: e.trailEnabled,
     trailingDistancePips: Number(e.trailPips),
     trailingActivationPips: Number(e.trailActPips),
     exitVersion: input.exit,
     newsFilterEnabled: false,
-    cooldownSeconds: isEmaTick ? 15 : 30,
+    cooldownSeconds: 30,
   };
 }
 
@@ -189,11 +217,11 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
-    tip: "Atsevišķs režīms: tikai svaigs EMA1×EMA3 krustojums + divergence · exit caur EMA3 · trail EMA3 · BE pie 1R (nav SCALPING)",
+    tip: "Svaigs EMA1×EMA3 cross · exit caur EMA3 · trail EMA3 · BE 1R — exit opcijas automātiskas",
   },
   [StrategyMode.SCALPING]: {
     label: "SCALPING",
-    tip: "Ātrā 10s versija: EMA/MACD/stoch confluence (cita loģika nekā EMA 1/3 TICK)",
+    tip: "Ātrais 10s · auto ciešs trail uzreiz pēc entry · bez TP picker (mode/tirgu vari mainīt jebkurā brīdī)",
   },
   [StrategyMode.TREND]: {
     label: "TREND",
@@ -690,28 +718,45 @@ export default function ClientPortalPage() {
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
           <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">EXIT</p>
-          {mode === StrategyMode.EMA_TICK_SCALP ? (
-            <p className="text-[11px] leading-snug text-[#8aa3b8]">
-              EMA tick: SL/trail no EMA3, BE pie 1R, close uz pretējo krustojumu — exit preset nav vajadzīgs.
-            </p>
-          ) : null}
-          <div className={`space-y-1.5 ${mode === StrategyMode.EMA_TICK_SCALP ? "mt-2 opacity-50" : ""}`}>
-            {(Object.keys(EXITS) as ExitVersion[]).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setExit(k)}
-                className={`flex w-full items-center justify-between border px-3 py-3 text-left ${
-                  exit === k ? "border-[#00f0ff] bg-[#0e1a24]" : "border-[#1a2a3a]"
-                }`}
-              >
-                <span className={`text-[13px] ${exit === k ? "text-[#e8f7ff]" : "text-[#8aa3b8]"}`}>
-                  {EXITS[k].label}
-                </span>
-                <span className="font-mono text-[10px] text-[#5c6d80]">{EXITS[k].hint}</span>
-              </button>
-            ))}
-          </div>
+          {modeHidesExitPickers(mode) ? (
+            <div className="space-y-1.5 text-[11px] leading-snug text-[#8aa3b8]">
+              {mode === StrategyMode.SCALPING ? (
+                <>
+                  <p className="text-[#7af6ff]">AUTO · SCALPING 10s</p>
+                  <p>
+                    Bez TP picker. Pēc entry uzreiz ciešs trailing (≈ min stop) + BE.
+                    Mode un tirgu vari mainīt jebkurā brīdī → SAVE / START.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[#7af6ff]">AUTO · EMA 1/3 TICK</p>
+                  <p>
+                    SL/trail no EMA3, BE pie 1R, close uz pretējo krustojumu — manuāls exit
+                    nav vajadzīgs.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {(Object.keys(EXITS) as ExitVersion[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setExit(k)}
+                  className={`flex w-full items-center justify-between border px-3 py-3 text-left ${
+                    exit === k ? "border-[#00f0ff] bg-[#0e1a24]" : "border-[#1a2a3a]"
+                  }`}
+                >
+                  <span className={`text-[13px] ${exit === k ? "text-[#e8f7ff]" : "text-[#8aa3b8]"}`}>
+                    {EXITS[k].label}
+                  </span>
+                  <span className="font-mono text-[10px] text-[#5c6d80]">{EXITS[k].hint}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </section>
 
         {error ? <p className="text-[13px] text-[#ff2d55]">{error}</p> : null}

@@ -9,6 +9,7 @@ import {
   modePreferredTimeframe,
   modeMarketProfile,
   modeUses1mTiming,
+  modeAutoExit,
   tfMinutes,
   type StrategyTimeframe,
 } from "@nexus/domain";
@@ -776,8 +777,28 @@ export class StrategiesService {
 
     const displayName = `${account.name} · ${input.mode}`.slice(0, 120);
     const cfgIn = input.configuration as Record<string, unknown>;
+    const auto = modeAutoExit(input.mode);
     const configuration = {
       ...input.configuration,
+      ...(auto
+        ? {
+            takeProfitEnabled: auto.takeProfitEnabled,
+            breakEvenEnabled: auto.breakEvenEnabled,
+            breakEvenActivationPips: auto.breakEvenActivationPips,
+            breakEvenOffsetPips: auto.breakEvenOffsetPips,
+            trailingEnabled: auto.trailingEnabled,
+            trailingDistancePips: auto.trailingDistancePips,
+            trailingActivationPips: auto.trailingActivationPips,
+            trailArmImmediate: auto.trailArmImmediate,
+            priceOffsetMode: auto.priceOffsetMode,
+            atrStopMult: auto.atrStopMult,
+            atrTpMult: auto.atrTpMult,
+            stopDistancePips: auto.stopDistancePips,
+            cooldownSeconds: auto.cooldownSeconds,
+            exitVersion: auto.exitVersion,
+            timeframe: modePreferredTimeframe(input.mode),
+          }
+        : {}),
       oneTradeOnly: cfgIn.oneTradeOnly !== false,
       // Flip BUY↔SELL allowed unless explicitly disabled
       closeOnlyNoFlip: cfgIn.closeOnlyNoFlip === true,
@@ -878,6 +899,12 @@ export class StrategiesService {
     const beOffPips = Number(config.breakEvenOffsetPips ?? 1);
     const trailPips = Number(config.trailingDistancePips ?? 15);
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
+    const priceOffset =
+      config.priceOffsetMode === true ||
+      config.timeframe === "10s" ||
+      (beActPips > 0 && beActPips < 1) ||
+      (trailPips > 0 && trailPips < 1);
+    const trailImmediate = config.trailArmImmediate === true;
 
     for (const pos of open) {
       // Never overwrite manual trades that belong to another strategy
@@ -886,10 +913,15 @@ export class StrategiesService {
       const entry = Number(pos.averageEntry);
       const pip = instrumentPipSize(pos.symbol);
       const minDist = minProtectiveDistance(pos.symbol, entry);
-      // BE activation = user pips; trail distance floored for Capital min-stop on SL moves
-      const beAct = Math.max(pip * Math.max(beActPips, 0.01), pip * 0.1);
-      const beOff = Math.max(pip * Math.max(beOffPips, 0), pip);
-      const trail = Math.max(pip * Math.max(trailPips, 0.01), minDist);
+      const beAct = priceOffset
+        ? Math.max(beActPips, pip * 0.1)
+        : Math.max(pip * Math.max(beActPips, 0.01), pip * 0.1);
+      const beOff = priceOffset
+        ? Math.max(beOffPips, pip)
+        : Math.max(pip * Math.max(beOffPips, 0), pip);
+      const trail = priceOffset
+        ? Math.max(trailPips, minDist)
+        : Math.max(pip * Math.max(trailPips, 0.01), minDist);
 
       await this.prisma.position.update({
         where: { id: pos.id },
@@ -900,8 +932,11 @@ export class StrategiesService {
           breakEvenOffset: beEnabled ? beOff.toFixed(8) : null,
           trailingEnabled: trailEnabled,
           trailingDistance: trailEnabled ? trail.toFixed(8) : null,
-          // Delayed arm — do not set trailingActivatedAt; autoManage arms after threshold
-          ...(trailEnabled ? {} : { trailingActivatedAt: null }),
+          ...(trailEnabled && trailImmediate
+            ? { trailingActivatedAt: new Date() }
+            : trailEnabled
+              ? {}
+              : { trailingActivatedAt: null }),
         },
       });
 

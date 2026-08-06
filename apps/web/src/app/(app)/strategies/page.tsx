@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useAccounts, useStrategies } from "@/lib/hooks";
 import type { Strategy, TradingAccount } from "@/lib/types";
-import { StrategyMode, modePreferredTimeframe } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers } from "@nexus/domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -261,7 +261,41 @@ function buildConfiguration(d: AccountDraft) {
   const lot = Number(d.lotSize);
   const volume =
     Number.isFinite(lot) && lot > 0 ? String(lot) : "0.01";
-  const isEmaTick = d.mode === StrategyMode.EMA_TICK_SCALP;
+  const auto = modeAutoExit(d.mode);
+  if (auto) {
+    return {
+      timeframe: modePreferredTimeframe(d.mode),
+      riskPercent: Number(d.riskPercent) || 0.5,
+      useRiskPercent: d.sizeMode === "RISK",
+      volume,
+      oneTradeOnly: true,
+      closeOnlyNoFlip: false,
+      autoAggressive: false,
+      sessionFilter: d.mode === StrategyMode.SESSION,
+      minScore: modeMinScoreClient(d.mode),
+      atrStopMult: auto.atrStopMult,
+      atrTpMult: auto.atrTpMult,
+      takeProfitEnabled: auto.takeProfitEnabled,
+      takeProfitMode: "SINGLE" as const,
+      multiTpCount: 3,
+      stopDistancePips: auto.stopDistancePips,
+      newsFilterEnabled: d.newsFilterEnabled,
+      newsMinutesBefore: Math.max(0, Number(d.newsMinutesBefore) || 30),
+      newsMinutesAfter: Math.max(0, Number(d.newsMinutesAfter) || 15),
+      newsMinImpact: "High",
+      breakEvenEnabled: auto.breakEvenEnabled,
+      breakEvenActivationPips: auto.breakEvenActivationPips,
+      breakEvenOffsetPips: auto.breakEvenOffsetPips,
+      trailingEnabled: auto.trailingEnabled,
+      trailingDistancePips: auto.trailingDistancePips,
+      trailingActivationPips: auto.trailingActivationPips,
+      trailArmImmediate: auto.trailArmImmediate,
+      priceOffsetMode: auto.priceOffsetMode,
+      exitVersion: auto.exitVersion,
+      minAdx: 14,
+      cooldownSeconds: auto.cooldownSeconds,
+    };
+  }
   return {
     timeframe: modePreferredTimeframe(d.mode),
     riskPercent: Number(d.riskPercent) || 0.5,
@@ -274,7 +308,7 @@ function buildConfiguration(d: AccountDraft) {
     minScore: modeMinScoreClient(d.mode),
     atrStopMult: Number(d.atrStopMult) || 1.0,
     atrTpMult: Number(d.atrTpMult) || 2.2,
-    takeProfitEnabled: isEmaTick ? false : d.tpEnabled,
+    takeProfitEnabled: d.tpEnabled,
     takeProfitMode: d.tpMode,
     multiTpCount: Math.max(2, Math.min(10, Math.floor(Number(d.multiTpCount) || 3))),
     stopDistancePips: (() => {
@@ -289,14 +323,14 @@ function buildConfiguration(d: AccountDraft) {
     newsMinutesBefore: Math.max(0, Number(d.newsMinutesBefore) || 30),
     newsMinutesAfter: Math.max(0, Number(d.newsMinutesAfter) || 15),
     newsMinImpact: "High",
-    breakEvenEnabled: isEmaTick ? true : d.beEnabled,
+    breakEvenEnabled: d.beEnabled,
     breakEvenActivationPips: Number.isFinite(Number(d.beActivationPips))
       ? Number(d.beActivationPips)
       : 10,
     breakEvenOffsetPips: Number.isFinite(Number(d.beOffsetPips))
       ? Number(d.beOffsetPips)
       : 1,
-    trailingEnabled: isEmaTick ? false : d.trailEnabled,
+    trailingEnabled: d.trailEnabled,
     trailingDistancePips: Number.isFinite(Number(d.trailPips))
       ? Number(d.trailPips)
       : 15,
@@ -307,7 +341,7 @@ function buildConfiguration(d: AccountDraft) {
         : 15,
     exitVersion: d.exitVersion,
     minAdx: 14,
-    cooldownSeconds: isEmaTick ? 15 : 30,
+    cooldownSeconds: 30,
   };
 }
 
@@ -609,43 +643,46 @@ export default function StrategiesPage() {
                   <p className="mt-1 text-[11px] text-white/35">
                     {draft.mode === StrategyMode.EMA_TICK_SCALP
                       ? "EMA 1/3 TICK ≠ SCALPING · svaigs krustojums · exit caur EMA3 · trail · BE 1R"
-                      : `TF = ${modePreferredTimeframe(draft.mode)} (kā jālasa tirgus šim režīmam)`}
+                      : draft.mode === StrategyMode.SCALPING
+                        ? "SCALPING 10s AUTO — ciešs trail uzreiz pēc entry, bez TP picker"
+                        : `TF = ${modePreferredTimeframe(draft.mode)} (kā jālasa tirgus šim režīmam)`}
                   </p>
                 </Field>
 
                 <Field label="Exit versija">
-                  <Select
-                    value={draft.exitVersion}
-                    onChange={(e) =>
-                      applyExitVersion(account.id, e.target.value as ExitVersion)
-                    }
-                    disabled={draft.mode === StrategyMode.EMA_TICK_SCALP}
-                  >
-                    <option value="SCALP">SCALP — TP+BE+Trail (ciešs)</option>
-                    <option value="SWING">SWING — TP+BE</option>
-                    <option value="RUNNER">RUNNER — BE+Trail (bez TP)</option>
-                    <option value="CUSTOM">CUSTOM — manuāli</option>
-                  </Select>
-                  {draft.mode === StrategyMode.EMA_TICK_SCALP ? (
-                    <p className="mt-1 text-[11px] text-accent-soft/70">
-                      EMA tick: exit no EMA3 / pretējā krustojuma — preset nav vajadzīgs
-                    </p>
-                  ) : null}
+                  {modeHidesExitPickers(draft.mode) ? (
+                    <div className="rounded-md border border-accent/25 bg-accent/5 px-3 py-2 text-[12px] text-accent-soft/90">
+                      {draft.mode === StrategyMode.SCALPING
+                        ? "AUTO: ciešs trailing + BE (TP off). Mode/tirgu maini brīvi → SAVE/START."
+                        : "AUTO: EMA3 trail / cross exit / BE 1R — manuāls exit nav."}
+                    </div>
+                  ) : (
+                    <Select
+                      value={draft.exitVersion}
+                      onChange={(e) =>
+                        applyExitVersion(account.id, e.target.value as ExitVersion)
+                      }
+                    >
+                      <option value="SCALP">SCALP — TP+BE+Trail (ciešs)</option>
+                      <option value="SWING">SWING — TP+BE</option>
+                      <option value="RUNNER">RUNNER — BE+Trail (bez TP)</option>
+                      <option value="CUSTOM">CUSTOM — manuāli</option>
+                    </Select>
+                  )}
                 </Field>
 
+                {!modeHidesExitPickers(draft.mode) ? (
                 <div className="flex items-end gap-2">
                   <Button
                     size="sm"
                     variant="secondary"
                     onClick={() => {
-                      // Apply a dedicated Scalp Exit quick preset: use existing per-account settings when present, otherwise defaults
                         const cur = drafts[account.id] ?? defaultDraft(preferredEpic);
                         patchDraft(account.id, {
                           exitVersion: "SCALP",
                           tpEnabled: true,
                           beEnabled: true,
                           trailEnabled: true,
-                          // Preserve user's existing values if set, otherwise apply scalp defaults
                           trailActPips: cur.trailActPips ? cur.trailActPips : "0.01",
                           trailPips: cur.trailPips ? cur.trailPips : "0.05",
                           stopDistancePips: cur.stopDistancePips ? cur.stopDistancePips : "0.10",
@@ -657,6 +694,7 @@ export default function StrategiesPage() {
                     Scalp Exit
                   </Button>
                 </div>
+                ) : null}
 
                 <Field label="Tirgus (epic šim kontam)">
                   <Select
@@ -747,6 +785,7 @@ export default function StrategiesPage() {
                 )}
               </div>
 
+              {!modeHidesExitPickers(draft.mode) ? (
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <div className="space-y-2 rounded-md border border-white/[0.06] p-3">
                   <Toggle
@@ -1001,6 +1040,13 @@ export default function StrategiesPage() {
                   ) : null}
                 </div>
               </div>
+              ) : (
+                <div className="mt-3 rounded-md border border-accent/25 bg-accent/5 px-3 py-3 text-[12px] text-white/70">
+                  {draft.mode === StrategyMode.SCALPING
+                    ? "Exit AUTO: TP off · BE on · trail ciešs un aktivizējas uzreiz pēc fill. Maini tikai mode / epic / lot."
+                    : "Exit AUTO (EMA 1/3): TP off · BE 1R · trail uz EMA3 · exit pretējā cross."}
+                </div>
+              )}
 
               <div className="mt-4 flex flex-wrap gap-2">
                 {running ? (

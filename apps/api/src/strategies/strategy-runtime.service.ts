@@ -7,6 +7,7 @@ import {
   StrategyMode,
   VolumeMode,
   modePreferredTimeframe,
+  modeAutoExit,
 } from "@nexus/domain";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { d, newId, instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, buildEqualMultiTpPlan } from "@nexus/shared";
@@ -228,10 +229,17 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const trailingEnabled = Boolean(config.trailingEnabled);
     const mode = strategy.mode as StrategyMode;
     // EMA tick: min 15s between entries so price oscillating around EMA3 cannot chop
+    // SCALPING 10s: faster re-entry (auto exit config)
+    const autoExit = modeAutoExit(mode);
     const cooldownMs =
       mode === StrategyMode.EMA_TICK_SCALP
         ? Math.max((config.cooldownSeconds ?? 15) * 1000, 15_000)
-        : (config.cooldownSeconds ?? 30) * 1000;
+        : mode === StrategyMode.SCALPING
+          ? Math.max(
+              (config.cooldownSeconds ?? autoExit?.cooldownSeconds ?? 10) * 1000,
+              8_000,
+            )
+          : (config.cooldownSeconds ?? 30) * 1000;
     // Per-mode default score bar (10/10 spec); user override only if explicitly lower quality intent
     let minScore = config.minScore ?? modeMinScore(mode);
     if (config.minScore == null) minScore = modeMinScore(mode);
@@ -294,6 +302,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       let m1Source: string | undefined;
       let ind = computeIndicators(candles);
       const isEmaTickScalp = mode === StrategyMode.EMA_TICK_SCALP;
+      const isClassicScalping = mode === StrategyMode.SCALPING;
+      const scalpAuto = isClassicScalping ? modeAutoExit(StrategyMode.SCALPING) : null;
       if (timeframe === "10s" && !isEmaTickScalp) {
         m1 = await this.market.getCandles(brokerSymbol, "1m", 60);
         m1Source = this.market.getCandleSource(brokerSymbol, "1m");
@@ -867,8 +877,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         tpDist = Math.max(tpDist, pip * 2);
 
         const entryLot = Number(config.volume ?? "0.01");
-        // EMA tick scalp exits via cross / EMA3 / trail — no fixed TP by default
-        const useTp = isEmaTickScalp ? false : takeProfitEnabled;
+        // EMA: no fixed TP. SCALPING auto: no TP — tight trail is the exit.
+        const useTp = isEmaTickScalp || isClassicScalping ? false : takeProfitEnabled;
         let takeProfit: string | undefined;
         let takeProfits:
           | Array<{ price: string; closePercent: number }>
@@ -926,35 +936,64 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 );
         }
 
-        const beActivationPips = Number(config.breakEvenActivationPips ?? 10);
-        const beOffsetPips = Number(config.breakEvenOffsetPips ?? 1);
-        const trailPips = Number(config.trailingDistancePips ?? 15);
-        // For 10s scalping treat user-supplied BE/trail values as direct price offsets
+        const beActivationPips = Number(
+          config.breakEvenActivationPips ?? scalpAuto?.breakEvenActivationPips ?? 10,
+        );
+        const beOffsetPips = Number(
+          config.breakEvenOffsetPips ?? scalpAuto?.breakEvenOffsetPips ?? 1,
+        );
+        const trailPips = Number(
+          config.trailingDistancePips ?? scalpAuto?.trailingDistancePips ?? 15,
+        );
+        const trailActPips = Number(
+          config.trailingActivationPips ?? scalpAuto?.trailingActivationPips ?? trailPips,
+        );
         let beActDist: number;
         let beOffDist: number;
         let trailDist: number;
-        // EMA tick scalp: BE when profit = initial risk (1R); trail is EMA3 (software)
-        const useBe = isEmaTickScalp ? true : breakEvenEnabled;
-        const useDistTrail = isEmaTickScalp ? false : trailingEnabled;
+        // EMA: BE at 1R, EMA3 trail (software). SCALPING: force tight distance trail + BE.
+        const useBe =
+          isEmaTickScalp || isClassicScalping ? true : breakEvenEnabled;
+        const useDistTrail = isEmaTickScalp
+          ? false
+          : isClassicScalping
+            ? true
+            : trailingEnabled;
+        const trailArmImmediate =
+          isClassicScalping && (scalpAuto?.trailArmImmediate ?? true);
         if (isEmaTickScalp) {
           beActDist = Math.max(stopDist, pip * 0.1);
           beOffDist = pip;
           trailDist = 0;
-        } else if (timeframe === "10s") {
+        } else if (isClassicScalping || timeframe === "10s") {
+          // Price offsets — clamp trail to Capital min stop (very tight)
           beActDist = Math.max(beActivationPips, pip * 0.1);
           beOffDist = Math.max(beOffsetPips, pip);
-          trailDist = Math.max(trailPips, minDist);
+          trailDist = Math.max(
+            isClassicScalping
+              ? Math.min(Math.max(trailPips, pip), Math.max(minDist, 0.5))
+              : trailPips,
+            minDist,
+          );
+          if (isClassicScalping) {
+            // Force tightest acceptable trail on GOLD/indices
+            trailDist = Math.max(minDist, Math.min(trailDist, Math.max(minDist, 0.5)));
+          }
         } else {
-          // Activation uses user pips — allow direct price offsets when <1
-          beActDist = (beActivationPips > 0 && beActivationPips < 1)
-            ? Math.max(beActivationPips, pip * 0.1)
-            : Math.max(pip * beActivationPips, pip * 0.1);
-          beOffDist = (beOffsetPips > 0 && beOffsetPips < 1)
-            ? Math.max(beOffsetPips, pip)
-            : Math.max(pip * beOffsetPips, pip);
-          // Trail SL distance still floored so Capital accepts modifyPosition; allow price offset when <1
-          trailDist = (trailPips > 0 && trailPips < 1) ? Math.max(trailPips, minDist) : Math.max(pip * trailPips, minDist);
+          beActDist =
+            beActivationPips > 0 && beActivationPips < 1
+              ? Math.max(beActivationPips, pip * 0.1)
+              : Math.max(pip * beActivationPips, pip * 0.1);
+          beOffDist =
+            beOffsetPips > 0 && beOffsetPips < 1
+              ? Math.max(beOffsetPips, pip)
+              : Math.max(pip * beOffsetPips, pip);
+          trailDist =
+            trailPips > 0 && trailPips < 1
+              ? Math.max(trailPips, minDist)
+              : Math.max(pip * trailPips, minDist);
         }
+        void trailActPips;
 
         const account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
@@ -1072,9 +1111,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 breakEvenOffset: useBe ? beOffDist.toFixed(8) : null,
                 trailingEnabled: useDistTrail,
                 trailingDistance: useDistTrail ? trailDist.toFixed(8) : null,
+                // SCALPING: arm trail immediately on fill ("sāk iet + sākas trailing")
+                ...(useDistTrail && trailArmImmediate
+                  ? { trailingActivatedAt: new Date() }
+                  : {}),
               },
             });
-            // Static SL/TP on fill — trail arms after activation pips (autoManage)
+            // Static SL/TP on fill — trail arms after activation (or immediately if SCALPING)
             try {
               await this.positions.modifySlTp(
                 strategy.organizationId,
@@ -1087,7 +1130,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 correlationId,
                 { silent: true },
               );
-              // Do NOT set trailingActivatedAt here — wait for arm threshold
+              // Immediate tight trail for classic SCALPING
+              if (useDistTrail && trailArmImmediate) {
+                const dir = signal;
+                const trailSl =
+                  dir === "BUY"
+                    ? formatInstrumentPrice(brokerSymbol, entry - trailDist)
+                    : formatInstrumentPrice(brokerSymbol, entry + trailDist);
+                await this.positions.modifySlTp(
+                  strategy.organizationId,
+                  actorId,
+                  child.position.id,
+                  { stopLoss: trailSl },
+                  correlationId,
+                  { silent: true },
+                );
+              }
             } catch (attachErr) {
               this.log.warn(
                 `Post-fill SL/TP attach failed: ${

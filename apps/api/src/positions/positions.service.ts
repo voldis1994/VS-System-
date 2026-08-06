@@ -798,12 +798,23 @@ export class PositionsService {
             const cfg = (strategy?.configurationJson ?? {}) as {
               trailingActivationPips?: number;
               trailingDistancePips?: number;
+              priceOffsetMode?: boolean;
+              timeframe?: string;
+              trailArmImmediate?: boolean;
             };
             armThreshold = trailingArmThreshold(position.symbol, {
               trailingDistance: distance,
               trailingActivationPips: cfg.trailingActivationPips,
               trailingDistancePips: cfg.trailingDistancePips,
+              priceOffsetMode:
+                cfg.priceOffsetMode === true ||
+                cfg.timeframe === "10s" ||
+                cfg.trailArmImmediate === true,
             });
+            // Immediate-arm modes (SCALPING): treat as already past threshold
+            if (cfg.trailArmImmediate === true) {
+              armThreshold = 0;
+            }
           }
           const armed =
             fresh.trailingActivatedAt != null || favorable >= armThreshold;
