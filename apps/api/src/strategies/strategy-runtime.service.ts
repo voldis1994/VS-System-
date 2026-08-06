@@ -27,6 +27,7 @@ import {
   computeIndicators,
   evaluateStrategyMode,
   modeMinScore,
+  applyEmaTickLivePrice,
 } from "./strategy-engine";
 
 type Signal = "BUY" | "SELL" | "CLOSE" | "HOLD";
@@ -37,6 +38,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private readonly lastSignalAt = new Map<string, number>();
   private readonly lastFingerprint = new Map<string, string>();
+  /** EMA_TICK_SCALP: last price side vs EMA3 per strategy:symbol — fresh-cross edge only */
+  private readonly emaSideByKey = new Map<string, "above" | "below">();
   private ticking = false;
 
   constructor(
@@ -57,6 +60,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         this.lastSignalAt.delete(key);
         this.lastFingerprint.delete(key);
       }
+    }
+    for (const key of [...this.emaSideByKey.keys()]) {
+      if (key.startsWith(`${strategyId}:`)) this.emaSideByKey.delete(key);
     }
   }
 
@@ -208,7 +214,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       newsMinutesAfter?: number;
       newsMinImpact?: "Medium" | "High";
     };
-    const cooldownMs = (config.cooldownSeconds ?? 30) * 1000;
     const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
     const correlationId = newId();
     const atrStopMult = config.atrStopMult ?? 1.0;
@@ -217,6 +222,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const breakEvenEnabled = Boolean(config.breakEvenEnabled);
     const trailingEnabled = Boolean(config.trailingEnabled);
     const mode = strategy.mode as StrategyMode;
+    // EMA tick: min 15s between entries so price oscillating around EMA3 cannot chop
+    const cooldownMs =
+      mode === StrategyMode.EMA_TICK_SCALP
+        ? Math.max((config.cooldownSeconds ?? 15) * 1000, 15_000)
+        : (config.cooldownSeconds ?? 30) * 1000;
     // Per-mode default score bar (10/10 spec); user override only if explicitly lower quality intent
     let minScore = config.minScore ?? modeMinScore(mode);
     if (config.minScore == null) minScore = modeMinScore(mode);
@@ -328,18 +338,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // Tick-reactive price (and EMA1≈price) — do not wait for candle close
+      // Tick-reactive: live mid as forming EMA1/price; keep candle ema1Prev/ema3Prev (no tick-churn)
       if (isEmaTickScalp) {
         const live = this.market.getTick(brokerSymbol);
         if (live) {
           const mid = (Number(live.bid) + Number(live.ask)) / 2;
           if (Number.isFinite(mid) && mid > 0) {
-            ind = {
-              ...ind,
-              price: mid,
-              ema1Prev: ind.ema1,
-              ema1: mid,
-            };
+            ind = applyEmaTickLivePrice(ind, candles, mid);
           }
         }
       }
@@ -362,6 +367,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      const emaSideKey = `${strategy.id}:${brokerSymbol}`;
+      const prevEmaSide = isEmaTickScalp
+        ? (this.emaSideByKey.get(emaSideKey) ?? null)
+        : null;
       const lastBar = candles[candles.length - 1] as {
         closeTime?: Date | string;
         openTime?: Date | string;
@@ -375,8 +384,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           hasOpenBuy,
           hasOpenSell,
           at: lastBar?.closeTime ?? lastBar?.openTime ?? new Date(),
+          prevEmaSide,
         },
       );
+      // Always advance EMA side latch after scoring (even on HOLD) so next tick can edge-detect
+      if (isEmaTickScalp && Number.isFinite(ind.ema3) && ind.ema3 > 0) {
+        this.emaSideByKey.set(
+          emaSideKey,
+          ind.price >= ind.ema3 ? "above" : "below",
+        );
+      }
 
       // 1m×5 timing + candle bias (same rules as TF filter)
       const m1candles = m1 ?? (await this.market.getCandles(brokerSymbol, "1m", 30));
@@ -490,6 +507,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       if (scored.signal === "CLOSE") {
         lastStatus = { ...lastStatus, signal: "CLOSE", gate: scored.gate };
         for (const accountId of accountIds) {
+          // After EMA exit, enforce cooldown before any new fresh-cross entry
+          if (isEmaTickScalp) {
+            this.lastSignalAt.set(
+              `${strategy.id}:${accountId}:${brokerSymbol}`,
+              Date.now(),
+            );
+            this.lastFingerprint.delete(
+              `${strategy.id}:${accountId}:${brokerSymbol}`,
+            );
+          }
           const openOnSymbol = await this.prisma.position.findMany({
             where: {
               organizationId: strategy.organizationId,
@@ -756,16 +783,17 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         let stopDist: number;
         let stopLoss: string;
         if (isEmaTickScalp) {
-          // BUY: SL below EMA3 or prev low; SELL: above EMA3 or prev high
+          // Absolute SL at EMA3 or prev swing — not a recycled SCALPING pip offset
           const rawStop =
             signal === "BUY"
               ? Math.min(ind.ema3, ind.prevLow)
               : Math.max(ind.ema3, ind.prevHigh);
-          stopDist = Math.max(Math.abs(entry - rawStop), minDist, pip);
-          stopLoss =
+          const clamped =
             signal === "BUY"
-              ? formatInstrumentPrice(brokerSymbol, entry - stopDist)
-              : formatInstrumentPrice(brokerSymbol, entry + stopDist);
+              ? Math.min(rawStop, entry - minDist)
+              : Math.max(rawStop, entry + minDist);
+          stopDist = Math.max(Math.abs(entry - clamped), minDist, pip);
+          stopLoss = formatInstrumentPrice(brokerSymbol, clamped);
         } else if (config.stopDistancePips != null) {
           const v = Number(config.stopDistancePips);
           if (timeframe === "10s") {

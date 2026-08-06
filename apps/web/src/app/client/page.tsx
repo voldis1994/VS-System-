@@ -179,7 +179,7 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
     trailingActivationPips: Number(e.trailActPips),
     exitVersion: input.exit,
     newsFilterEnabled: false,
-    cooldownSeconds: isEmaTick ? 5 : 30,
+    cooldownSeconds: isEmaTick ? 15 : 30,
   };
 }
 
@@ -189,11 +189,11 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
-    tip: "10s · EMA1×EMA3 krustojums · trail uz EMA3 · BE pie 1R · bez sveces aizvēršanās",
+    tip: "Atsevišķs režīms: tikai svaigs EMA1×EMA3 krustojums + divergence · exit caur EMA3 · trail EMA3 · BE pie 1R (nav SCALPING)",
   },
   [StrategyMode.SCALPING]: {
     label: "SCALPING",
-    tip: "Ātrs 10s scalp ar EMA/MACD/stoch confluence",
+    tip: "Ātrā 10s versija: EMA/MACD/stoch confluence (cita loģika nekā EMA 1/3 TICK)",
   },
   [StrategyMode.TREND]: {
     label: "TREND",

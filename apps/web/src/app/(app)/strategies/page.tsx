@@ -261,6 +261,7 @@ function buildConfiguration(d: AccountDraft) {
   const lot = Number(d.lotSize);
   const volume =
     Number.isFinite(lot) && lot > 0 ? String(lot) : "0.01";
+  const isEmaTick = d.mode === StrategyMode.EMA_TICK_SCALP;
   return {
     timeframe: modePreferredTimeframe(d.mode),
     riskPercent: Number(d.riskPercent) || 0.5,
@@ -273,7 +274,7 @@ function buildConfiguration(d: AccountDraft) {
     minScore: modeMinScoreClient(d.mode),
     atrStopMult: Number(d.atrStopMult) || 1.0,
     atrTpMult: Number(d.atrTpMult) || 2.2,
-    takeProfitEnabled: d.tpEnabled,
+    takeProfitEnabled: isEmaTick ? false : d.tpEnabled,
     takeProfitMode: d.tpMode,
     multiTpCount: Math.max(2, Math.min(10, Math.floor(Number(d.multiTpCount) || 3))),
     stopDistancePips: (() => {
@@ -288,14 +289,14 @@ function buildConfiguration(d: AccountDraft) {
     newsMinutesBefore: Math.max(0, Number(d.newsMinutesBefore) || 30),
     newsMinutesAfter: Math.max(0, Number(d.newsMinutesAfter) || 15),
     newsMinImpact: "High",
-    breakEvenEnabled: d.beEnabled,
+    breakEvenEnabled: isEmaTick ? true : d.beEnabled,
     breakEvenActivationPips: Number.isFinite(Number(d.beActivationPips))
       ? Number(d.beActivationPips)
       : 10,
     breakEvenOffsetPips: Number.isFinite(Number(d.beOffsetPips))
       ? Number(d.beOffsetPips)
       : 1,
-    trailingEnabled: d.trailEnabled,
+    trailingEnabled: isEmaTick ? false : d.trailEnabled,
     trailingDistancePips: Number.isFinite(Number(d.trailPips))
       ? Number(d.trailPips)
       : 15,
@@ -306,7 +307,7 @@ function buildConfiguration(d: AccountDraft) {
         : 15,
     exitVersion: d.exitVersion,
     minAdx: 14,
-    cooldownSeconds: 30,
+    cooldownSeconds: isEmaTick ? 15 : 30,
   };
 }
 
@@ -607,7 +608,7 @@ export default function StrategiesPage() {
                   </Select>
                   <p className="mt-1 text-[11px] text-white/35">
                     {draft.mode === StrategyMode.EMA_TICK_SCALP
-                      ? "10s · EMA1×EMA3 tick scalp · trail EMA3 · BE 1R"
+                      ? "EMA 1/3 TICK ≠ SCALPING · svaigs krustojums · exit caur EMA3 · trail · BE 1R"
                       : `TF = ${modePreferredTimeframe(draft.mode)} (kā jālasa tirgus šim režīmam)`}
                   </p>
                 </Field>
