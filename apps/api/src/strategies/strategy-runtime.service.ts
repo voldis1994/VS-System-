@@ -9,7 +9,7 @@ import {
   modePreferredTimeframe,
   modeAutoExit,
 } from "@nexus/domain";
-import { resolveCapitalEpic } from "@nexus/broker-adapters";
+import { resolveCapitalEpic, isCapitalSizeError, capitalSizeErrorHint } from "@nexus/broker-adapters";
 import { d, newId, instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, buildEqualMultiTpPlan } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -43,6 +43,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   private readonly emaSideByKey = new Map<string, "above" | "below">();
   /** EMA_TICK_SCALP: which cross generation already taken (anti-chop on same window) */
   private readonly emaCrossConsumed = new Map<string, string>();
+  /** After Capital size reject — pause retries so alerts don't spam */
+  private readonly sizeRejectUntil = new Map<string, number>();
   private ticking = false;
 
   constructor(
@@ -69,6 +71,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
     for (const key of [...this.emaCrossConsumed.keys()]) {
       if (key.startsWith(`${strategyId}:`)) this.emaCrossConsumed.delete(key);
+    }
+    for (const key of [...this.sizeRejectUntil.keys()]) {
+      if (key.startsWith(`${strategyId}:`)) this.sizeRejectUntil.delete(key);
     }
   }
 
@@ -714,6 +719,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           };
           continue;
         }
+        const sizeBlockedUntil = this.sizeRejectUntil.get(key) ?? 0;
+        if (sizeBlockedUntil > Date.now()) {
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            signal,
+            skip: "capital_size_invalid",
+            cooldownSec: Math.ceil((sizeBlockedUntil - Date.now()) / 1000),
+            error: capitalSizeErrorHint(
+              brokerSymbol,
+              String(config.volume ?? "0.01"),
+            ),
+            accountId,
+          };
+          continue;
+        }
         if (this.lastFingerprint.get(key) === fingerprint) {
           const openSame = await this.prisma.position.count({
             where: {
@@ -1187,11 +1208,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           } else {
             const msg = child?.message ?? "order not accepted";
             this.log.warn(`Strategy order failed: ${msg}`);
+            if (isCapitalSizeError(msg) || /CAPITAL_SIZE_INVALID/i.test(msg)) {
+              this.sizeRejectUntil.set(key, Date.now() + 10 * 60_000);
+              this.lastSignalAt.set(key, Date.now());
+            }
             await this.notifications.create({
               organizationId: strategy.organizationId,
               userId: actorId === "system" ? null : actorId,
               title: "Strategy order failed",
-              body: `${strategy.name} ${brokerSymbol}: ${msg}`,
+              body: `${strategy.name} ${brokerSymbol}: ${
+                isCapitalSizeError(msg)
+                  ? capitalSizeErrorHint(
+                      brokerSymbol,
+                      String(config.volume ?? "0.01"),
+                    )
+                  : msg
+              }`,
               severity: "WARNING",
             });
             lastStatus = { ...lastStatus, placed: false, error: msg };
@@ -1199,11 +1231,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         } catch (err) {
           const msg = err instanceof Error ? err.message : "order error";
           this.log.error(`Strategy place threw: ${msg}`);
+          if (isCapitalSizeError(msg) || /CAPITAL_SIZE_INVALID/i.test(msg)) {
+            this.sizeRejectUntil.set(key, Date.now() + 10 * 60_000);
+            this.lastSignalAt.set(key, Date.now());
+          }
           await this.notifications.create({
             organizationId: strategy.organizationId,
             userId: actorId === "system" ? null : actorId,
             title: "Strategy order error",
-            body: `${strategy.name} ${brokerSymbol}: ${msg}`,
+            body: `${strategy.name} ${brokerSymbol}: ${
+              isCapitalSizeError(msg)
+                ? capitalSizeErrorHint(
+                    brokerSymbol,
+                    String(config.volume ?? "0.01"),
+                  )
+                : msg
+            }`,
             severity: "CRITICAL",
           });
           lastStatus = { ...lastStatus, placed: false, error: msg };

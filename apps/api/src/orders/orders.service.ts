@@ -9,6 +9,7 @@ import {
   VolumeMode,
 } from "@nexus/domain";
 import { d, newId, splitVolumeIntoSteps } from "@nexus/shared";
+import { capitalDealRulesFallback, isCapitalSizeError, capitalSizeErrorHint } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
@@ -139,6 +140,10 @@ export class OrdersService {
       // Auto-register Capital/manual epics so strategies can trade without Sync first
       const epic = input.symbol.trim();
       const fx = /^[A-Z]{6}$/.test(epic);
+      const rules =
+        account.provider === "CAPITAL"
+          ? capitalDealRulesFallback(epic)
+          : { minSize: 0.01, maxSize: 500, step: 0.01 };
       symbol = await this.prisma.symbol.create({
         data: {
           organizationId,
@@ -149,10 +154,10 @@ export class OrdersService {
           baseAsset: fx ? epic.slice(0, 3) : epic,
           quoteAsset: fx ? epic.slice(3) : "USD",
           pricePrecision: fx ? 5 : 2,
-          volumePrecision: 2,
-          minVolume: "0.01",
-          maxVolume: "500",
-          volumeStep: "0.01",
+          volumePrecision: rules.step < 0.01 ? 3 : 2,
+          minVolume: String(rules.minSize),
+          maxVolume: String(rules.maxSize),
+          volumeStep: String(rules.step),
           tickSize: fx ? "0.00001" : "0.01",
           tickValue: "1",
           contractSize: "1",
@@ -161,6 +166,23 @@ export class OrdersService {
           active: true,
         },
       });
+    } else if (
+      account.provider === "CAPITAL" &&
+      String(symbol.minVolume) === "0.01"
+    ) {
+      // Heal stale auto-created index symbols that still claim FX min 0.01
+      const rules = capitalDealRulesFallback(symbol.brokerSymbol);
+      if (rules.minSize > 0.01 + 1e-12) {
+        symbol = await this.prisma.symbol.update({
+          where: { id: symbol.id },
+          data: {
+            minVolume: String(rules.minSize),
+            maxVolume: String(rules.maxSize),
+            volumeStep: String(rules.step),
+            volumePrecision: rules.step < 0.01 ? 3 : 2,
+          },
+        });
+      }
     }
 
     let adapter = this.brokers.get(accountId);
@@ -210,6 +232,10 @@ export class OrdersService {
       throw new AppError(ErrorCodes.ORDER_INVALID_VOLUME, "Volume required");
     }
     if (volume.lte(0)) {
+      volume = d(String(symbol.minVolume));
+    }
+    // Capital indices reject FX-style lots — bump to instrument min before broker call
+    if (volume.gt(0) && volume.lt(d(String(symbol.minVolume)))) {
       volume = d(String(symbol.minVolume));
     }
 
@@ -315,12 +341,26 @@ export class OrdersService {
     });
 
     if (!brokerResponse.accepted) {
+      let rejectionMessage = brokerResponse.rejectionMessage;
+      let rejectionCode = brokerResponse.rejectionCode;
+      if (
+        isCapitalSizeError(
+          `${rejectionCode ?? ""} ${rejectionMessage ?? ""}`,
+        ) ||
+        rejectionCode === "CAPITAL_SIZE_INVALID"
+      ) {
+        rejectionCode = "CAPITAL_SIZE_INVALID";
+        rejectionMessage = capitalSizeErrorHint(
+          symbol.brokerSymbol,
+          volume.toFixed(symbol.volumePrecision),
+        );
+      }
       const rejected = await this.prisma.order.update({
         where: { id: draft.id },
         data: {
           status: OrderStatus.REJECTED,
-          rejectionCode: brokerResponse.rejectionCode,
-          rejectionMessage: brokerResponse.rejectionMessage,
+          rejectionCode,
+          rejectionMessage,
           brokerOrderId: brokerResponse.brokerOrderId,
         },
       });
@@ -331,8 +371,8 @@ export class OrdersService {
         actorId,
         correlationId,
         payload: {
-          code: brokerResponse.rejectionCode,
-          message: brokerResponse.rejectionMessage,
+          code: rejectionCode,
+          message: rejectionMessage,
         },
       });
       await this.audit.record({
@@ -345,8 +385,8 @@ export class OrdersService {
         correlationId,
       });
       throw new AppError(
-        brokerResponse.rejectionCode ?? ErrorCodes.ORDER_REJECTED,
-        brokerResponse.rejectionMessage ?? "Order rejected by broker",
+        rejectionCode ?? ErrorCodes.ORDER_REJECTED,
+        rejectionMessage ?? "Order rejected by broker",
       );
     }
 

@@ -10,6 +10,14 @@ import {
   sortCapitalMarkets,
   type CapitalMarketInfo,
 } from "./capital-markets";
+import {
+  capitalDealRulesFallback,
+  capitalSizeErrorHint,
+  isCapitalSizeError,
+  normalizeCapitalDealSize,
+  parseCapitalDealRules,
+  type CapitalDealRules,
+} from "./capital-size";
 import { parseCapitalStreamQuote } from "./capital-stream";
 import type {
   BrokerAccountEvent,
@@ -69,6 +77,11 @@ export class CapitalComAdapter implements BrokerAdapter {
   /** Desired Capital CFD sub-account — always re-bind after session create. */
   private targetExternalAccountId = "";
   private readonly processed = new Map<string, BrokerOrderResponse>();
+  /** Cache dealing rules briefly so rapid retries don't spam /markets. */
+  private readonly dealRulesCache = new Map<
+    string,
+    { at: number; rules: CapitalDealRules }
+  >();
 
   async connect(config: BrokerConnectionConfig): Promise<ConnectionResult> {
     this.accountId = config.accountId;
@@ -555,6 +568,7 @@ export class CapitalComAdapter implements BrokerAdapter {
   private toBrokerSymbol(m: CapitalMarketInfo): BrokerSymbol {
     const epic = m.epic;
     const fx = /^[A-Z]{6}$/.test(epic);
+    const rules = capitalDealRulesFallback(epic);
     return {
       brokerSymbol: epic,
       canonicalSymbol: epic,
@@ -562,10 +576,10 @@ export class CapitalComAdapter implements BrokerAdapter {
       baseAsset: fx ? epic.slice(0, 3) : epic,
       quoteAsset: fx ? epic.slice(3) : "USD",
       pricePrecision: fx ? 5 : 2,
-      volumePrecision: 2,
-      minVolume: "0.01",
-      maxVolume: "500",
-      volumeStep: "0.01",
+      volumePrecision: rules.step < 0.01 ? 3 : 2,
+      minVolume: String(rules.minSize),
+      maxVolume: String(rules.maxSize),
+      volumeStep: String(rules.step),
       tickSize: fx ? "0.00001" : "0.01",
       tickValue: "1",
       contractSize: "1",
@@ -575,6 +589,45 @@ export class CapitalComAdapter implements BrokerAdapter {
         name: m.name,
         marketStatus: m.marketStatus,
       },
+    };
+  }
+
+  /** Fetch Capital dealingRules (min/step) with short cache + epic fallback. */
+  private async resolveDealRules(epic: string): Promise<CapitalDealRules> {
+    const key = epic.toUpperCase();
+    const hit = this.dealRulesCache.get(key);
+    if (hit && Date.now() - hit.at < 5 * 60_000) return hit.rules;
+    let rules = capitalDealRulesFallback(epic);
+    try {
+      const res = await this.request<{
+        dealingRules?: {
+          minDealSize?: { value?: number };
+          maxDealSize?: { value?: number };
+          dealSizeStep?: { value?: number };
+        };
+        instrument?: { lotSize?: number };
+      }>("GET", `/api/v1/markets/${encodeURIComponent(epic)}`);
+      const parsed = parseCapitalDealRules(res);
+      if (parsed) rules = parsed;
+    } catch {
+      // keep fallback
+    }
+    this.dealRulesCache.set(key, { at: Date.now(), rules });
+    return rules;
+  }
+
+  private async normalizeOrderSize(
+    epic: string,
+    rawVolume: string | number,
+  ): Promise<{ size: number; sizeStr: string; note?: string }> {
+    const rules = await this.resolveDealRules(epic);
+    const raw = Number(rawVolume);
+    const n = normalizeCapitalDealSize(raw, rules);
+    const sizeStr = String(n.size);
+    return {
+      size: n.size,
+      sizeStr,
+      note: n.adjusted ? n.reason : undefined,
     };
   }
 
@@ -725,38 +778,62 @@ export class CapitalComAdapter implements BrokerAdapter {
     const existing = this.processed.get(request.clientRequestId);
     if (existing) return existing;
 
+    const epic = resolveCapitalEpic(request.symbol);
+    const sized = await this.normalizeOrderSize(epic, request.volume);
+
     if (request.type !== OrderType.MARKET) {
       const body = {
-        epic: resolveCapitalEpic(request.symbol),
+        epic,
         direction: request.direction,
-        size: Number(request.volume),
+        size: sized.size,
         level: request.price ? Number(request.price) : undefined,
         type: request.type === OrderType.LIMIT ? "LIMIT" : "STOP",
         stopLevel: request.stopLoss ? Number(request.stopLoss) : undefined,
         profitLevel: request.takeProfit ? Number(request.takeProfit) : undefined,
       };
-      const res = await this.request<{ dealReference: string }>(
-        "POST",
-        "/api/v1/workingorders",
-        body,
-      );
-      const confirm = await this.waitConfirm(res.dealReference);
-      const response: BrokerOrderResponse = {
-        accepted: confirm.status === "OPEN" || confirm.status === "ACCEPTED" || confirm.dealStatus === "ACCEPTED",
-        brokerOrderId: confirm.dealId ?? res.dealReference,
-        status: "PENDING",
-        filledVolume: "0",
-        rejectionCode: confirm.reason,
-        rejectionMessage: confirm.reason,
-      };
-      this.processed.set(request.clientRequestId, response);
-      return response;
+      try {
+        const res = await this.request<{ dealReference: string }>(
+          "POST",
+          "/api/v1/workingorders",
+          body,
+        );
+        const confirm = await this.waitConfirm(res.dealReference);
+        const response: BrokerOrderResponse = {
+          accepted:
+            confirm.status === "OPEN" ||
+            confirm.status === "ACCEPTED" ||
+            confirm.dealStatus === "ACCEPTED",
+          brokerOrderId: confirm.dealId ?? res.dealReference,
+          status: "PENDING",
+          filledVolume: "0",
+          rejectionCode: confirm.reason,
+          rejectionMessage: confirm.reason,
+        };
+        this.processed.set(request.clientRequestId, response);
+        return response;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (isCapitalSizeError(msg)) {
+          const hint = capitalSizeErrorHint(epic, String(request.volume));
+          const response: BrokerOrderResponse = {
+            accepted: false,
+            brokerOrderId: request.clientRequestId,
+            status: OrderStatus.REJECTED,
+            filledVolume: "0",
+            rejectionCode: "CAPITAL_SIZE_INVALID",
+            rejectionMessage: hint,
+          };
+          this.processed.set(request.clientRequestId, response);
+          return response;
+        }
+        throw err;
+      }
     }
 
     const body: Record<string, unknown> = {
-      epic: resolveCapitalEpic(request.symbol),
+      epic,
       direction: request.direction,
-      size: Number(request.volume),
+      size: sized.size,
     };
     // Native Capital trailing follows BUY↑ and SELL↓ — prefer over static stopLevel
     const trailDist = request.stopDistance != null ? Number(request.stopDistance) : NaN;
@@ -768,11 +845,31 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
     if (request.takeProfit) body.profitLevel = Number(request.takeProfit);
 
-    const res = await this.request<{ dealReference: string }>(
-      "POST",
-      "/api/v1/positions",
-      body,
-    );
+    let res: { dealReference: string };
+    try {
+      res = await this.request<{ dealReference: string }>(
+        "POST",
+        "/api/v1/positions",
+        body,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (isCapitalSizeError(msg)) {
+        const hint = capitalSizeErrorHint(epic, String(request.volume));
+        const response: BrokerOrderResponse = {
+          accepted: false,
+          brokerOrderId: request.clientRequestId,
+          status: OrderStatus.REJECTED,
+          filledVolume: "0",
+          rejectionCode: "CAPITAL_SIZE_INVALID",
+          rejectionMessage: `${hint} (API: ${msg.slice(0, 160)})`,
+        };
+        this.processed.set(request.clientRequestId, response);
+        return response;
+      }
+      throw err;
+    }
+
     const confirm = await this.waitConfirm(res.dealReference);
     let dealId =
       confirm.dealId && confirm.dealStatus !== "UNKNOWN"
@@ -791,14 +888,13 @@ export class CapitalComAdapter implements BrokerAdapter {
     if (!accepted) {
       this.invalidatePositionsCache();
       await new Promise((r) => setTimeout(r, 200));
-      const epic = resolveCapitalEpic(request.symbol);
       const open = await this.getOpenPositions({ force: true });
       const match = open
         .filter(
           (p) =>
             p.symbol === epic &&
             p.direction === request.direction &&
-            Math.abs(Number(p.volume) - Number(request.volume)) < 0.0001,
+            Math.abs(Number(p.volume) - sized.size) < 0.0001,
         )
         .sort(
           (a, b) =>
@@ -811,22 +907,27 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
+    const rejectReason = accepted
+      ? undefined
+      : confirm.reason ?? "BROKER_ORDER_REJECTED";
+    const rejectMsg = accepted
+      ? undefined
+      : isCapitalSizeError(String(confirm.reason ?? ""))
+        ? capitalSizeErrorHint(epic, String(request.volume))
+        : confirm.reason ?? "Capital.com rejected order / confirm timeout";
+
     const response: BrokerOrderResponse = {
       accepted,
       brokerOrderId: dealId ?? res.dealReference,
       status: accepted ? OrderStatus.FILLED : OrderStatus.REJECTED,
-      filledVolume: accepted ? request.volume : "0",
+      filledVolume: accepted ? sized.sizeStr : "0",
       averageFillPrice:
         fillLevel != null && Number.isFinite(fillLevel)
           ? String(fillLevel)
           : undefined,
       positionId: dealId,
-      rejectionCode: accepted
-        ? undefined
-        : confirm.reason ?? "BROKER_ORDER_REJECTED",
-      rejectionMessage: accepted
-        ? undefined
-        : confirm.reason ?? "Capital.com rejected order / confirm timeout",
+      rejectionCode: rejectReason,
+      rejectionMessage: rejectMsg,
     };
     this.processed.set(request.clientRequestId, response);
     this.invalidatePositionsCache();
