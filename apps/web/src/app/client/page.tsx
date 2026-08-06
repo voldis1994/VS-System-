@@ -161,6 +161,7 @@ export default function ClientPortalPage() {
   const [serverDraft, setServerDraft] = useState<ClientServerConfig>(defaultServerConfig());
   const [testing, setTesting] = useState(false);
   const [showServer, setShowServer] = useState(false);
+  const [booting, setBooting] = useState(true);
 
   const [token, setToken] = useState<string | null>(null);
   const [pin, setPin] = useState("");
@@ -186,6 +187,7 @@ export default function ClientPortalPage() {
     if (stored?.host) {
       setServer(stored);
       setServerDraft(stored);
+      setBooting(false);
       return;
     }
 
@@ -202,11 +204,14 @@ export default function ClientPortalPage() {
           setServer(auto);
         } catch {
           setShowServer(true);
+        } finally {
+          setBooting(false);
         }
       };
       void tryAuto();
     } else {
       setShowServer(true);
+      setBooting(false);
     }
   }, []);
 
@@ -348,6 +353,14 @@ export default function ClientPortalPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (booting) {
+    return (
+      <div className={`${shell} flex items-center justify-center`}>
+        <p className="text-[11px] tracking-[0.35em] text-[#8aa0b8]">CONNECTING…</p>
+      </div>
+    );
   }
 
   if (!server || showServer) {
