@@ -14,8 +14,10 @@ export function defaultServerConfig(): ClientServerConfig {
     return { host: "127.0.0.1", webPort: "3000", apiPort: "4000" };
   }
   const h = window.location.hostname;
+  const isLocal = !h || h === "localhost" || h === "127.0.0.1";
   return {
-    host: h && h !== "localhost" ? h : "192.168.1.1",
+    // When opened via PC LAN IP, auto-use that host — no manual IP needed.
+    host: isLocal ? "" : h,
     webPort: window.location.port || "3000",
     apiPort: "4000",
   };

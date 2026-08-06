@@ -6,7 +6,21 @@ export type ApiError = Error & {
   status?: number;
 };
 
-const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+/**
+ * Resolve API base for both PC (localhost) and phones on LAN.
+ * Hardcoding localhost breaks dashboard when the UI is opened via PC IP.
+ */
+export function getApiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname || "127.0.0.1";
+    const port = process.env.NEXT_PUBLIC_API_PORT || "4000";
+    return `http://${host}:${port}`;
+  }
+  return "http://127.0.0.1:4000";
+}
 
 let refreshInFlight: Promise<string | null> | null = null;
 
@@ -21,7 +35,7 @@ async function refreshAccessToken(): Promise<string | null> {
       return null;
     }
     try {
-      const res = await fetch(`${base}/api/auth/refresh`, {
+      const res = await fetch(`${getApiBase()}/api/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -31,14 +45,16 @@ async function refreshAccessToken(): Promise<string | null> {
         }),
       });
       const text = await res.text();
-      const data = text ? (JSON.parse(text) as {
-        accessToken?: string;
-        refreshToken?: string;
-        user?: typeof user;
-        organization?: typeof organization;
-        tradingPinVerified?: boolean;
-        message?: string;
-      }) : {};
+      const data = text
+        ? (JSON.parse(text) as {
+            accessToken?: string;
+            refreshToken?: string;
+            user?: typeof user;
+            organization?: typeof organization;
+            tradingPinVerified?: boolean;
+            message?: string;
+          })
+        : {};
       if (!res.ok || !data.accessToken) {
         clear();
         return null;
@@ -49,8 +65,7 @@ async function refreshAccessToken(): Promise<string | null> {
           refreshToken: data.refreshToken ?? refreshToken,
           user: data.user,
           organization: data.organization ?? organization,
-          tradingPinVerified:
-            data.tradingPinVerified ?? tradingPinVerified ?? false,
+          tradingPinVerified: data.tradingPinVerified ?? tradingPinVerified ?? false,
         });
       } else {
         setTokens(data.accessToken, data.refreshToken ?? refreshToken);
@@ -74,7 +89,7 @@ export async function api<T>(
   const { token, skipRefresh, headers: optHeaders, ...rest } = opts ?? {};
   const authToken = token ?? useAuthStore.getState().accessToken ?? undefined;
 
-  const res = await fetch(`${base}/api${path}`, {
+  const res = await fetch(`${getApiBase()}/api${path}`, {
     ...rest,
     headers: {
       "Content-Type": "application/json",
@@ -120,8 +135,4 @@ export async function api<T>(
   }
 
   return data as T;
-}
-
-export function getApiBase() {
-  return base;
 }

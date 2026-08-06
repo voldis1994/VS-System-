@@ -135,22 +135,33 @@ timeout /t 8 /nobreak >nul
 start "" http://localhost:3000/dashboard
 
 echo.
+echo [Firewall] Atveru portus 3000 un 4000 LAN klientiem...
+netsh advfirewall firewall delete rule name="VS System Web 3000" >nul 2>&1
+netsh advfirewall firewall delete rule name="VS System API 4000" >nul 2>&1
+netsh advfirewall firewall add rule name="VS System Web 3000" dir=in action=allow protocol=TCP localport=3000 >nul
+netsh advfirewall firewall add rule name="VS System API 4000" dir=in action=allow protocol=TCP localport=4000 >nul
+
+echo.
 echo ========================================
 echo   Gatavs  (command deck uz SAVA datora)
 echo   Dashboard:  http://localhost:3000/dashboard
 echo   Strategies: http://localhost:3000/strategies
 echo   API: http://localhost:4000/api/health
 echo.
-echo   --- iPhone VS Client app ---
+echo   !!! KLIENTIEM SUTI TIKAI /client LINKU !!!
+echo   Nevis /dashboard — dashboard ir TEV uz PC.
+echo.
+echo   --- VS Client (telefons / cits Wi-Fi klients) ---
+> "%~dp0client-url.txt" echo.
 for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
   for /f "tokens=1" %%b in ("%%a") do (
-    echo   Atver telefonā: http://%%b:3000/client
-    echo   Add to Home Screen = VS Client app
-    goto :ip_done
+    echo   http://%%b:3000/client
+    >> "%~dp0client-url.txt" echo http://%%b:3000/client
   )
 )
-:ip_done
-echo   ^(ja vairākas IP — izmanto Wi-Fi IPv4 no ipconfig^)
+echo.
+echo   Saglabats faila: client-url.txt  ^(nosuti klientam^)
+echo   PC un telefons = VIENA Wi-Fi. Bez localhost.
 echo.
 echo   Login desk: owner@nexus.pro / NexusOwner123!
 echo   PIN desk:   123456

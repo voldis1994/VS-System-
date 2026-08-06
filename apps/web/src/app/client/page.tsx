@@ -179,13 +179,35 @@ export default function ClientPortalPage() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    const cfg = loadServerConfig();
-    if (cfg) {
-      setServer(cfg);
-      setServerDraft(cfg);
-    } else setServerDraft(defaultServerConfig());
     const saved = sessionStorage.getItem("vs_client_portal_token");
     if (saved) setToken(saved);
+
+    const stored = loadServerConfig();
+    if (stored?.host) {
+      setServer(stored);
+      setServerDraft(stored);
+      return;
+    }
+
+    const auto = defaultServerConfig();
+    setServerDraft(auto);
+    // Opened via http://PC-IP:3000/client → auto-wire API to same host, skip manual IP.
+    if (auto.host) {
+      const tryAuto = async () => {
+        try {
+          const base = apiBaseFromConfig(auto);
+          const res = await fetch(`${base}/api/health`);
+          if (!res.ok) throw new Error("health");
+          saveServerConfig(auto);
+          setServer(auto);
+        } catch {
+          setShowServer(true);
+        }
+      };
+      void tryAuto();
+    } else {
+      setShowServer(true);
+    }
   }, []);
 
   useEffect(() => {

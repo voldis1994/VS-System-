@@ -16,3 +16,4 @@ tmp
 *.tsbuildinfo
 playwright-report
 test-results
+client-url.txt

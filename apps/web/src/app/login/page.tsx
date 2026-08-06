@@ -136,6 +136,9 @@ export default function LoginPage() {
           <p className="mt-2 text-sm text-white/45">
             Multi-account trading command deck
           </p>
+          <p className="mt-3 text-[11px] leading-relaxed text-white/35">
+            Klientiem: atver <span className="font-mono text-accent-soft">/client</span> ar PC Wi‑Fi IP — nevis /dashboard.
+          </p>
         </div>
 
         <div className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-white/[0.04] p-1">
