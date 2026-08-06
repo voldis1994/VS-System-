@@ -57,6 +57,7 @@ const STRATEGY_MODES = [
   StrategyMode.PULLBACK,
   StrategyMode.BREAKOUT,
   StrategyMode.SCALPING,
+  StrategyMode.EMA_TICK_SCALP,
   StrategyMode.MEAN_REVERSION,
   StrategyMode.REVERSAL,
   StrategyMode.RANGE,
@@ -239,6 +240,7 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
 function modeMinScoreClient(mode: string): number {
   switch (mode) {
     case StrategyMode.SCALPING:
+    case StrategyMode.EMA_TICK_SCALP:
       return 50;
     case StrategyMode.MEAN_REVERSION:
     case StrategyMode.RANGE:

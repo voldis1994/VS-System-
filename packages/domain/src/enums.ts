@@ -94,6 +94,8 @@ export enum StrategyMode {
   RANGE = "RANGE",
   BREAKOUT = "BREAKOUT",
   SCALPING = "SCALPING",
+  /** EMA 1/3 cross scalp on 10s — tick-reactive, no candle-close wait */
+  EMA_TICK_SCALP = "EMA_TICK_SCALP",
   MOMENTUM = "MOMENTUM",
   MEAN_REVERSION = "MEAN_REVERSION",
   PULLBACK = "PULLBACK",

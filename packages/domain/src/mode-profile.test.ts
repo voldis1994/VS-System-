@@ -21,7 +21,8 @@ describe("mode market profiles (1m vs 15m truth)", () => {
   });
 
   it("timing/inventory modes are native 1m", () => {
-    expect(modePreferredTimeframe(StrategyMode.SCALPING)).toBe("10s");
+  expect(modePreferredTimeframe(StrategyMode.SCALPING)).toBe("10s");
+    expect(modePreferredTimeframe(StrategyMode.EMA_TICK_SCALP)).toBe("10s");
     expect(modePreferredTimeframe(StrategyMode.NEWS)).toBe("1m");
     expect(modePreferredTimeframe(StrategyMode.ARBITRAGE_SIM)).toBe("1m");
     expect(modePreferredTimeframe(StrategyMode.MARKET_MAKING_SIM)).toBe("1m");
@@ -30,6 +31,7 @@ describe("mode market profiles (1m vs 15m truth)", () => {
   it("structure modes use 1m only as timing confirm", () => {
     expect(modeUses1mTiming(StrategyMode.TREND)).toBe(true);
     expect(modeUses1mTiming(StrategyMode.SCALPING)).toBe(false);
+    expect(modeUses1mTiming(StrategyMode.EMA_TICK_SCALP)).toBe(false);
     expect(modeUses1mTiming(StrategyMode.MARKET_MAKING_SIM)).toBe(false);
     expect(modeUses1mTiming(StrategyMode.DCA)).toBe(false);
   });

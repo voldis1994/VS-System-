@@ -50,10 +50,16 @@ export const MODE_MARKET_PROFILES: Record<StrategyMode, ModeMarketProfile> = {
     truth: "BB compression → break needs 15m room; 1m false breaks dominate.",
   },
   [StrategyMode.SCALPING]: {
-      preferredTimeframe: "10s",
+    preferredTimeframe: "10s",
     readRole: "timing",
     uses1mTiming: false,
     truth: "Native 10s micro EMA/MACD/stoch; not a 15m swing model.",
+  },
+  [StrategyMode.EMA_TICK_SCALP]: {
+    preferredTimeframe: "10s",
+    readRole: "timing",
+    uses1mTiming: false,
+    truth: "EMA1/EMA3 cross on 10s with live tick price; trail SL on EMA3; BE at 1R.",
   },
 
   [StrategyMode.MEAN_REVERSION]: {

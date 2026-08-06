@@ -273,11 +273,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // For very-fast scalping (10s) use 1m indicators to reduce scoring frequency and CPU.
+      // For classic SCALPING on 10s, score on 1m to lighten CPU.
+      // EMA_TICK_SCALP must stay on native 10s EMA1/3 + live tick price.
       let m1: any | undefined;
       let m1Source: string | undefined;
       let ind = computeIndicators(candles);
-      if (timeframe === "10s") {
+      const isEmaTickScalp = mode === StrategyMode.EMA_TICK_SCALP;
+      if (timeframe === "10s" && !isEmaTickScalp) {
         m1 = await this.market.getCandles(brokerSymbol, "1m", 60);
         m1Source = this.market.getCandleSource(brokerSymbol, "1m");
         if (m1.length < 60) {
@@ -324,6 +326,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           candleSource,
         };
         continue;
+      }
+
+      // Tick-reactive price (and EMA1≈price) — do not wait for candle close
+      if (isEmaTickScalp) {
+        const live = this.market.getTick(brokerSymbol);
+        if (live) {
+          const mid = (Number(live.bid) + Number(live.ask)) / 2;
+          if (Number.isFinite(mid) && mid > 0) {
+            ind = {
+              ...ind,
+              price: mid,
+              ema1Prev: ind.ema1,
+              ema1: mid,
+            };
+          }
+        }
       }
 
       let hasOpenBuy = false;
@@ -453,6 +471,18 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           signal: "HOLD",
           skip: "quality_wait",
         };
+        // EMA3 trailing for open positions (one direction only)
+        if (isEmaTickScalp && (hasOpenBuy || hasOpenSell)) {
+          await this.applyEma3Trail({
+            organizationId: strategy.organizationId,
+            actorId,
+            accountIds,
+            symbol,
+            brokerSymbol,
+            ema3: ind.ema3,
+            correlationId,
+          });
+        }
         continue;
       }
 
@@ -481,61 +511,74 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // OBLIGATORY candle filter — but if BUY blocked → try SELL (and vice versa)
-      const microBias =
-        micro.signal === "BUY"
-          ? ("bull" as const)
-          : micro.signal === "SELL"
-            ? ("bear" as const)
-            : ("flat" as const);
+      // OBLIGATORY candle filter — skipped for EMA tick scalp (no candle-close wait)
+      let signal: "BUY" | "SELL" = scored.signal;
+      if (!isEmaTickScalp) {
+        const microBias =
+          micro.signal === "BUY"
+            ? ("bull" as const)
+            : micro.signal === "SELL"
+              ? ("bear" as const)
+              : ("flat" as const);
 
-      const resolved = resolveEntryWithCandleFlip(
-        scored.signal,
-        tfBias.bias,
-        microBias,
-      );
-      if (!resolved.signal) {
-        lastStatus = {
-          ...lastStatus,
-          signal: scored.signal,
-          skip: resolved.skip ?? "candle_filter",
-          reason: resolved.reason,
-          gate: resolved.skip ?? "candle_filter",
-        };
-        continue;
-      }
-
-      // Flip only if opposite side independently clears mode minScore
-      if (resolved.flipped) {
-        const oppScore =
-          resolved.signal === "BUY" ? scored.buyScore : scored.sellScore;
-        if (oppScore < minScore) {
+        const resolved = resolveEntryWithCandleFlip(
+          scored.signal,
+          tfBias.bias,
+          microBias,
+        );
+        if (!resolved.signal) {
           lastStatus = {
             ...lastStatus,
             signal: scored.signal,
             skip: resolved.skip ?? "candle_filter",
-            reason: `flip_blocked_opp_score_${oppScore}<${minScore}`,
-            gate: "flip_no_confluence",
-            buyScore: scored.buyScore,
-            sellScore: scored.sellScore,
+            reason: resolved.reason,
+            gate: resolved.skip ?? "candle_filter",
           };
           continue;
         }
-      }
 
-      const signal: Signal = resolved.signal;
-      lastStatus = {
-        ...lastStatus,
-        signal,
-        gate: scored.gate,
-        microGate: micro.gate,
-        tfGate: tfBias.gate,
-        flipped: resolved.flipped,
-        flippedFrom: resolved.from,
-        reason: resolved.flipped ? resolved.reason : undefined,
-        buyScore: scored.buyScore,
-        sellScore: scored.sellScore,
-      };
+        // Flip only if opposite side independently clears mode minScore
+        if (resolved.flipped) {
+          const oppScore =
+            resolved.signal === "BUY" ? scored.buyScore : scored.sellScore;
+          if (oppScore < minScore) {
+            lastStatus = {
+              ...lastStatus,
+              signal: scored.signal,
+              skip: resolved.skip ?? "candle_filter",
+              reason: `flip_blocked_opp_score_${oppScore}<${minScore}`,
+              gate: "flip_no_confluence",
+              buyScore: scored.buyScore,
+              sellScore: scored.sellScore,
+            };
+            continue;
+          }
+        }
+
+        signal = resolved.signal;
+        lastStatus = {
+          ...lastStatus,
+          signal,
+          gate: scored.gate,
+          microGate: micro.gate,
+          tfGate: tfBias.gate,
+          flipped: resolved.flipped,
+          flippedFrom: resolved.from,
+          reason: resolved.flipped ? resolved.reason : undefined,
+          buyScore: scored.buyScore,
+          sellScore: scored.sellScore,
+        };
+      } else {
+        lastStatus = {
+          ...lastStatus,
+          signal,
+          gate: scored.gate,
+          candleDirectionFilter: false,
+          reason: "ema_tick_scalp_no_candle_wait",
+          buyScore: scored.buyScore,
+          sellScore: scored.sellScore,
+        };
+      }
 
       // NOTE: do NOT early-return on any open trade — that blocked BUY↔SELL flips
       // (oneTradeOnly still enforced below: close opposite, then open; wait if same side).
@@ -711,7 +754,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const minDist = minProtectiveDistance(brokerSymbol, entry);
         // Pip path: exact pip×size or direct price offset when user supplied <1.0. ATR path: atr×mult.
         let stopDist: number;
-        if (config.stopDistancePips != null) {
+        let stopLoss: string;
+        if (isEmaTickScalp) {
+          // BUY: SL below EMA3 or prev low; SELL: above EMA3 or prev high
+          const rawStop =
+            signal === "BUY"
+              ? Math.min(ind.ema3, ind.prevLow)
+              : Math.max(ind.ema3, ind.prevHigh);
+          stopDist = Math.max(Math.abs(entry - rawStop), minDist, pip);
+          stopLoss =
+            signal === "BUY"
+              ? formatInstrumentPrice(brokerSymbol, entry - stopDist)
+              : formatInstrumentPrice(brokerSymbol, entry + stopDist);
+        } else if (config.stopDistancePips != null) {
           const v = Number(config.stopDistancePips);
           if (timeframe === "10s") {
             // For 10s scalping treat user-supplied values as direct price offsets
@@ -719,10 +774,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           } else {
             stopDist = v > 0 && v < 1 ? v : pip * v;
           }
+          stopDist = Math.max(stopDist, minDist);
+          stopLoss =
+            signal === "BUY"
+              ? formatInstrumentPrice(brokerSymbol, d(entry).minus(stopDist).toNumber())
+              : formatInstrumentPrice(brokerSymbol, d(entry).plus(stopDist).toNumber());
         } else {
           stopDist = Math.max(ind.atr * atrStopMult, entry * 0.00065);
+          stopDist = Math.max(stopDist, minDist);
+          stopLoss =
+            signal === "BUY"
+              ? formatInstrumentPrice(brokerSymbol, d(entry).minus(stopDist).toNumber())
+              : formatInstrumentPrice(brokerSymbol, d(entry).plus(stopDist).toNumber());
         }
-        stopDist = Math.max(stopDist, minDist);
 
         let tpDist: number;
         if (config.takeProfitPips != null) {
@@ -738,18 +802,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
         tpDist = Math.max(tpDist, pip * 2);
 
-        const stopLoss =
-          signal === "BUY"
-            ? formatInstrumentPrice(brokerSymbol, d(entry).minus(stopDist).toNumber())
-            : formatInstrumentPrice(brokerSymbol, d(entry).plus(stopDist).toNumber());
         const entryLot = Number(config.volume ?? "0.01");
+        // EMA tick scalp exits via cross / EMA3 / trail — no fixed TP by default
+        const useTp = isEmaTickScalp ? false : takeProfitEnabled;
         let takeProfit: string | undefined;
         let takeProfits:
           | Array<{ price: string; closePercent: number }>
           | undefined;
         let multiPlan: ReturnType<typeof buildEqualMultiTpPlan> | undefined;
         let effectiveTpMode: "SINGLE" | "MULTI" = takeProfitMode;
-        if (takeProfitEnabled && takeProfitMode === "MULTI") {
+        if (useTp && takeProfitMode === "MULTI") {
           multiPlan = buildEqualMultiTpPlan({
             direction: signal,
             entry,
@@ -787,7 +849,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             const last = multiPlan[multiPlan.length - 1]!;
             takeProfit = formatInstrumentPrice(brokerSymbol, Number(last.price));
           }
-        } else if (takeProfitEnabled) {
+        } else if (useTp) {
           takeProfit =
             signal === "BUY"
               ? formatInstrumentPrice(
@@ -807,7 +869,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         let beActDist: number;
         let beOffDist: number;
         let trailDist: number;
-        if (timeframe === "10s") {
+        // EMA tick scalp: BE when profit = initial risk (1R); trail is EMA3 (software)
+        const useBe = isEmaTickScalp ? true : breakEvenEnabled;
+        const useDistTrail = isEmaTickScalp ? false : trailingEnabled;
+        if (isEmaTickScalp) {
+          beActDist = Math.max(stopDist, pip * 0.1);
+          beOffDist = pip;
+          trailDist = 0;
+        } else if (timeframe === "10s") {
           beActDist = Math.max(beActivationPips, pip * 0.1);
           beOffDist = Math.max(beOffsetPips, pip);
           trailDist = Math.max(trailPips, minDist);
@@ -875,12 +944,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               takeProfits,
               // Delay broker native trail until activation pips (autoManage)
               trailingEnabled: false,
-              trailingDistance: trailingEnabled ? trailDist.toFixed(8) : undefined,
-              breakEvenEnabled,
-              breakEvenActivation: breakEvenEnabled
+              trailingDistance: useDistTrail ? trailDist.toFixed(8) : undefined,
+              breakEvenEnabled: useBe,
+              breakEvenActivation: useBe
                 ? beActDist.toFixed(8)
                 : undefined,
-              breakEvenOffset: breakEvenEnabled ? beOffDist.toFixed(8) : undefined,
+              breakEvenOffset: useBe ? beOffDist.toFixed(8) : undefined,
               strategyId: strategy.id,
               comment: `vs-strategy:${strategy.name}`,
               confirmSoftWarnings: true,
@@ -902,7 +971,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             );
             // Rebuild plan with actual fill volume when MULTI
             let planJson = multiPlan;
-            if (effectiveTpMode === "MULTI" && takeProfitEnabled) {
+            if (effectiveTpMode === "MULTI" && useTp) {
               planJson = buildEqualMultiTpPlan({
                 direction: signal,
                 entry,
@@ -932,13 +1001,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 takeProfitsJson: planJson
                   ? (planJson as unknown as object)
                   : Prisma.DbNull,
-                breakEvenEnabled,
-                breakEvenActivation: breakEvenEnabled
+                breakEvenEnabled: useBe,
+                breakEvenActivation: useBe
                   ? beActDist.toFixed(8)
                   : null,
-                breakEvenOffset: breakEvenEnabled ? beOffDist.toFixed(8) : null,
-                trailingEnabled,
-                trailingDistance: trailingEnabled ? trailDist.toFixed(8) : null,
+                breakEvenOffset: useBe ? beOffDist.toFixed(8) : null,
+                trailingEnabled: useDistTrail,
+                trailingDistance: useDistTrail ? trailDist.toFixed(8) : null,
               },
             });
             // Static SL/TP on fill — trail arms after activation pips (autoManage)
@@ -1031,5 +1100,69 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         },
       },
     });
+  }
+
+  /** EMA 1/3 tick scalp: trail SL on EMA3, only tighten (never loosen). */
+  private async applyEma3Trail(input: {
+    organizationId: string;
+    actorId: string;
+    accountIds: string[];
+    symbol: string;
+    brokerSymbol: string;
+    ema3: number;
+    correlationId: string;
+  }) {
+    if (!Number.isFinite(input.ema3) || input.ema3 <= 0) return;
+    for (const accountId of input.accountIds) {
+      const opens = await this.prisma.position.findMany({
+        where: {
+          organizationId: input.organizationId,
+          accountId,
+          status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+          OR: [{ symbol: input.brokerSymbol }, { symbol: input.symbol }],
+        },
+      });
+      for (const pos of opens) {
+        const entry = Number(pos.averageEntry);
+        const curSl = pos.stopLoss != null ? Number(pos.stopLoss) : null;
+        let nextSl: number | null = null;
+        if (pos.direction === "BUY") {
+          // Only move SL up toward EMA3 (and never above entry until BE logic moves it)
+          if (curSl == null || input.ema3 > curSl) {
+            nextSl = input.ema3;
+          }
+        } else if (pos.direction === "SELL") {
+          if (curSl == null || input.ema3 < curSl) {
+            nextSl = input.ema3;
+          }
+        }
+        if (nextSl == null || !Number.isFinite(nextSl)) continue;
+        // Don't trail past a locked BE past entry in the wrong direction
+        if (pos.direction === "BUY" && nextSl >= entry) {
+          // allow at/above entry (BE+) — EMA3 can lock profit
+        }
+        if (pos.direction === "SELL" && nextSl <= entry) {
+          // allow at/below entry
+        }
+        const formatted = formatInstrumentPrice(input.brokerSymbol, nextSl);
+        if (curSl != null && formatted === formatInstrumentPrice(input.brokerSymbol, curSl)) {
+          continue;
+        }
+        try {
+          await this.positions.modifySlTp(
+            input.organizationId,
+            input.actorId,
+            pos.id,
+            { stopLoss: formatted },
+            input.correlationId,
+            { silent: true },
+          );
+        } catch (err) {
+          this.log.warn(
+            `EMA3 trail failed ${pos.id}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
+    }
   }
 }

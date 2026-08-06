@@ -1,6 +1,6 @@
 "use client";
 
-import { StrategyMode } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe } from "@nexus/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
   apiBaseFromConfig,
@@ -45,6 +45,7 @@ const MODES = [
   StrategyMode.PULLBACK,
   StrategyMode.BREAKOUT,
   StrategyMode.SCALPING,
+  StrategyMode.EMA_TICK_SCALP,
   StrategyMode.MEAN_REVERSION,
   StrategyMode.REVERSAL,
   StrategyMode.RANGE,
@@ -125,10 +126,11 @@ async function portalApi<T>(
   return data as T;
 }
 
-function buildConfig(input: { lotSize: string; exit: ExitVersion }) {
+function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }) {
   const e = EXITS[input.exit];
+  const isEmaTick = input.mode === StrategyMode.EMA_TICK_SCALP;
   return {
-    timeframe: "M5",
+    timeframe: modePreferredTimeframe(input.mode),
     riskPercent: 0.5,
     useRiskPercent: false,
     volume: input.lotSize,
@@ -138,18 +140,19 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion }) {
     minScore: 50,
     atrStopMult: Number(e.atrStopMult),
     atrTpMult: Number(e.atrTpMult),
-    takeProfitEnabled: e.tpEnabled,
+    // EMA tick scalp: exit via cross / EMA3 trail / BE — no fixed TP or distance trail
+    takeProfitEnabled: isEmaTick ? false : e.tpEnabled,
     takeProfitMode: "SINGLE",
     multiTpCount: 3,
-    breakEvenEnabled: e.beEnabled,
+    breakEvenEnabled: isEmaTick ? true : e.beEnabled,
     breakEvenActivationPips: Number(e.beActivationPips),
     breakEvenOffsetPips: 1,
-    trailingEnabled: e.trailEnabled,
+    trailingEnabled: isEmaTick ? false : e.trailEnabled,
     trailingDistancePips: Number(e.trailPips),
     trailingActivationPips: Number(e.trailActPips),
     exitVersion: input.exit,
     newsFilterEnabled: false,
-    cooldownSeconds: 30,
+    cooldownSeconds: isEmaTick ? 5 : 30,
   };
 }
 
@@ -342,7 +345,7 @@ export default function ClientPortalPage() {
           mode,
           assignedSymbols: [epic],
           action,
-          configuration: buildConfig({ lotSize, exit }),
+          configuration: buildConfig({ lotSize, exit, mode }),
         }),
       });
       setStatusMsg(action === "stop" ? "Apturēts" : action === "save" ? "Saglabāts" : "Palaists");

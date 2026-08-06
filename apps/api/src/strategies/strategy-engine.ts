@@ -25,6 +25,10 @@ export type Indicators = {
   low: number;
   prevHigh: number;
   prevLow: number;
+  ema1: number;
+  ema3: number;
+  ema1Prev: number;
+  ema3Prev: number;
   ema9: number;
   ema21: number;
   ema55: number;
@@ -78,6 +82,7 @@ export type Indicators = {
 export function modeMinScore(mode: StrategyMode): number {
   switch (mode) {
     case StrategyMode.SCALPING:
+    case StrategyMode.EMA_TICK_SCALP:
       return 50;
     case StrategyMode.MEAN_REVERSION:
     case StrategyMode.RANGE:
@@ -110,6 +115,10 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
   const highsPrev = highs.slice(0, -1);
   const lowsPrev = lows.slice(0, -1);
 
+  const ema1 = ema(closes, 1);
+  const ema3 = ema(closes, 3);
+  const ema1Prev = ema(closesPrev, 1);
+  const ema3Prev = ema(closesPrev, 3);
   const ema9 = ema(closes, 9);
   const ema21 = ema(closes, 21);
   const ema55 = ema(closes, 55);
@@ -254,6 +263,10 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
     low: l,
     prevHigh: highs[n - 2] ?? h,
     prevLow: lows[n - 2] ?? l,
+    ema1,
+    ema3,
+    ema1Prev,
+    ema3Prev,
     ema9,
     ema21,
     ema55,
@@ -328,11 +341,14 @@ export function evaluateStrategyMode(
   }
 
   const atrRatio = i.atrSlow > 0 ? i.atr / i.atrSlow : 1;
-  if (atrRatio < 0.45) {
-    return { signal: "HOLD", score: 0, gate: "atr_dead", bias: "flat", buyScore: 0, sellScore: 0 };
-  }
-  if (atrRatio > 3.0) {
-    return { signal: "HOLD", score: 0, gate: "atr_spike", bias: "flat", buyScore: 0, sellScore: 0 };
+  // EMA tick scalp is micro-structure — skip ATR dead/spike and RSI exhaust soft-closes
+  if (mode !== StrategyMode.EMA_TICK_SCALP) {
+    if (atrRatio < 0.45) {
+      return { signal: "HOLD", score: 0, gate: "atr_dead", bias: "flat", buyScore: 0, sellScore: 0 };
+    }
+    if (atrRatio > 3.0) {
+      return { signal: "HOLD", score: 0, gate: "atr_spike", bias: "flat", buyScore: 0, sellScore: 0 };
+    }
   }
 
   const bullStack =
@@ -355,6 +371,7 @@ export function evaluateStrategyMode(
     StrategyMode.REVERSAL,
     StrategyMode.ARBITRAGE_SIM,
     StrategyMode.MARKET_MAKING_SIM,
+    StrategyMode.EMA_TICK_SCALP,
   ]);
   // GRID mid hold skipped only when near grid edge — checked in case
 
@@ -379,11 +396,13 @@ export function evaluateStrategyMode(
   const spreadOk = i.atr >= i.price * 0.0004 || i.atr >= 0.5;
 
   // Soft exhaust close
-  if (i.rsi > 78 && bearStack) {
-    return { signal: "CLOSE", score: 70, gate: "exhaust_long", bias: "bear", buyScore: 0, sellScore: 70 };
-  }
-  if (i.rsi < 22 && bullStack) {
-    return { signal: "CLOSE", score: 70, gate: "exhaust_short", bias: "bull", buyScore: 70, sellScore: 0 };
+  if (mode !== StrategyMode.EMA_TICK_SCALP) {
+    if (i.rsi > 78 && bearStack) {
+      return { signal: "CLOSE", score: 70, gate: "exhaust_long", bias: "bear", buyScore: 0, sellScore: 70 };
+    }
+    if (i.rsi < 22 && bullStack) {
+      return { signal: "CLOSE", score: 70, gate: "exhaust_short", bias: "bull", buyScore: 70, sellScore: 0 };
+    }
   }
 
   let buy = 0;
@@ -586,6 +605,77 @@ export function evaluateStrategyMode(
         "scalp_short",
       );
       if (i.adx <= 18) gate = "scalp_chop";
+      break;
+    }
+    case StrategyMode.EMA_TICK_SCALP: {
+      applyMidHold = false;
+      const gap = Math.abs(i.ema1 - i.ema3);
+      const gapPrev = Math.abs(i.ema1Prev - i.ema3Prev);
+      const diverging = gap > gapPrev;
+      const crossUp = i.ema1Prev <= i.ema3Prev && i.ema1 > i.ema3;
+      const crossDown = i.ema1Prev >= i.ema3Prev && i.ema1 < i.ema3;
+
+      // Manage open: opposite cross or price through EMA3 → CLOSE
+      if (opts?.hasOpenBuy) {
+        if (crossDown || i.price < i.ema3) {
+          return {
+            signal: "CLOSE",
+            score: 90,
+            gate: crossDown ? "ema13_cross_down_exit" : "price_below_ema3_exit",
+            bias: "bear",
+            buyScore: 0,
+            sellScore: 90,
+          };
+        }
+        return {
+          signal: "HOLD",
+          score: 0,
+          gate: "ema13_trail_long",
+          bias: "bull",
+          buyScore: 0,
+          sellScore: 0,
+        };
+      }
+      if (opts?.hasOpenSell) {
+        if (crossUp || i.price > i.ema3) {
+          return {
+            signal: "CLOSE",
+            score: 90,
+            gate: crossUp ? "ema13_cross_up_exit" : "price_above_ema3_exit",
+            bias: "bull",
+            buyScore: 90,
+            sellScore: 0,
+          };
+        }
+        return {
+          signal: "HOLD",
+          score: 0,
+          gate: "ema13_trail_short",
+          bias: "bear",
+          buyScore: 0,
+          sellScore: 0,
+        };
+      }
+
+      // Entry only on a fresh cross + price side + divergence (no candle-close wait)
+      pass(
+        crossUp && i.price > i.ema3 && diverging,
+        100,
+        "buy",
+        "ema13_cross_up",
+      );
+      pass(
+        crossDown && i.price < i.ema3 && diverging,
+        100,
+        "sell",
+        "ema13_cross_down",
+      );
+      if (buy === 0 && sell === 0) {
+        gate =
+          crossUp || crossDown
+            ? "ema13_cross_no_confirm"
+            : "ema13_wait_cross";
+      }
       break;
     }
     case StrategyMode.MEAN_REVERSION: {
