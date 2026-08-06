@@ -29,6 +29,9 @@ export type Indicators = {
   ema3: number;
   ema1Prev: number;
   ema3Prev: number;
+  /** Two bars back — detect cross that already closed on prior 10s candle */
+  ema1Prev2: number;
+  ema3Prev2: number;
   ema9: number;
   ema21: number;
   ema55: number;
@@ -119,6 +122,8 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
   const ema3 = ema(closes, 3);
   const ema1Prev = ema(closesPrev, 1);
   const ema3Prev = ema(closesPrev, 3);
+  const ema1Prev2 = closesPrev2.length ? ema(closesPrev2, 1) : ema1Prev;
+  const ema3Prev2 = closesPrev2.length ? ema(closesPrev2, 3) : ema3Prev;
   const ema9 = ema(closes, 9);
   const ema21 = ema(closes, 21);
   const ema55 = ema(closes, 55);
@@ -267,6 +272,8 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
     ema3,
     ema1Prev,
     ema3Prev,
+    ema1Prev2,
+    ema3Prev2,
     ema9,
     ema21,
     ema55,
@@ -614,35 +621,40 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.EMA_TICK_SCALP: {
-      // Separate from SCALPING (fast confluence). Rules:
-      // ENTRY: fresh EMA1×EMA3 cross + price on that side of EMA3 + divergence
-      // EXIT: opposite cross OR price crossing through EMA3
-      // ONE fresh cross only — edge via prevEmaSide (no level spam / chop)
+      // Separate from SCALPING. Entry = fresh EMA1×EMA3 cross window + divergence.
+      // Exit = opposite cross OR price edge through EMA3. No soft-score fake readiness.
       applyMidHold = false;
       const gap = Math.abs(i.ema1 - i.ema3);
       const gapPrev = Math.abs(i.ema1Prev - i.ema3Prev);
       const diverging = gap > gapPrev;
+      // Forming bar: prev closed below/at, live EMA1/price above EMA3
       const structCrossUp = i.ema1Prev <= i.ema3Prev && i.ema1 > i.ema3;
       const structCrossDown = i.ema1Prev >= i.ema3Prev && i.ema1 < i.ema3;
+      // Last closed bar already crossed (still valid for ~1×10s to take the entry)
+      const closedCrossUp = i.ema1Prev2 <= i.ema3Prev2 && i.ema1Prev > i.ema3Prev;
+      const closedCrossDown = i.ema1Prev2 >= i.ema3Prev2 && i.ema1Prev < i.ema3Prev;
       const side: "above" | "below" = i.price >= i.ema3 ? "above" : "below";
       const prevSide = opts?.prevEmaSide ?? null;
-      // Fresh edge through EMA3 (tick) — not "already above/below"
       const edgeUp = prevSide === "below" && side === "above";
       const edgeDown = prevSide === "above" && side === "below";
-      // First tick after start: no prevSide — allow structural cross only once structure confirms
-      const bootCrossUp = prevSide == null && structCrossUp && side === "above";
-      const bootCrossDown = prevSide == null && structCrossDown && side === "below";
-      const freshBuy = (edgeUp || bootCrossUp) && structCrossUp && diverging && i.price > i.ema3;
-      const freshSell =
-        (edgeDown || bootCrossDown) && structCrossDown && diverging && i.price < i.ema3;
 
-      // Manage open: opposite EMA cross OR price edge through EMA3 → CLOSE
+      const freshBuy =
+        (structCrossUp || closedCrossUp) &&
+        diverging &&
+        i.price > i.ema3;
+      const freshSell =
+        (structCrossDown || closedCrossDown) &&
+        diverging &&
+        i.price < i.ema3;
+
       if (opts?.hasOpenBuy) {
-        if (structCrossDown || edgeDown) {
+        if (structCrossDown || closedCrossDown || edgeDown) {
           return {
             signal: "CLOSE",
             score: 90,
-            gate: structCrossDown ? "ema13_cross_down_exit" : "price_through_ema3_exit",
+            gate: structCrossDown || closedCrossDown
+              ? "ema13_cross_down_exit"
+              : "price_through_ema3_exit",
             bias: "bear",
             buyScore: 0,
             sellScore: 90,
@@ -658,11 +670,13 @@ export function evaluateStrategyMode(
         };
       }
       if (opts?.hasOpenSell) {
-        if (structCrossUp || edgeUp) {
+        if (structCrossUp || closedCrossUp || edgeUp) {
           return {
             signal: "CLOSE",
             score: 90,
-            gate: structCrossUp ? "ema13_cross_up_exit" : "price_through_ema3_exit",
+            gate: structCrossUp || closedCrossUp
+              ? "ema13_cross_up_exit"
+              : "price_through_ema3_exit",
             bias: "bull",
             buyScore: 90,
             sellScore: 0,
@@ -678,17 +692,12 @@ export function evaluateStrategyMode(
         };
       }
 
-      // Flat: entry only on a fresh cross (never while merely sitting above/below EMA3)
       pass(freshBuy, 100, "buy", "ema13_cross_up");
       pass(freshSell, 100, "sell", "ema13_cross_down");
       if (buy === 0 && sell === 0) {
-        if (structCrossUp || structCrossDown) {
-          gate = prevSide == null ? "ema13_wait_edge" : "ema13_cross_no_confirm";
-        } else if (side === "above" || side === "below") {
-          gate = "ema13_wait_fresh_cross";
-        } else {
-          gate = "ema13_wait_cross";
-        }
+        if (side === "above") gate = "ema13_wait_fresh_cross";
+        else if (side === "below") gate = "ema13_wait_fresh_cross";
+        else gate = "ema13_wait_cross";
       }
       break;
     }
@@ -1181,8 +1190,19 @@ export function evaluateStrategyMode(
   }
 
   // Binary modes stay at 0 until full AND — show soft confluence so UI isn't "dead"
+  // EMA tick is hard-gated on fresh cross — never fake soft scores (looked "ready" at 80 while waiting)
   let displayBuy = buy;
   let displaySell = sell;
+  if (mode === StrategyMode.EMA_TICK_SCALP) {
+    return {
+      signal: "HOLD",
+      score: 0,
+      gate,
+      bias: i.price >= i.ema3 ? "bull" : i.price < i.ema3 ? "bear" : "flat",
+      buyScore: 0,
+      sellScore: 0,
+    };
+  }
   if (displayBuy === 0 && displaySell === 0) {
     displayBuy = softSideScore(i, "buy");
     displaySell = softSideScore(i, "sell");

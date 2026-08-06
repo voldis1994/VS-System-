@@ -40,6 +40,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   private readonly lastFingerprint = new Map<string, string>();
   /** EMA_TICK_SCALP: last price side vs EMA3 per strategy:symbol — fresh-cross edge only */
   private readonly emaSideByKey = new Map<string, "above" | "below">();
+  /** EMA_TICK_SCALP: which cross generation already taken (anti-chop on same window) */
+  private readonly emaCrossConsumed = new Map<string, string>();
   private ticking = false;
 
   constructor(
@@ -63,6 +65,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
     for (const key of [...this.emaSideByKey.keys()]) {
       if (key.startsWith(`${strategyId}:`)) this.emaSideByKey.delete(key);
+    }
+    for (const key of [...this.emaCrossConsumed.keys()]) {
+      if (key.startsWith(`${strategyId}:`)) this.emaCrossConsumed.delete(key);
     }
   }
 
@@ -605,6 +610,37 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           buyScore: scored.buyScore,
           sellScore: scored.sellScore,
         };
+      }
+
+      // EMA: one entry per cross generation (forming or last closed bar) — no re-chop
+      if (isEmaTickScalp) {
+        const crossKey = `${strategy.id}:${brokerSymbol}`;
+        if (scored.gate === "ema13_wait_fresh_cross" || scored.gate === "ema13_wait_cross") {
+          // Left the cross window — next real cross may fire
+          this.emaCrossConsumed.delete(crossKey);
+        } else if (signal === "BUY" || signal === "SELL") {
+          const barT = String(
+            (lastBar?.openTime as string | Date | undefined) ??
+              (lastBar?.closeTime as string | Date | undefined) ??
+              "",
+          );
+          const gen = `${signal}:${barT}:${scored.gate}`;
+          if (this.emaCrossConsumed.get(crossKey) === gen) {
+            lastStatus = {
+              ...lastStatus,
+              signal: "HOLD",
+              skip: "quality_wait",
+              gate: "ema13_cross_consumed",
+              reason: "Šis EMA1×EMA3 krustojums jau izmantots — gaida nākamo",
+              buyScore: 0,
+              sellScore: 0,
+              score: 0,
+            };
+            continue;
+          }
+          // Mark consumed only after successful place — set tentatively; clear if all accounts fail
+          this.emaCrossConsumed.set(crossKey, gen);
+        }
       }
 
       // NOTE: do NOT early-return on any open trade — that blocked BUY↔SELL flips

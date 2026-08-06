@@ -64,6 +64,22 @@ export function deploymentHint(d: DeploymentState): string | null {
   if (d.gate === "flip_no_confluence") {
     return "Flip bloķēts — pretējai pusei nav mode confluence.";
   }
+  if (
+    d.gate === "ema13_wait_fresh_cross" ||
+    d.gate === "ema13_wait_cross" ||
+    d.gate === "ema13_wait_edge"
+  ) {
+    return "EMA 1/3: gaida svaigu EMA1×EMA3 krustojumu (tagad jau vienā pusē — bez jauna cross neieies).";
+  }
+  if (d.gate === "ema13_cross_consumed") {
+    return "EMA 1/3: šis krustojums jau izmantots — gaida nākamo svaigo cross.";
+  }
+  if (d.gate === "ema13_trail_long" || d.gate === "ema13_trail_short") {
+    return "EMA 1/3: pozīcija atvērta — trail uz EMA3, exit pretējā cross / caur EMA3.";
+  }
+  if (d.gate === "ema13_cross_up" || d.gate === "ema13_cross_down") {
+    return `EMA 1/3: svaigs krustojums → ${d.gate === "ema13_cross_up" ? "BUY" : "SELL"}.`;
+  }
   if (d.flipped && (d.signal === "BUY" || d.signal === "SELL")) {
     return `Flip ${d.flippedFrom ?? "?"}→${d.signal} (sveces bloķēja ${d.flippedFrom ?? "?"}).`;
   }
