@@ -115,44 +115,41 @@ export default function LoginPage() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_18%_0%,_rgba(201,162,39,0.22),_transparent_52%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_90%_80%,_rgba(46,207,143,0.08),_transparent_45%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_18%_0%,_rgba(0,240,255,0.22),_transparent_52%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_90%_80%,_rgba(255,43,214,0.1),_transparent_45%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(0,240,255,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(0,240,255,0.07)_1px,transparent_1px)] [background-size:48px_48px]" />
       <motion.div
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45 }}
-        className="relative w-full max-w-md rounded-2xl border border-[var(--line)] bg-[color:var(--bg-panel)]/90 p-7 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-md vs-fade-up"
+        className="vs-neon-frame relative w-full max-w-md border border-accent/35 bg-[color:var(--bg-panel)]/92 p-7 shadow-neon backdrop-blur-md"
       >
         <div className="mb-7 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/vs-system-logo.png"
             alt="VS System"
-            className="mx-auto mb-4 h-[4.5rem] w-[4.5rem] rounded-2xl object-cover ring-1 ring-accent/30 vs-breathe"
+            className="mx-auto mb-4 h-[5rem] w-[5rem] object-cover ring-1 ring-accent/50 drop-shadow-[0_0_22px_rgba(0,240,255,0.45)] vs-breathe"
           />
-          <div className="font-display text-3xl font-bold tracking-tight text-white">
-            VS <span className="text-accent">System</span>
+          <div className="font-display text-3xl font-bold tracking-[0.12em] text-white">
+            VS <span className="text-accent drop-shadow-[0_0_14px_rgba(0,240,255,0.55)]">SYSTEM</span>
           </div>
-          <p className="mt-2 text-sm text-white/45">
-            Multi-account trading command deck
-          </p>
-          <p className="mt-3 text-[11px] leading-relaxed text-white/35">
-            Klientiem: <span className="font-mono text-accent-soft">/client</span> (Wi‑Fi IP vai
-            remote tunnel links) — nevis /dashboard.
+          <p className="mt-2 text-sm tracking-wide text-white/45">
+            Gamer cyber neon · multi-account command deck
           </p>
         </div>
 
-        <div className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-white/[0.04] p-1">
+        <div className="mb-5 grid grid-cols-2 gap-1 border border-white/10 bg-white/[0.03] p-1">
           <button
             type="button"
-            className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${tab === "login" ? "bg-accent text-[#1a1408]" : "text-white/50 hover:text-white"}`}
+            className={`px-3 py-2 text-sm font-semibold tracking-wide transition-colors ${tab === "login" ? "bg-accent text-[#041018]" : "text-white/50 hover:text-white"}`}
             onClick={() => setTab("login")}
           >
             Login
           </button>
           <button
             type="button"
-            className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${tab === "register" ? "bg-accent text-[#1a1408]" : "text-white/50 hover:text-white"}`}
+            className={`px-3 py-2 text-sm font-semibold tracking-wide transition-colors ${tab === "register" ? "bg-accent text-[#041018]" : "text-white/50 hover:text-white"}`}
             onClick={() => setTab("register")}
           >
             Register

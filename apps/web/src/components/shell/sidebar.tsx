@@ -39,21 +39,22 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-[var(--line)] bg-[color:var(--bg-deep)]/95">
-      <div className="border-b border-[var(--line)] px-4 py-4">
+    <aside className="relative flex h-full w-56 shrink-0 flex-col border-r border-accent/20 bg-[color:var(--bg-deep)]/95">
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-accent/40 to-transparent" />
+      <div className="border-b border-accent/20 px-4 py-4">
         <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/vs-system-logo.png"
             alt="VS System"
-            className="h-10 w-10 rounded-xl object-cover ring-1 ring-accent/25"
+            className="h-10 w-10 object-cover ring-1 ring-accent/50 drop-shadow-[0_0_14px_rgba(0,240,255,0.4)]"
           />
           <div>
-            <div className="font-display text-lg font-bold tracking-tight text-white">
-              VS <span className="text-accent">System</span>
+            <div className="font-display text-base font-bold tracking-[0.08em] text-white">
+              VS <span className="text-accent drop-shadow-[0_0_10px_rgba(0,240,255,0.45)]">SYSTEM</span>
             </div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-white/35">
-              Trading Platform
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.28em] text-accent/60">
+              Cyber Deck
             </div>
           </div>
         </div>
@@ -70,10 +71,10 @@ export function Sidebar() {
               className={cn(
                 "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
                 active
-                  ? "bg-accent-muted text-white"
+                  ? "border border-accent/35 bg-accent/15 text-white shadow-[0_0_16px_rgba(0,240,255,0.15)]"
                   : href === "/strategies"
                     ? "border border-accent/30 bg-accent/5 text-white hover:bg-accent/10"
-                    : "text-white/55 hover:bg-white/[0.04] hover:text-white",
+                    : "border border-transparent text-white/55 hover:border-accent/15 hover:bg-white/[0.04] hover:text-white",
               )}
             >
               <Icon className={cn("h-4 w-4", active || href === "/strategies" ? "text-accent-soft" : "text-white/40")} />
@@ -87,8 +88,8 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="border-t border-white/[0.06] p-3 text-[10px] text-white/30">
-        VS System · command deck
+      <div className="border-t border-accent/15 p-3 text-[10px] tracking-wide text-accent/40">
+        VS System · neon command
       </div>
     </aside>
   );

@@ -157,7 +157,46 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
 }
 
 const shell =
-  "min-h-[100dvh] bg-[#05070a] text-[#e8eef5] [background-image:radial-gradient(1000px_520px_at_50%_-20%,rgba(140,170,200,.09),transparent_55%),linear-gradient(180deg,#070b10_0%,#05070a_100%)]";
+  "min-h-[100dvh] bg-[#02040a] text-[#e8f7ff] [background-image:radial-gradient(900px_480px_at_50%_-12%,rgba(0,240,255,.18),transparent_55%),radial-gradient(700px_420px_at_90%_100%,rgba(255,43,214,.08),transparent_50%),linear-gradient(180deg,#050a14_0%,#02040a_100%)]";
+
+const MODE_META: Record<string, { label: string; tip: string }> = {
+  [StrategyMode.EMA_TICK_SCALP]: {
+    label: "EMA 1/3 TICK",
+    tip: "10s · EMA1×EMA3 krustojums · trail uz EMA3 · BE pie 1R · bez sveces aizvēršanās",
+  },
+  [StrategyMode.SCALPING]: {
+    label: "SCALPING",
+    tip: "Ātrs 10s scalp ar EMA/MACD/stoch confluence",
+  },
+  [StrategyMode.TREND]: {
+    label: "TREND",
+    tip: "Seko trendam pēc pullback ieejas",
+  },
+  [StrategyMode.MOMENTUM]: {
+    label: "MOMENTUM",
+    tip: "Ķer ekspansiju / izrāvienu",
+  },
+  [StrategyMode.PULLBACK]: {
+    label: "PULLBACK",
+    tip: "Ieeja pēc atvilkuma trendā",
+  },
+  [StrategyMode.BREAKOUT]: {
+    label: "BREAKOUT",
+    tip: "Izlaušanās no saspiešanas",
+  },
+  [StrategyMode.MEAN_REVERSION]: {
+    label: "MEAN REV",
+    tip: "Fade ekstremumus pie vidējā",
+  },
+  [StrategyMode.REVERSAL]: {
+    label: "REVERSAL",
+    tip: "Apgrieziens pēc ekstremuma",
+  },
+  [StrategyMode.RANGE]: {
+    label: "RANGE",
+    tip: "Diapazona robežas",
+  },
+};
 
 export default function ClientPortalPage() {
   const [server, setServer] = useState<ClientServerConfig | null>(null);
@@ -174,7 +213,7 @@ export default function ClientPortalPage() {
   const [strategy, setStrategy] = useState<PortalStrategy | null>(null);
   const [openPositions, setOpenPositions] = useState(0);
 
-  const [mode, setMode] = useState<string>(StrategyMode.TREND);
+  const [mode, setMode] = useState<string>(StrategyMode.EMA_TICK_SCALP);
   const [lotSize, setLotSize] = useState("0.01");
   const [exit, setExit] = useState<ExitVersion>("SCALP");
   const [epic, setEpic] = useState("GOLD");
@@ -360,7 +399,9 @@ export default function ClientPortalPage() {
   if (booting) {
     return (
       <div className={`${shell} flex items-center justify-center`}>
-        <p className="text-[11px] tracking-[0.35em] text-[#8aa0b8]">CONNECTING…</p>
+        <p className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.4em] text-[#00f0ff] drop-shadow-[0_0_12px_rgba(0,240,255,0.5)]">
+          CONNECTING…
+        </p>
       </div>
     );
   }
@@ -369,18 +410,24 @@ export default function ClientPortalPage() {
     return (
       <div className={`${shell} px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2.75rem,env(safe-area-inset-top))]`}>
         <div className="mx-auto w-full max-w-[360px]">
-          <p className="text-center text-[10px] font-medium tracking-[0.42em] text-[#8aa0b8]">VS SYSTEM</p>
-          <h1 className="mt-3 text-center font-[family-name:var(--font-display)] text-[34px] font-semibold tracking-[-0.03em] text-[#f2f6fa]">
-            Client
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/vs-system-logo.png"
+            alt=""
+            className="mx-auto h-14 w-14 object-contain drop-shadow-[0_0_22px_rgba(0,240,255,0.55)]"
+          />
+          <p className="mt-4 text-center text-[10px] font-medium tracking-[0.42em] text-[#00f0ff]">VS SYSTEM</p>
+          <h1 className="mt-2 text-center font-[family-name:var(--font-display)] text-[34px] font-semibold tracking-[0.08em] text-white">
+            CLIENT
           </h1>
-          <p className="mt-2 text-center text-[13px] leading-relaxed text-[#7d8fa3]">
+          <p className="mt-2 text-center text-[13px] leading-relaxed text-[#7a93a8]">
             Parasti nevajag — atver linku no PC (Wi‑Fi IP vai remote tunnel). Šeit tikai ja auto savienojums neizdevās.
           </p>
-          <div className="mt-8 space-y-3 border border-[#1a2330] bg-[#0a0e14]/90 p-5">
-            <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+          <div className="vs-neon-frame mt-8 space-y-3 border border-[#00f0ff]/30 bg-[#070d16]/95 p-5 shadow-[0_0_28px_rgba(0,240,255,0.12)]">
+            <label className="block text-[10px] tracking-[0.28em] text-[#00f0ff]/80">
               SERVER IP
               <input
-                className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-3 font-mono text-[15px] text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
+                className="mt-2 w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-3 font-mono text-[15px] text-[#e8f7ff] outline-none focus:border-[#00f0ff] focus:shadow-[0_0_12px_rgba(0,240,255,0.2)]"
                 value={serverDraft.host}
                 onChange={(e) => setServerDraft((s) => ({ ...s, host: e.target.value.trim() }))}
                 placeholder="192.168.1.50"
@@ -388,34 +435,34 @@ export default function ClientPortalPage() {
               />
             </label>
             <div className="grid grid-cols-2 gap-3">
-              <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+              <label className="block text-[10px] tracking-[0.28em] text-[#00f0ff]/80">
                 WEB
                 <input
-                  className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-3 font-mono text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
+                  className="mt-2 w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-3 font-mono text-[#e8f7ff] outline-none focus:border-[#00f0ff]"
                   value={serverDraft.webPort}
                   onChange={(e) => setServerDraft((s) => ({ ...s, webPort: e.target.value }))}
                 />
               </label>
-              <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+              <label className="block text-[10px] tracking-[0.28em] text-[#00f0ff]/80">
                 API
                 <input
-                  className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-3 font-mono text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
+                  className="mt-2 w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-3 font-mono text-[#e8f7ff] outline-none focus:border-[#00f0ff]"
                   value={serverDraft.apiPort}
                   onChange={(e) => setServerDraft((s) => ({ ...s, apiPort: e.target.value }))}
                 />
               </label>
             </div>
-            {error ? <p className="text-[13px] text-[#c97a8a]">{error}</p> : null}
+            {error ? <p className="text-[13px] text-[#ff2d55]">{error}</p> : null}
             <button
               type="button"
               disabled={testing || !serverDraft.host}
               onClick={() => void testAndSaveServer()}
-              className="mt-2 w-full border border-[#c5d4e3] bg-[#d7e2ee] py-3.5 text-[12px] font-semibold tracking-[0.18em] text-[#0a1018] disabled:opacity-40"
+              className="mt-2 w-full border border-[#00f0ff]/60 bg-[#00f0ff]/20 py-3.5 text-[12px] font-bold tracking-[0.22em] text-[#e8f7ff] shadow-[0_0_24px_rgba(0,240,255,0.25)] transition hover:bg-[#00f0ff]/30 disabled:opacity-40"
             >
               {testing ? "…" : "CONNECT"}
             </button>
             {server ? (
-              <button type="button" className="w-full py-2 text-[11px] text-[#5c6d80]" onClick={() => setShowServer(false)}>
+              <button type="button" className="w-full py-2 text-[11px] text-[#5f7a90]" onClick={() => setShowServer(false)}>
                 Cancel
               </button>
             ) : null}
@@ -432,21 +479,30 @@ export default function ClientPortalPage() {
           <button
             type="button"
             onClick={() => setShowServer(true)}
-            className="mb-10 text-[10px] tracking-[0.2em] text-[#5c6d80]"
+            className="mb-8 text-[10px] tracking-[0.2em] text-[#3d5163]"
           >
             {server.host}:{server.apiPort}
           </button>
-          <p className="text-center text-[10px] font-medium tracking-[0.42em] text-[#8aa0b8]">VS SYSTEM</p>
-          <h1 className="mt-3 text-center font-[family-name:var(--font-display)] text-[40px] font-semibold tracking-[-0.04em] text-[#f2f6fa]">
-            Client
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/vs-system-logo.png"
+            alt=""
+            className="mx-auto h-16 w-16 object-contain drop-shadow-[0_0_24px_rgba(0,240,255,0.55)]"
+          />
+          <p className="mt-4 text-center text-[10px] font-medium tracking-[0.42em] text-[#00f0ff]">VS SYSTEM</p>
+          <h1 className="mt-2 text-center font-[family-name:var(--font-display)] text-[40px] font-semibold tracking-[0.08em] text-white">
+            CLIENT
           </h1>
-          <p className="mt-3 text-center text-[13px] text-[#7d8fa3]">Ievadi PIN, ko saņēmi no operatora</p>
+          <p className="mt-3 text-center text-[13px] text-[#7a93a8]">Ievadi PIN, ko saņēmi no operatora</p>
 
-          <form onSubmit={login} className="mt-10 border border-[#1a2330] bg-[#0a0e14]/90 p-5">
-            <label className="block text-[10px] tracking-[0.28em] text-[#6b7f94]">
+          <form
+            onSubmit={login}
+            className="vs-neon-frame mt-10 border border-[#00f0ff]/30 bg-[#070d16]/95 p-5 shadow-[0_0_28px_rgba(0,240,255,0.12)]"
+          >
+            <label className="block text-[10px] tracking-[0.28em] text-[#00f0ff]/80">
               ACCESS PIN
               <input
-                className="mt-2 w-full border border-[#243041] bg-[#06090d] px-3 py-4 text-center font-mono text-[22px] tracking-[0.35em] text-[#e8eef5] outline-none focus:border-[#9eb6cc]"
+                className="mt-2 w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-4 text-center font-mono text-[22px] tracking-[0.35em] text-[#e8f7ff] outline-none focus:border-[#00f0ff] focus:shadow-[0_0_16px_rgba(0,240,255,0.25)]"
                 value={pin}
                 onChange={(e) =>
                   setPin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12))
@@ -458,11 +514,11 @@ export default function ClientPortalPage() {
                 autoFocus
               />
             </label>
-            {error ? <p className="mt-3 text-[13px] text-[#c97a8a]">{error}</p> : null}
+            {error ? <p className="mt-3 text-[13px] text-[#ff2d55]">{error}</p> : null}
             <button
               type="submit"
               disabled={busy || pin.length < 6}
-              className="mt-5 w-full border border-[#c5d4e3] bg-[#d7e2ee] py-3.5 text-[12px] font-semibold tracking-[0.18em] text-[#0a1018] disabled:opacity-40"
+              className="mt-5 w-full border border-[#00f0ff]/60 bg-[#00f0ff]/20 py-3.5 text-[12px] font-bold tracking-[0.22em] text-[#e8f7ff] shadow-[0_0_24px_rgba(0,240,255,0.25)] transition hover:bg-[#00f0ff]/30 disabled:opacity-40"
             >
               {busy ? "…" : "ENTER"}
             </button>
@@ -475,23 +531,31 @@ export default function ClientPortalPage() {
   return (
     <div className={`${shell} px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]`}>
       <div className="mx-auto flex w-full max-w-[400px] flex-col gap-3">
-        <header className="flex items-start justify-between gap-3 border-b border-[#151c26] pb-3">
-          <div>
-            <p className="text-[9px] tracking-[0.35em] text-[#8aa0b8]">VS CLIENT</p>
-            <h1 className="mt-1 font-[family-name:var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">
-              {account.name}
-            </h1>
-            <p className="mt-0.5 font-mono text-[12px] text-[#6b7f94]">
-              {Number(account.equity).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
-              {account.baseCurrency}
-              {openPositions ? ` · ${openPositions} open` : ""}
-            </p>
+        <header className="flex items-start justify-between gap-3 border-b border-[#00f0ff]/20 pb-3">
+          <div className="flex items-start gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/vs-system-logo.png"
+              alt=""
+              className="mt-0.5 h-10 w-10 object-contain drop-shadow-[0_0_16px_rgba(0,240,255,0.45)]"
+            />
+            <div>
+              <p className="text-[9px] tracking-[0.4em] text-[#00f0ff]">VS CLIENT</p>
+              <h1 className="mt-1 font-[family-name:var(--font-display)] text-[20px] font-semibold tracking-[0.06em] text-white">
+                {account.name}
+              </h1>
+              <p className="mt-0.5 font-mono text-[12px] text-[#7a93a8]">
+                {Number(account.equity).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
+                {account.baseCurrency}
+                {openPositions ? ` · ${openPositions} open` : ""}
+              </p>
+            </div>
           </div>
           <div className="flex flex-col items-end gap-2 pt-1">
-            <button type="button" onClick={() => setShowServer(true)} className="text-[10px] text-[#4d5d6e]">
+            <button type="button" onClick={() => setShowServer(true)} className="text-[10px] text-[#3d5163]">
               {server.host}
             </button>
-            <button type="button" onClick={logout} className="text-[11px] tracking-wide text-[#7d8fa3]">
+            <button type="button" onClick={logout} className="text-[11px] tracking-wide text-[#7a93a8]">
               Exit
             </button>
           </div>
@@ -500,23 +564,23 @@ export default function ClientPortalPage() {
         <div
           className={`border px-3 py-2 font-mono text-[11px] tracking-wide ${
             strategy?.status === "RUNNING"
-              ? "border-[#3d5a4a] bg-[#0c1612] text-[#9dceb4]"
-              : "border-[#1a2330] bg-[#0a0e14] text-[#6b7f94]"
+              ? "border-[#39ff14]/40 bg-[#07140f] text-[#39ff14] shadow-[0_0_16px_rgba(57,255,20,0.15)]"
+              : "border-[#00f0ff]/20 bg-[#070d16] text-[#7a93a8]"
           }`}
         >
           {strategy ? `${strategy.status} · ${strategy.mode}` : "NO STRATEGY"}
         </div>
 
-        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
-          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">MARKET</p>
+        <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">MARKET</p>
           <input
-            className="mb-2 w-full border border-[#243041] bg-[#06090d] px-3 py-2 text-[13px] outline-none focus:border-[#9eb6cc]"
+            className="mb-2 w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-2 text-[13px] outline-none focus:border-[#00f0ff]"
             placeholder="Search…"
             value={marketQ}
             onChange={(e) => setMarketQ(e.target.value)}
           />
           <select
-            className="w-full border border-[#243041] bg-[#06090d] px-3 py-3 text-[13px]"
+            className="w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-3 text-[13px]"
             value={epic}
             onChange={(e) => setEpic(e.target.value)}
           >
@@ -529,23 +593,56 @@ export default function ClientPortalPage() {
           </select>
         </section>
 
-        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
-          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">STRATEGY</p>
+        <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">STRATEGY</p>
+          <div className="mb-2 grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={() => setMode(StrategyMode.EMA_TICK_SCALP)}
+              className={`border px-2 py-2.5 text-left ${
+                mode === StrategyMode.EMA_TICK_SCALP
+                  ? "border-[#00f0ff] bg-[#00f0ff]/15 text-[#7af6ff] shadow-[0_0_18px_rgba(0,240,255,0.25)]"
+                  : "border-[#1a2a3a] text-[#8aa3b8]"
+              }`}
+            >
+              <span className="block font-[family-name:var(--font-display)] text-[11px] tracking-wide">
+                EMA 1/3 TICK
+              </span>
+              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">10s neon scalp</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode(StrategyMode.SCALPING)}
+              className={`border px-2 py-2.5 text-left ${
+                mode === StrategyMode.SCALPING
+                  ? "border-[#00f0ff] bg-[#00f0ff]/15 text-[#7af6ff]"
+                  : "border-[#1a2a3a] text-[#8aa3b8]"
+              }`}
+            >
+              <span className="block font-[family-name:var(--font-display)] text-[11px] tracking-wide">
+                SCALPING
+              </span>
+              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">classic 10s</span>
+            </button>
+          </div>
           <select
-            className="w-full border border-[#243041] bg-[#06090d] px-3 py-3 text-[13px]"
+            className="w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-3 text-[13px]"
             value={mode}
             onChange={(e) => setMode(e.target.value)}
           >
             {MODES.map((m) => (
               <option key={m} value={m}>
-                {m}
+                {(MODE_META[m]?.label ?? m) + ` · ${modePreferredTimeframe(m)}`}
               </option>
             ))}
           </select>
+          <p className="mt-2 text-[11px] leading-snug text-[#8aa3b8]">
+            {MODE_META[mode]?.tip ?? `${mode} · ${modePreferredTimeframe(mode)}`}
+          </p>
         </section>
 
-        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
-          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">LOT</p>
+        <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">LOT</p>
           <div className="grid grid-cols-3 gap-1.5">
             {LOTS.map((l) => (
               <button
@@ -554,8 +651,8 @@ export default function ClientPortalPage() {
                 onClick={() => setLotSize(l)}
                 className={`border py-2.5 font-mono text-[13px] ${
                   lotSize === l
-                    ? "border-[#9eb6cc] bg-[#141c26] text-[#e8eef5]"
-                    : "border-[#243041] text-[#7d8fa3]"
+                    ? "border-[#00f0ff] bg-[#0e1a24] text-[#e8f7ff] shadow-[0_0_12px_rgba(0,240,255,0.2)]"
+                    : "border-[#1a2a3a] text-[#7a93a8]"
                 }`}
               >
                 {l}
@@ -564,19 +661,24 @@ export default function ClientPortalPage() {
           </div>
         </section>
 
-        <section className="border border-[#1a2330] bg-[#0a0e14]/80 p-3.5">
-          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#6b7f94]">EXIT</p>
-          <div className="space-y-1.5">
+        <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">EXIT</p>
+          {mode === StrategyMode.EMA_TICK_SCALP ? (
+            <p className="text-[11px] leading-snug text-[#8aa3b8]">
+              EMA tick: SL/trail no EMA3, BE pie 1R, close uz pretējo krustojumu — exit preset nav vajadzīgs.
+            </p>
+          ) : null}
+          <div className={`space-y-1.5 ${mode === StrategyMode.EMA_TICK_SCALP ? "mt-2 opacity-50" : ""}`}>
             {(Object.keys(EXITS) as ExitVersion[]).map((k) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setExit(k)}
                 className={`flex w-full items-center justify-between border px-3 py-3 text-left ${
-                  exit === k ? "border-[#9eb6cc] bg-[#141c26]" : "border-[#243041]"
+                  exit === k ? "border-[#00f0ff] bg-[#0e1a24]" : "border-[#1a2a3a]"
                 }`}
               >
-                <span className={`text-[13px] ${exit === k ? "text-[#e8eef5]" : "text-[#9aabbc]"}`}>
+                <span className={`text-[13px] ${exit === k ? "text-[#e8f7ff]" : "text-[#8aa3b8]"}`}>
                   {EXITS[k].label}
                 </span>
                 <span className="font-mono text-[10px] text-[#5c6d80]">{EXITS[k].hint}</span>
@@ -585,15 +687,15 @@ export default function ClientPortalPage() {
           </div>
         </section>
 
-        {error ? <p className="text-[13px] text-[#c97a8a]">{error}</p> : null}
-        {statusMsg ? <p className="text-[13px] text-[#9dceb4]">{statusMsg}</p> : null}
+        {error ? <p className="text-[13px] text-[#ff2d55]">{error}</p> : null}
+        {statusMsg ? <p className="text-[13px] text-[#39ff14]">{statusMsg}</p> : null}
 
         <div className="grid grid-cols-3 gap-1.5 pt-1">
           <button
             type="button"
             disabled={busy}
             onClick={() => void run("save")}
-            className="border border-[#243041] py-3.5 text-[11px] tracking-[0.12em] text-[#9aabbc]"
+            className="border border-[#00f0ff]/25 bg-[#070d16] py-3.5 text-[11px] tracking-[0.14em] text-[#7af6ff] transition hover:border-[#00f0ff]/50 disabled:opacity-40"
           >
             SAVE
           </button>
@@ -601,15 +703,15 @@ export default function ClientPortalPage() {
             type="button"
             disabled={busy}
             onClick={() => void run("start")}
-            className="border border-[#c5d4e3] bg-[#d7e2ee] py-3.5 text-[11px] font-semibold tracking-[0.12em] text-[#0a1018]"
+            className="border border-[#39ff14]/50 bg-[#39ff14]/15 py-3.5 text-[11px] font-bold tracking-[0.14em] text-[#39ff14] shadow-[0_0_20px_rgba(57,255,20,0.2)] transition hover:bg-[#39ff14]/25 disabled:opacity-40"
           >
-            START
+            ▶ START
           </button>
           <button
             type="button"
             disabled={busy}
             onClick={() => void run("stop")}
-            className="border border-[#4a3038] py-3.5 text-[11px] tracking-[0.12em] text-[#c97a8a]"
+            className="border border-[#ff2d55]/40 bg-[#ff2d55]/10 py-3.5 text-[11px] tracking-[0.14em] text-[#ff2d55] transition hover:bg-[#ff2d55]/20 disabled:opacity-40"
           >
             STOP
           </button>
@@ -617,7 +719,7 @@ export default function ClientPortalPage() {
 
         <button
           type="button"
-          className="pt-2 text-center text-[10px] text-[#3d4a58]"
+          className="pt-2 text-center text-[10px] text-[#3d5163]"
           onClick={() => {
             clearServerConfig();
             logout();

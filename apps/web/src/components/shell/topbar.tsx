@@ -87,12 +87,13 @@ export function Topbar() {
 
   return (
     <>
-      <header className="relative z-50 border-b border-white/[0.06] bg-navy-950">
+      <header className="relative z-50 border-b border-accent/20 bg-navy-950/95 shadow-[0_0_24px_rgba(0,240,255,0.06)]">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-accent/50 to-transparent" />
         <div className="flex items-center gap-4 px-4 py-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-3">
-              <h1 className="truncate font-sans text-2xl font-bold tracking-tight text-white">
-                VS <span className="text-accent">System</span>
+              <h1 className="font-display truncate text-2xl font-bold tracking-[0.06em] text-white">
+                VS <span className="text-accent drop-shadow-[0_0_12px_rgba(0,240,255,0.5)]">SYSTEM</span>
               </h1>
               <LiveDot label="FEED" />
             </div>
@@ -190,15 +191,15 @@ export function Topbar() {
           </div>
         </div>
 
-        <div className="relative z-0 flex gap-0 overflow-x-auto border-t border-white/[0.04] bg-navy-900/40 px-2 py-1.5">
+        <div className="relative z-0 flex gap-0 overflow-x-auto border-t border-accent/10 bg-navy-900/50 px-2 py-1.5">
           {(ticks ?? []).map((t) => {
             const mid = Number(t.mid);
             return (
               <div
                 key={t.symbol}
-                className="flex shrink-0 items-center gap-2 border-r border-white/[0.06] px-3 font-mono text-xs last:border-0"
+                className="flex shrink-0 items-center gap-2 border-r border-accent/10 px-3 font-mono text-xs last:border-0"
               >
-                <span className="font-semibold text-white/80">{t.symbol}</span>
+                <span className="font-semibold text-accent-soft/90">{t.symbol}</span>
                 <span className="tabular-nums text-white">{Number.isFinite(mid) ? mid.toFixed(mid > 100 ? 2 : 5) : "—"}</span>
                 <span className="text-white/30">{Number(t.spread).toFixed(5)}</span>
               </div>

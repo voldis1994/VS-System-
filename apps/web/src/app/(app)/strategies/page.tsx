@@ -599,12 +599,16 @@ export default function StrategiesPage() {
                   >
                     {STRATEGY_MODES.map((m) => (
                       <option key={m} value={m}>
-                        {m} · {modePreferredTimeframe(m)}
+                        {m === StrategyMode.EMA_TICK_SCALP
+                          ? `EMA 1/3 TICK · ${modePreferredTimeframe(m)}`
+                          : `${m} · ${modePreferredTimeframe(m)}`}
                       </option>
                     ))}
                   </Select>
                   <p className="mt-1 text-[11px] text-white/35">
-                    TF = {modePreferredTimeframe(draft.mode)} (kā jālasa tirgus šim režīmam)
+                    {draft.mode === StrategyMode.EMA_TICK_SCALP
+                      ? "10s · EMA1×EMA3 tick scalp · trail EMA3 · BE 1R"
+                      : `TF = ${modePreferredTimeframe(draft.mode)} (kā jālasa tirgus šim režīmam)`}
                   </p>
                 </Field>
 
@@ -614,12 +618,18 @@ export default function StrategiesPage() {
                     onChange={(e) =>
                       applyExitVersion(account.id, e.target.value as ExitVersion)
                     }
+                    disabled={draft.mode === StrategyMode.EMA_TICK_SCALP}
                   >
                     <option value="SCALP">SCALP — TP+BE+Trail (ciešs)</option>
                     <option value="SWING">SWING — TP+BE</option>
                     <option value="RUNNER">RUNNER — BE+Trail (bez TP)</option>
                     <option value="CUSTOM">CUSTOM — manuāli</option>
                   </Select>
+                  {draft.mode === StrategyMode.EMA_TICK_SCALP ? (
+                    <p className="mt-1 text-[11px] text-accent-soft/70">
+                      EMA tick: exit no EMA3 / pretējā krustojuma — preset nav vajadzīgs
+                    </p>
+                  ) : null}
                 </Field>
 
                 <div className="flex items-end gap-2">

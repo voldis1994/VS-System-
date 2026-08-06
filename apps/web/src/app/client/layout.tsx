@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#05070a",
+  themeColor: "#02040a",
   colorScheme: "dark",
   width: "device-width",
   initialScale: 1,
@@ -36,7 +36,7 @@ export const viewport: Viewport = {
 
 export default function ClientLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="client-app-root min-h-[100dvh] bg-[#07090c] text-[#f4f7f6]">
+    <div className="client-app-root min-h-[100dvh] bg-[#02040a] text-[#e8f7ff]">
       <ClientPwaRegister />
       {children}
     </div>

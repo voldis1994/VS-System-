@@ -34,11 +34,12 @@ export function CommandHero() {
   const floating = Number(analytics?.floatingPnl ?? 0);
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-accent/20 bg-navy-900/80">
+    <section className="vs-neon-frame relative overflow-hidden border border-accent/35 bg-navy-900/90 shadow-neon">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-24 -top-24 h-72 w-72 rounded-full bg-accent/10 blur-3xl vs-breathe" />
-        <div className="absolute -right-16 top-10 h-56 w-56 rounded-full bg-signal/10 blur-3xl" />
-        <div className="vs-scan-line absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-accent/15 to-transparent" />
+        <div className="absolute -left-24 -top-24 h-72 w-72 rounded-full bg-accent/15 blur-3xl vs-breathe" />
+        <div className="absolute -right-16 top-10 h-56 w-56 rounded-full bg-[rgba(255,43,214,0.12)] blur-3xl" />
+        <div className="vs-scan-line absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-accent/25 to-transparent" />
+        <div className="absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(0,240,255,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(0,240,255,0.07)_1px,transparent_1px)] [background-size:28px_28px]" />
       </div>
 
       <div className="relative grid gap-8 p-5 md:grid-cols-[1.15fr_0.85fr] md:p-7 lg:p-8">
@@ -48,39 +49,39 @@ export function CommandHero() {
             <img
               src="/vs-system-logo.png"
               alt="VS System"
-              className="h-16 w-16 rounded-xl object-cover ring-1 ring-accent/40 md:h-20 md:w-20"
+              className="h-16 w-16 object-cover ring-1 ring-accent/50 drop-shadow-[0_0_20px_rgba(0,240,255,0.45)] md:h-20 md:w-20"
             />
             <div>
               <div className="flex items-center gap-2">
                 <LiveDot />
-                <span className="text-[11px] uppercase tracking-[0.22em] text-accent-soft">
+                <span className="text-[11px] uppercase tracking-[0.32em] text-accent-soft">
                   Command deck
                 </span>
               </div>
-              <h1 className="font-display mt-1 text-4xl font-extrabold tracking-tight text-white md:text-5xl lg:text-6xl">
-                VS <span className="text-accent">System</span>
+              <h1 className="font-display mt-1 text-4xl font-extrabold tracking-[0.08em] text-white md:text-5xl lg:text-6xl">
+                VS <span className="text-accent drop-shadow-[0_0_18px_rgba(0,240,255,0.55)]">SYSTEM</span>
               </h1>
               <p className="mt-2 max-w-md text-sm text-white/55 md:text-base">
-                Multi-account live orchestration — strategy, exit, size — one deck.
+                Cyber command — multi-account live bots, exits, size. Neon deck.
               </p>
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-3">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Bots</div>
+            <div className="border border-accent/25 bg-black/35 px-3 py-3 shadow-[0_0_16px_rgba(0,240,255,0.12)]">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-accent/70">Bots</div>
               <div className="mt-1 font-mono text-2xl font-semibold text-signal">{running}</div>
               <div className="text-[11px] text-white/35">running</div>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-3">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Feed</div>
+            <div className="border border-accent/25 bg-black/35 px-3 py-3 shadow-[0_0_16px_rgba(0,240,255,0.12)]">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-accent/70">Feed</div>
               <div className="mt-1 font-mono text-2xl font-semibold text-white">
                 {connected}/{(accounts ?? []).length}
               </div>
               <div className="text-[11px] text-white/35">connected</div>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-3">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Open</div>
+            <div className="border border-accent/25 bg-black/35 px-3 py-3 shadow-[0_0_16px_rgba(0,240,255,0.12)]">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-accent/70">Open</div>
               <div className="mt-1 font-mono text-2xl font-semibold text-white">
                 {analytics?.openPositions ?? 0}
               </div>
@@ -142,16 +143,16 @@ export function MarketRivulet() {
   }
 
   return (
-    <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-navy-900/70">
-      <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-white/70">
+    <section className="overflow-hidden rounded-lg border border-accent/25 bg-navy-900/80 shadow-[0_0_24px_rgba(0,240,255,0.08)]">
+      <div className="flex items-center justify-between border-b border-accent/15 px-4 py-2.5">
+        <h2 className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-accent-soft/90">
           Market rivulet
         </h2>
         <div className="flex items-center gap-2">
           <span
             className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${
               mode === "streaming"
-                ? "border-signal/40 text-signal"
+                ? "border-signal/40 text-signal shadow-[0_0_10px_rgba(57,255,20,0.2)]"
                 : mode === "fallback"
                   ? "border-accent/40 text-accent-soft"
                   : "border-white/15 text-white/40"
@@ -168,9 +169,9 @@ export function MarketRivulet() {
           {row.map((t, i) => (
             <div
               key={`${t.symbol}-${i}`}
-              className="min-w-[148px] rounded-md border border-accent/15 bg-black/25 px-3 py-2"
+              className="min-w-[148px] rounded-md border border-accent/25 bg-black/35 px-3 py-2 shadow-[0_0_12px_rgba(0,240,255,0.08)]"
             >
-              <div className="truncate text-[10px] uppercase tracking-wider text-accent-soft/80">
+              <div className="truncate text-[10px] uppercase tracking-wider text-accent-soft/90">
                 {t.symbol}
               </div>
               <div className="mt-1 font-mono text-sm font-semibold tabular-nums text-white">
@@ -253,7 +254,7 @@ export function StrategyConstellation() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.05 * i }}
-              className="relative overflow-hidden rounded-xl border border-white/[0.07] bg-gradient-to-br from-accent/[0.07] to-transparent p-4"
+              className="relative overflow-hidden rounded-lg border border-accent/25 bg-gradient-to-br from-accent/[0.1] via-transparent to-[rgba(255,43,214,0.06)] p-4 shadow-[0_0_18px_rgba(0,240,255,0.08)]"
             >
               <div className="flex items-start justify-between gap-2">
                 <div>

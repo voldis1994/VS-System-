@@ -23,14 +23,14 @@ export function Panel({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, delay }}
       className={cn(
-        "rounded-lg border border-white/[0.07] bg-navy-900/70 backdrop-blur-sm",
+        "rounded-lg border border-accent/20 bg-navy-900/80 shadow-[0_0_24px_rgba(0,240,255,0.06)] backdrop-blur-sm",
         className,
       )}
     >
       {(title || action) && (
-        <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">
+        <div className="flex items-center justify-between border-b border-accent/15 px-4 py-2.5">
           {title ? (
-            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-white/70">
+            <h2 className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-accent-soft/90">
               {title}
             </h2>
           ) : (

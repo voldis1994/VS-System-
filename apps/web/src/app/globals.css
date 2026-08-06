@@ -3,17 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --bg-deep: #070b10;
-  --bg-panel: #101820;
-  --bg-panel-elevated: #15202b;
-  --accent: #c9a227;
-  --accent-soft: #e4c45a;
-  --signal: #2ecf8f;
-  --profit: #2ecf8f;
-  --loss: #f07167;
-  --text: #f4f1ea;
-  --muted: rgba(244, 241, 234, 0.42);
-  --line: rgba(201, 162, 39, 0.14);
+  --bg-deep: #02040a;
+  --bg-panel: #070d16;
+  --bg-panel-elevated: #0c1522;
+  --accent: #00f0ff;
+  --accent-soft: #7af6ff;
+  --signal: #39ff14;
+  --profit: #39ff14;
+  --loss: #ff2d55;
+  --text: #e8f7ff;
+  --muted: rgba(232, 247, 255, 0.42);
+  --line: rgba(0, 240, 255, 0.22);
+  --neon-pink: #ff2bd6;
+  --neon-violet: #8b5cff;
 }
 
 html,
@@ -24,10 +26,10 @@ body {
 body {
   color: var(--text);
   background:
-    radial-gradient(ellipse 80% 50% at 8% -10%, rgba(201, 162, 39, 0.18), transparent 52%),
-    radial-gradient(ellipse 60% 40% at 96% 4%, rgba(46, 207, 143, 0.08), transparent 48%),
-    radial-gradient(ellipse 45% 35% at 70% 100%, rgba(201, 162, 39, 0.06), transparent 55%),
-    linear-gradient(168deg, #070b10 0%, #0c1219 45%, #080d12 100%);
+    radial-gradient(ellipse 65% 42% at 10% -5%, rgba(0, 240, 255, 0.22), transparent 55%),
+    radial-gradient(ellipse 50% 38% at 95% 5%, rgba(255, 43, 214, 0.1), transparent 50%),
+    radial-gradient(ellipse 45% 35% at 70% 105%, rgba(57, 255, 20, 0.07), transparent 55%),
+    linear-gradient(168deg, #02040a 0%, #050a14 48%, #03050c 100%);
   background-attachment: fixed;
   font-family: var(--font-body), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -39,12 +41,12 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.35;
+  opacity: 0.45;
   background-image:
-    linear-gradient(rgba(201, 162, 39, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(201, 162, 39, 0.05) 1px, transparent 1px);
-  background-size: 64px 64px;
-  mask-image: radial-gradient(ellipse at 25% 0%, black 12%, transparent 68%);
+    linear-gradient(rgba(0, 240, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 20% 0%, black 8%, transparent 72%);
 }
 
 body::after {
@@ -54,8 +56,8 @@ body::after {
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(circle at 85% 55%, rgba(46, 207, 143, 0.045), transparent 32%),
-    radial-gradient(circle at 12% 78%, rgba(201, 162, 39, 0.04), transparent 28%);
+    radial-gradient(circle at 88% 48%, rgba(0, 240, 255, 0.07), transparent 28%),
+    radial-gradient(circle at 12% 82%, rgba(255, 43, 214, 0.05), transparent 26%);
 }
 
 #__next,
@@ -66,7 +68,7 @@ main {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(201, 162, 39, 0.35) transparent;
+  scrollbar-color: rgba(0, 240, 255, 0.4) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -74,12 +76,12 @@ main {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(201, 162, 39, 0.35);
-  border-radius: 999px;
+  background: rgba(0, 240, 255, 0.4);
+  border-radius: 2px;
 }
 
 input[type="range"] {
-  accent-color: #c9a227;
+  accent-color: #00f0ff;
 }
 
 @keyframes vs-orbit {
@@ -97,7 +99,7 @@ input[type="range"] {
     opacity: 0;
   }
   20% {
-    opacity: 0.7;
+    opacity: 0.85;
   }
   100% {
     transform: translateX(120%);
@@ -119,10 +121,12 @@ input[type="range"] {
   100% {
     opacity: 0.55;
     transform: scale(1);
+    filter: drop-shadow(0 0 8px rgba(0, 240, 255, 0.25));
   }
   50% {
     opacity: 1;
-    transform: scale(1.03);
+    transform: scale(1.04);
+    filter: drop-shadow(0 0 18px rgba(0, 240, 255, 0.55));
   }
 }
 
@@ -134,6 +138,16 @@ input[type="range"] {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes vs-neon-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.25), inset 0 0 12px rgba(0, 240, 255, 0.04);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(0, 240, 255, 0.45), inset 0 0 18px rgba(0, 240, 255, 0.08);
   }
 }
 
@@ -155,6 +169,10 @@ input[type="range"] {
 
 .vs-fade-up {
   animation: vs-fade-up 0.45s ease-out both;
+}
+
+.vs-neon-frame {
+  animation: vs-neon-pulse 3.6s ease-in-out infinite;
 }
 
 .font-display {
