@@ -16,7 +16,9 @@ export function ClientPwaRegister() {
     if (typeof window === "undefined") return;
 
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw-client.js").catch(() => undefined);
+      void navigator.serviceWorker.register("/sw-client.js").then((reg) => {
+        void reg.update();
+      }).catch(() => undefined);
     }
 
     const standalone =

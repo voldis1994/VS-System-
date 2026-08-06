@@ -112,17 +112,44 @@ async function portalApi<T>(
   opts?: RequestInit & { token?: string },
 ): Promise<T> {
   const { token, headers, ...rest } = opts ?? {};
-  const res = await fetch(`${apiBase}/api${path}`, {
-    ...rest,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(headers ?? {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${apiBase}/api${path}`, {
+      ...rest,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(headers ?? {}),
+      },
+    });
+  } catch {
+    throw new Error("Nav savienojuma ar serveri — pārbaudi tunnel / Wi‑Fi");
+  }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+  let data: Record<string, unknown> = {};
+  if (text) {
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error(
+        res.ok
+          ? "Serveris atbildēja nepareizi (nav JSON)"
+          : `Servera kļūda HTTP ${res.status}`,
+      );
+    }
+  }
+  if (!res.ok) {
+    const raw = String(data.message || data.error || `HTTP ${res.status}`);
+    if (/EMA_TICK_SCALP|invalid.*enum|StrategyMode/i.test(raw)) {
+      throw new Error(
+        "EMA režīms nav DB — uz PC palaid start-vs-system.bat (migrate) un restartē",
+      );
+    }
+    if (/Insufficient permissions|PERMISSION/i.test(raw)) {
+      throw new Error("Nav tiesību — izraksties un ievadi PIN no jauna");
+    }
+    throw new Error(raw);
+  }
   return data as T;
 }
 
@@ -727,6 +754,22 @@ export default function ClientPortalPage() {
           }}
         >
           Reset server
+        </button>
+        <button
+          type="button"
+          className="text-center text-[10px] text-[#3d5163] underline"
+          onClick={() => {
+            if ("serviceWorker" in navigator) {
+              void navigator.serviceWorker.getRegistrations().then((regs) => {
+                for (const r of regs) void r.unregister();
+                window.location.reload();
+              });
+            } else {
+              window.location.reload();
+            }
+          }}
+        >
+          Hard refresh (ja error pēc update)
         </button>
       </div>
     </div>

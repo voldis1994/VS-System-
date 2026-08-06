@@ -785,32 +785,40 @@ export class StrategiesService {
     };
 
     if (!strategy) {
-      strategy = await this.create(
-        organizationId,
-        actorId,
-        {
-          name: displayName,
-          mode: input.mode,
-          configuration,
-          assignedAccountIds: [input.accountId],
-          assignedSymbols: input.assignedSymbols,
-        },
-        correlationId,
-      );
+      try {
+        strategy = await this.create(
+          organizationId,
+          actorId,
+          {
+            name: displayName,
+            mode: input.mode,
+            configuration,
+            assignedAccountIds: [input.accountId],
+            assignedSymbols: input.assignedSymbols,
+          },
+          correlationId,
+        );
+      } catch (e) {
+        this.rethrowModeEnum(e, input.mode);
+      }
     } else {
-      strategy = await this.update(
-        organizationId,
-        actorId,
-        strategy.id,
-        {
-          name: displayName,
-          mode: input.mode,
-          configuration,
-          assignedAccountIds: [input.accountId],
-          assignedSymbols: input.assignedSymbols,
-        },
-        correlationId,
-      );
+      try {
+        strategy = await this.update(
+          organizationId,
+          actorId,
+          strategy.id,
+          {
+            name: displayName,
+            mode: input.mode,
+            configuration,
+            assignedAccountIds: [input.accountId],
+            assignedSymbols: input.assignedSymbols,
+          },
+          correlationId,
+        );
+      } catch (e) {
+        this.rethrowModeEnum(e, input.mode);
+      }
     }
 
     if (input.action === "save") {
@@ -976,5 +984,23 @@ export class StrategiesService {
       throw new AppError(ErrorCodes.STRATEGY_INVALID, "Strategy not found", HttpStatus.NOT_FOUND);
     }
     return strategy;
+  }
+
+  /** Friendly message when Postgres enum lacks a new StrategyMode value. */
+  private rethrowModeEnum(e: unknown, mode: string): never {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (
+      /invalid.*enum|EMA_TICK_SCALP|StrategyMode|not found in enum/i.test(msg) ||
+      (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2007") ||
+      (e instanceof Prisma.PrismaClientValidationError && /mode/i.test(msg))
+    ) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        `Režīms ${mode} nav DB. Uz PC: start-vs-system.bat (Prisma migrate) un restartē API.`,
+        HttpStatus.BAD_REQUEST,
+        { mode, cause: msg.slice(0, 240) },
+      );
+    }
+    throw e;
   }
 }
