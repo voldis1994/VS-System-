@@ -5,3 +5,4 @@ export * from "./capital-com-adapter";
 export * from "./capital-markets";
 export * from "./capital-stream";
 export * from "./capital-size";
+export * from "./capital-confirm";

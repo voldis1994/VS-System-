@@ -329,20 +329,34 @@ export class OrdersService {
       payload: {},
     });
 
-    const brokerResponse = await adapter.placeOrder({
-      clientRequestId: input.clientRequestId,
-      symbol: symbol.brokerSymbol,
-      type: input.type,
-      direction: input.direction,
-      volume: volume.toFixed(symbol.volumePrecision),
-      price: input.entryPrice,
-      stopLoss: input.stopLoss,
-      takeProfit: input.takeProfit,
-      // Never arm broker native trail at fill — autoManage software-trails after activation pips
-      trailingStop: false,
-      stopDistance: undefined,
-      comment: input.comment,
-    });
+    let brokerResponse;
+    try {
+      brokerResponse = await adapter.placeOrder({
+        clientRequestId: input.clientRequestId,
+        symbol: symbol.brokerSymbol,
+        type: input.type,
+        direction: input.direction,
+        volume: volume.toFixed(symbol.volumePrecision),
+        price: input.entryPrice,
+        stopLoss: input.stopLoss,
+        takeProfit: input.takeProfit,
+        // Never arm broker native trail at fill — autoManage software-trails after activation pips
+        trailingStop: false,
+        stopDistance: undefined,
+        comment: input.comment,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Broker place failed";
+      await this.prisma.order.update({
+        where: { id: draft.id },
+        data: {
+          status: OrderStatus.REJECTED,
+          rejectionCode: ErrorCodes.ORDER_REJECTED,
+          rejectionMessage: message.slice(0, 500),
+        },
+      });
+      throw new AppError(ErrorCodes.ORDER_REJECTED, message);
+    }
 
     if (!brokerResponse.accepted) {
       let rejectionMessage = brokerResponse.rejectionMessage;

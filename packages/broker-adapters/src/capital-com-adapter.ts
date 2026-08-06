@@ -19,6 +19,13 @@ import {
   volumePrecisionForStep,
   type CapitalDealRules,
 } from "./capital-size";
+import {
+  formatCapitalConfirmRejection,
+  isCapitalConfirmAccepted,
+  isCapitalConfirmTerminal,
+  parseCapitalConfirm,
+  type CapitalConfirm,
+} from "./capital-confirm";
 import { parseCapitalStreamQuote } from "./capital-stream";
 import type {
   BrokerAccountEvent,
@@ -778,6 +785,7 @@ export class CapitalComAdapter implements BrokerAdapter {
 
   async placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderResponse> {
     await this.ensureSession();
+    await this.ensureActiveAccount();
     const existing = this.processed.get(request.clientRequestId);
     if (existing) return existing;
 
@@ -802,10 +810,7 @@ export class CapitalComAdapter implements BrokerAdapter {
         );
         const confirm = await this.waitConfirm(res.dealReference);
         const response: BrokerOrderResponse = {
-          accepted:
-            confirm.status === "OPEN" ||
-            confirm.status === "ACCEPTED" ||
-            confirm.dealStatus === "ACCEPTED",
+          accepted: isCapitalConfirmAccepted(confirm),
           brokerOrderId: confirm.dealId ?? res.dealReference,
           status: "PENDING",
           filledVolume: "0",
@@ -833,20 +838,19 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
+    // MARKET: open bare (size+direction only). Capital often REJECTS create when
+    // stopLevel violates min distance — EMA/SCALPING tight SL on US100 is typical.
+    // Caller attaches SL/TP via modifyPosition after fill.
     const body: Record<string, unknown> = {
       epic,
       direction: request.direction,
       size: sized.size,
     };
-    // Native Capital trailing follows BUY↑ and SELL↓ — prefer over static stopLevel
     const trailDist = request.stopDistance != null ? Number(request.stopDistance) : NaN;
     if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
       body.trailingStop = true;
       body.stopDistance = trailDist;
-    } else if (request.stopLoss) {
-      body.stopLevel = Number(request.stopLoss);
     }
-    if (request.takeProfit) body.profitLevel = Number(request.takeProfit);
 
     let res: { dealReference: string };
     try {
@@ -874,35 +878,17 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
 
     const confirm = await this.waitConfirm(res.dealReference);
-    let dealId =
-      confirm.dealId && confirm.dealStatus !== "UNKNOWN"
-        ? confirm.dealId
-        : undefined;
+    let dealId = confirm.dealId;
     let fillLevel = confirm.level;
-    let accepted =
-      Boolean(dealId) &&
-      confirm.dealStatus !== "REJECTED" &&
-      confirm.status !== "REJECTED" &&
-      (confirm.dealStatus === "ACCEPTED" ||
-        confirm.status === "OPEN" ||
-        confirm.status === "ACCEPTED");
+    let accepted = isCapitalConfirmAccepted(confirm);
 
-    // Confirm timeout / UNKNOWN — verify against live positions (never treat dealReference as fill)
-    if (!accepted) {
-      this.invalidatePositionsCache();
-      await new Promise((r) => setTimeout(r, 200));
-      const open = await this.getOpenPositions({ force: true });
-      const match = open
-        .filter(
-          (p) =>
-            p.symbol === epic &&
-            p.direction === request.direction &&
-            Math.abs(Number(p.volume) - sized.size) < 0.0001,
-        )
-        .sort(
-          (a, b) =>
-            new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime(),
-        )[0];
+    // Confirm timeout / UNKNOWN / lag — verify against live positions
+    if (!accepted && (confirm.dealStatus ?? "").toUpperCase() !== "REJECTED") {
+      const match = await this.findRecentOpenPosition({
+        epic,
+        direction: request.direction,
+        size: sized.size,
+      });
       if (match?.brokerPositionId) {
         accepted = true;
         dealId = match.brokerPositionId;
@@ -910,15 +896,26 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
-    const rejectReason = accepted
-      ? undefined
-      : confirm.reason ?? "BROKER_ORDER_REJECTED";
-    const rejectMsg = accepted
-      ? undefined
-      : isCapitalSizeError(String(confirm.reason ?? ""))
-        ? capitalSizeErrorHint(epic, String(request.volume))
-        : confirm.reason ?? "Capital.com rejected order / confirm timeout";
+    // Optional post-fill SL/TP (best-effort — never undo an accepted fill)
+    if (
+      accepted &&
+      dealId &&
+      !request.trailingStop &&
+      (request.stopLoss || request.takeProfit)
+    ) {
+      try {
+        await this.modifyPosition({
+          brokerPositionId: dealId,
+          stopLoss: request.stopLoss,
+          takeProfit: request.takeProfit,
+        });
+      } catch {
+        // Strategy / orders layer may retry attach
+      }
+    }
 
+    const rejected =
+      !accepted && (confirm.dealStatus ?? "").toUpperCase() === "REJECTED";
     const response: BrokerOrderResponse = {
       accepted,
       brokerOrderId: dealId ?? res.dealReference,
@@ -928,13 +925,66 @@ export class CapitalComAdapter implements BrokerAdapter {
         fillLevel != null && Number.isFinite(fillLevel)
           ? String(fillLevel)
           : undefined,
-      positionId: dealId,
-      rejectionCode: rejectReason,
-      rejectionMessage: rejectMsg,
+      positionId: accepted ? dealId : undefined,
+      rejectionCode: accepted
+        ? undefined
+        : rejected
+          ? confirm.reason ?? "CAPITAL_REJECTED"
+          : confirm.reason ?? "CONFIRM_TIMEOUT",
+      rejectionMessage: accepted
+        ? undefined
+        : isCapitalSizeError(String(confirm.reason ?? ""))
+          ? capitalSizeErrorHint(epic, String(request.volume))
+          : formatCapitalConfirmRejection(confirm),
     };
     this.processed.set(request.clientRequestId, response);
     this.invalidatePositionsCache();
     return response;
+  }
+
+  /** Match a just-opened Capital position after confirm lag. */
+  private async findRecentOpenPosition(input: {
+    epic: string;
+    direction: string;
+    size: number;
+  }): Promise<BrokerPosition | undefined> {
+    const wantEpic = resolveCapitalEpic(input.epic).toUpperCase();
+    const wantDir = String(input.direction).toUpperCase();
+    const tol = Math.max(input.size * 0.05, 0.0005);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 250 * attempt));
+      }
+      this.invalidatePositionsCache();
+      const open = await this.getOpenPositions({ force: true });
+      const candidates = open
+        .filter((p) => {
+          const epic = resolveCapitalEpic(p.symbol).toUpperCase();
+          if (epic !== wantEpic) return false;
+          if (String(p.direction).toUpperCase() !== wantDir) return false;
+          return Math.abs(Number(p.volume) - input.size) <= tol;
+        })
+        .sort(
+          (a, b) =>
+            new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime(),
+        );
+      if (candidates[0]) return candidates[0];
+      // Last resort: newest same epic+direction opened in last 60s
+      const recent = open
+        .filter((p) => {
+          const epic = resolveCapitalEpic(p.symbol).toUpperCase();
+          if (epic !== wantEpic) return false;
+          if (String(p.direction).toUpperCase() !== wantDir) return false;
+          const age = Date.now() - new Date(p.openedAt).getTime();
+          return Number.isFinite(age) && age >= 0 && age < 60_000;
+        })
+        .sort(
+          (a, b) =>
+            new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime(),
+        );
+      if (recent[0]) return recent[0];
+    }
+    return undefined;
   }
 
   async modifyOrder(request: BrokerModifyOrderRequest): Promise<BrokerOrderResponse> {
@@ -1448,33 +1498,30 @@ export class CapitalComAdapter implements BrokerAdapter {
     await this.switchSessionAccount(desired);
   }
 
-  private async waitConfirm(dealReference: string): Promise<{
-    dealId?: string;
-    dealStatus?: string;
-    status?: string;
-    level?: number;
-    profit?: number;
-    reason?: string;
-  }> {
-    // Fast poll with short backoff + two slower retries (confirm can lag under load)
-    const delays = [40, 80, 120, 180, 250, 350, 500, 700, 900];
+  private async waitConfirm(dealReference: string): Promise<CapitalConfirm> {
+    // LIVE confirm can lag several seconds under load / rapid strategy fire
+    const delays = [
+      50, 100, 150, 200, 300, 400, 500, 700, 900, 1200, 1500, 2000, 2500, 3000,
+    ];
+    let last: CapitalConfirm = {};
     for (let i = 0; i < delays.length; i++) {
       await new Promise((r) => setTimeout(r, delays[i]));
       try {
-        const confirm = await this.request<{
-          dealId?: string;
-          dealStatus?: string;
-          status?: string;
-          level?: number;
-          profit?: number;
-          reason?: string;
-        }>("GET", `/api/v1/confirms/${encodeURIComponent(dealReference)}`);
-        if (confirm.dealStatus || confirm.dealId || confirm.status) {
+        const raw = await this.request<Record<string, unknown>>(
+          "GET",
+          `/api/v1/confirms/${encodeURIComponent(dealReference)}`,
+        );
+        const confirm = parseCapitalConfirm(raw);
+        last = confirm;
+        if (isCapitalConfirmTerminal(confirm)) {
           return confirm;
         }
       } catch {
-        // retry
+        // 404 / not ready yet — keep polling
       }
+    }
+    if (last.dealId || last.dealStatus || last.status) {
+      return last;
     }
     // Never return dealReference as dealId — callers used to treat that as a fill
     return { dealStatus: "UNKNOWN", reason: "Confirm timeout" };
