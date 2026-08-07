@@ -29,12 +29,23 @@ describe("capital-confirm", () => {
     expect(formatCapitalConfirmRejection(c)).toContain("min-stop");
   });
 
-  it("formats UNKNOWN timeout clearly", () => {
-    expect(
-      formatCapitalConfirmRejection({
-        dealStatus: "UNKNOWN",
-        reason: "Confirm timeout",
-      }),
-    ).toContain("confirm timeout");
+  it("formats REJECTED without reason using raw hint", () => {
+    const c = parseCapitalConfirm({
+      dealStatus: "REJECTED",
+      epic: "GOLD",
+      size: 0.01,
+    });
+    expect(c.reason).toBeUndefined();
+    expect(c.rawHint).toBeTruthy();
+    expect(formatCapitalConfirmRejection(c)).toMatch(/broker payload|sub-account/i);
+  });
+
+  it("parses reason from nested error / affectedDeals", () => {
+    const c = parseCapitalConfirm({
+      dealStatus: "REJECTED",
+      error: { errorCode: "error.market.closed" },
+      affectedDeals: [{ dealId: "x", reason: "MARKET_CLOSED" }],
+    });
+    expect(c.reason).toMatch(/market|MARKET/i);
   });
 });

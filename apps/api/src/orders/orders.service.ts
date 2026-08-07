@@ -108,12 +108,22 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
+    const okCount = results.filter((r) => r.ok).length;
+    const fail = results.filter((r) => !r.ok);
     await this.notifications.create({
       organizationId,
       userId: actorId,
-      title: "Order batch completed",
-      body: `${results.filter((r) => r.ok).length}/${results.length} accounts succeeded`,
-      severity: results.every((r) => r.ok) ? "SUCCESS" : "WARNING",
+      title:
+        fail.length === 0
+          ? "Order batch completed"
+          : "Order batch — daļēji / failed",
+      body:
+        fail.length === 0
+          ? `${okCount}/${results.length} accounts succeeded`
+          : `${okCount}/${results.length} ok · failed: ${fail
+              .map((f) => String(f.message ?? f.code ?? "?").slice(0, 120))
+              .join(" | ")}`,
+      severity: fail.length === 0 ? "SUCCESS" : "WARNING",
       meta: { batchId, results },
     });
 

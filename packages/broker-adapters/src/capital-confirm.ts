@@ -13,7 +13,18 @@ export type CapitalConfirm = {
   direction?: string;
   epic?: string;
   reason?: string;
+  /** Raw snippet for debugging empty broker reasons */
+  rawHint?: string;
 };
+
+function pickStr(...vals: unknown[]): string | undefined {
+  for (const v of vals) {
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return undefined;
+}
 
 export function parseCapitalConfirm(
   raw: Record<string, unknown> | null | undefined,
@@ -21,37 +32,48 @@ export function parseCapitalConfirm(
   if (!raw || typeof raw !== "object") return {};
   const affected = Array.isArray(raw.affectedDeals) ? raw.affectedDeals : [];
   let fromAffected: string | undefined;
+  let affectedReason: string | undefined;
+  let affectedStatus: string | undefined;
   for (const row of affected) {
-    if (row && typeof row === "object" && "dealId" in row) {
-      const id = String((row as { dealId?: unknown }).dealId ?? "").trim();
-      if (id) {
-        fromAffected = id;
-        break;
+    if (row && typeof row === "object") {
+      const r = row as Record<string, unknown>;
+      const id = pickStr(r.dealId);
+      if (id && !fromAffected) fromAffected = id;
+      if (!affectedReason) {
+        affectedReason = pickStr(r.reason, r.errorCode, r.status);
       }
+      if (!affectedStatus) affectedStatus = pickStr(r.status);
     }
   }
-  const dealIdRaw = String(raw.dealId ?? fromAffected ?? "").trim();
-  const dealStatus =
-    raw.dealStatus != null && String(raw.dealStatus).trim()
-      ? String(raw.dealStatus).trim()
-      : undefined;
-  const status =
-    raw.status != null && String(raw.status).trim()
-      ? String(raw.status).trim()
-      : undefined;
-  const reasonParts = [
+  const errObj =
+    raw.error && typeof raw.error === "object"
+      ? (raw.error as Record<string, unknown>)
+      : null;
+  const dealIdRaw = pickStr(raw.dealId, fromAffected) ?? "";
+  const dealStatus = pickStr(raw.dealStatus);
+  const status = pickStr(raw.status, affectedStatus);
+  const reason = pickStr(
     raw.reason,
     raw.errorCode,
-    typeof raw.error === "object" && raw.error
-      ? (raw.error as { message?: unknown; errorCode?: unknown }).message ??
-        (raw.error as { errorCode?: unknown }).errorCode
-      : undefined,
-  ]
-    .map((x) => (x != null ? String(x).trim() : ""))
-    .filter(Boolean);
+    raw.rejectReason,
+    raw.rejectionReason,
+    raw.message,
+    errObj?.message,
+    errObj?.errorCode,
+    errObj?.reason,
+    affectedReason,
+  );
   const level = Number(raw.level);
   const profit = Number(raw.profit);
   const size = Number(raw.size);
+  let rawHint: string | undefined;
+  if (!reason && (dealStatus || status)) {
+    try {
+      rawHint = JSON.stringify(raw).slice(0, 280);
+    } catch {
+      rawHint = undefined;
+    }
+  }
   return {
     dealId: dealIdRaw || undefined,
     dealStatus,
@@ -61,7 +83,8 @@ export function parseCapitalConfirm(
     size: Number.isFinite(size) ? size : undefined,
     direction: raw.direction != null ? String(raw.direction) : undefined,
     epic: raw.epic != null ? String(raw.epic) : undefined,
-    reason: reasonParts[0],
+    reason,
+    rawHint,
   };
 }
 
@@ -92,7 +115,11 @@ export function isCapitalConfirmAccepted(c: CapitalConfirm): boolean {
 export function formatCapitalConfirmRejection(c: CapitalConfirm): string {
   const ds = (c.dealStatus ?? "").toUpperCase();
   if (ds === "REJECTED" || (c.status ?? "").toUpperCase() === "REJECTED") {
-    return `Capital rejected: ${c.reason ?? "no reason from broker"}`;
+    const why =
+      c.reason ??
+      (c.rawHint ? `broker payload: ${c.rawHint}` : null) ??
+      "no reason from broker (check market open, lot/min size, CFD sub-account)";
+    return `Capital rejected: ${why}`;
   }
   if (ds === "UNKNOWN" || c.reason === "Confirm timeout") {
     return `Capital confirm timeout — deal status never arrived. Check Capital app positions / account.`;

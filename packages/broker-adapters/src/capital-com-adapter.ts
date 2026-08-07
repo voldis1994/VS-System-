@@ -91,6 +91,82 @@ export class CapitalComAdapter implements BrokerAdapter {
     { at: number; rules: CapitalDealRules }
   >();
 
+  /**
+   * One Capital login = one CST session. Multiple VS accounts that share the
+   * same API key must NOT create parallel sessions (second login kills the first
+   * → REJECTED with empty reason). Share tokens + serialize trading ops.
+   */
+  private static readonly sharedByLogin = new Map<
+    string,
+    {
+      tokens: { cst: string; securityToken: string } | null;
+      activeExternalId: string;
+      tail: Promise<unknown>;
+      depth: number;
+    }
+  >();
+
+  private loginKey(): string {
+    return `${this.baseUrl}\0${this.apiKey}\0${this.identifier}`;
+  }
+
+  private sharedState() {
+    const key = this.loginKey();
+    let s = CapitalComAdapter.sharedByLogin.get(key);
+    if (!s) {
+      s = {
+        tokens: null,
+        activeExternalId: "",
+        tail: Promise.resolve(),
+        depth: 0,
+      };
+      CapitalComAdapter.sharedByLogin.set(key, s);
+    }
+    return s;
+  }
+
+  private pullSharedTokens() {
+    const s = this.sharedState();
+    if (s.tokens) this.tokens = { ...s.tokens };
+  }
+
+  private pushSharedTokens() {
+    const s = this.sharedState();
+    if (this.tokens) s.tokens = { ...this.tokens };
+  }
+
+  /** Serialize Capital ops for this login (all CFD sub-accounts). Reentrant. */
+  private async withLoginLock<T>(fn: () => Promise<T>): Promise<T> {
+    const s = this.sharedState();
+    if (s.depth > 0) {
+      this.pullSharedTokens();
+      try {
+        return await fn();
+      } finally {
+        this.pushSharedTokens();
+      }
+    }
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const prev = s.tail;
+    s.tail = prev.then(
+      () => gate,
+      () => gate,
+    );
+    await prev.catch(() => undefined);
+    s.depth = 1;
+    try {
+      this.pullSharedTokens();
+      return await fn();
+    } finally {
+      this.pushSharedTokens();
+      s.depth = 0;
+      release();
+    }
+  }
+
   async connect(config: BrokerConnectionConfig): Promise<ConnectionResult> {
     this.accountId = config.accountId;
     this.leverage = config.leverage ?? 100;
@@ -784,6 +860,16 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderResponse> {
+    // Lock entire place (session + account switch + POST + confirm) so two
+    // VS accounts under one Capital login cannot race and invalidate CST.
+    return this.withLoginLock(async () => {
+      return this.placeOrderLocked(request);
+    });
+  }
+
+  private async placeOrderLocked(
+    request: BrokerOrderRequest,
+  ): Promise<BrokerOrderResponse> {
     await this.ensureSession();
     await this.ensureActiveAccount();
     const existing = this.processed.get(request.clientRequestId);
@@ -877,10 +963,47 @@ export class CapitalComAdapter implements BrokerAdapter {
       throw err;
     }
 
-    const confirm = await this.waitConfirm(res.dealReference);
+    let confirm = await this.waitConfirm(res.dealReference);
     let dealId = confirm.dealId;
     let fillLevel = confirm.level;
     let accepted = isCapitalConfirmAccepted(confirm);
+
+    // Empty REJECTED often = wrong CFD sub-account after sibling session steal.
+    // Re-pin account once and verify live positions before giving up.
+    if (
+      !accepted &&
+      (confirm.dealStatus ?? "").toUpperCase() === "REJECTED" &&
+      !confirm.reason
+    ) {
+      try {
+        await this.ensureActiveAccount();
+        await new Promise((r) => setTimeout(r, 400));
+        const match = await this.findRecentOpenPosition({
+          epic,
+          direction: request.direction,
+          size: sized.size,
+        });
+        if (match?.brokerPositionId) {
+          accepted = true;
+          dealId = match.brokerPositionId;
+          fillLevel = Number(match.averageEntry);
+        } else {
+          // One bare retry after re-bind (common when two accounts share login)
+          const retry = await this.request<{ dealReference: string }>(
+            "POST",
+            "/api/v1/positions",
+            body,
+          );
+          confirm = await this.waitConfirm(retry.dealReference);
+          dealId = confirm.dealId;
+          fillLevel = confirm.level;
+          accepted = isCapitalConfirmAccepted(confirm);
+          res = retry;
+        }
+      } catch {
+        // keep original reject
+      }
+    }
 
     // Confirm timeout / UNKNOWN / lag — verify against live positions
     if (!accepted && (confirm.dealStatus ?? "").toUpperCase() !== "REJECTED") {
@@ -1338,6 +1461,12 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   private async createSession(): Promise<void> {
+    await this.withLoginLock(async () => {
+      await this.createSessionUnlocked();
+    });
+  }
+
+  private async createSessionUnlocked(): Promise<void> {
     const res = await fetch(`${this.baseUrl}/api/v1/session`, {
       method: "POST",
       headers: {
@@ -1363,6 +1492,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       );
     }
     this.tokens = { cst, securityToken };
+    this.pushSharedTokens();
     this.lastHeartbeatAt = toUtcIso();
     this.lastActivityAt = Date.now();
     this.invalidatePositionsCache();
@@ -1427,6 +1557,7 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   private async ensureSession(): Promise<void> {
+    this.pullSharedTokens();
     if (!this.tokens) {
       await this.createSession();
       return;
@@ -1541,6 +1672,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     const securityToken = res.headers.get("X-SECURITY-TOKEN");
     if (cst && securityToken) {
       this.tokens = { cst, securityToken };
+      this.pushSharedTokens();
     }
     if ((res.status === 401 || res.status === 403) && !retried && path !== "/api/v1/session") {
       this.tokens = null;
