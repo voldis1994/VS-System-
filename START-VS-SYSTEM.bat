@@ -2,15 +2,16 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+title VS System — START
 echo ========================================
-echo   VS System - Windows start
+echo   VS SYSTEM — pilna palaide
+echo   API + Web + DB + Remote tunnel
 echo ========================================
 echo.
 
 if exist "apps\api-desktop" (
   echo WARNING: atrasta mape apps\api-desktop
-  echo   Tas NAV oficielais VS System API. Pareiza mape: apps\api
-  echo   Ja START rada botPosition kludu - aizver api-desktop procesu.
+  echo   Pareiza mape: apps\api  — aizver api-desktop procesu!
   echo.
 )
 
@@ -18,19 +19,17 @@ where git >nul 2>&1
 if not errorlevel 1 (
   for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "VS_BRANCH=%%b"
   if /I "%VS_BRANCH%"=="main" (
-    echo [0/6] git pull origin main...
+    echo [0/7] git pull origin main...
     git pull origin main
-    if errorlevel 1 (
-      echo WARNING: git pull neizdevas - turpinu ar esošo kodu
-    )
+    if errorlevel 1 echo WARNING: git pull neizdevas — turpinu
   ) else (
-    echo [0/6] skip git pull — branch=%VS_BRANCH% ^(tikai main tiek pull^)
+    echo [0/7] skip git pull — branch=%VS_BRANCH%
   )
 )
 
 where node >nul 2>&1
 if errorlevel 1 (
-  echo ERROR: Node.js nav atrasts. Uzliec no https://nodejs.org
+  echo ERROR: Node.js nav atrasts — https://nodejs.org
   pause
   exit /b 1
 )
@@ -48,14 +47,14 @@ if errorlevel 1 (
 
 where docker >nul 2>&1
 if errorlevel 1 (
-  echo ERROR: Docker nav atrasts. Palaid Docker Desktop un megini velreiz.
+  echo ERROR: Docker nav atrasts — palaid Docker Desktop
   pause
   exit /b 1
 )
 
 docker info >nul 2>&1
 if errorlevel 1 (
-  echo ERROR: Docker Engine nestrada. Atver Docker Desktop un pagaidi lidz Engine running.
+  echo ERROR: Docker Engine nestrada — pagaidi lidz Engine running
   pause
   exit /b 1
 )
@@ -74,12 +73,10 @@ if not exist ".env" (
 if not exist "apps\api\.env" (
   copy /Y ".env" "apps\api\.env" >nul
   echo Created apps\api\.env
-) else (
-  echo [env] apps\api\.env jau ir — neatrasu ^(root .env netiek copy overwrite^)
 )
 
 echo.
-echo [1/6] pnpm install...
+echo [1/7] pnpm install...
 call pnpm install
 if errorlevel 1 (
   echo ERROR: pnpm install neizdevas
@@ -88,7 +85,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/6] Building packages...
+echo [2/7] Building packages...
 call pnpm --filter @nexus/domain build
 if errorlevel 1 goto :build_fail
 call pnpm --filter @nexus/shared build
@@ -99,88 +96,87 @@ call pnpm --filter @nexus/broker-adapters build
 if errorlevel 1 goto :build_fail
 
 echo.
-echo [3/6] Starting Postgres + Redis...
+echo [3/7] Postgres + Redis...
 docker compose up -d postgres redis
 if errorlevel 1 (
   echo ERROR: docker compose neizdevas
   pause
   exit /b 1
 )
-
 echo Waiting for Postgres...
 timeout /t 8 /nobreak >nul
 
 echo.
-echo [4/6] Prisma generate + migrate...
+echo [4/7] Prisma generate + migrate...
 call pnpm db:generate
 if errorlevel 1 (
   echo ERROR: prisma generate neizdevas
   pause
   exit /b 1
 )
-
 call pnpm --filter @nexus/api exec prisma migrate deploy
 if errorlevel 1 (
-  echo ERROR: migrate neizdevas. Parbaudi ka Docker Postgres strada.
+  echo ERROR: migrate neizdevas
   pause
   exit /b 1
 )
 
 echo.
-echo [5/6] Seed database...
+echo [5/7] Seed...
 call pnpm db:seed
-if errorlevel 1 (
-  echo WARNING: seed neizdevas - varbut jau ir seeded
-)
+if errorlevel 1 echo WARNING: seed neizdevas — varbut jau seeded
 
 echo.
-echo [6/6] Stopping old API/Web (ports 3000/4000) then starting...
+echo [6/7] API + Web (ports 4000 / 3000)...
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3000 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":4000 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
 timeout /t 2 /nobreak >nul
 
-start "VS System API" cmd /k "cd /d "%~dp0" && copy /Y .env apps\api\.env >nul && pnpm dev:api"
-timeout /t 3 /nobreak >nul
+if not exist "apps\api\.env" copy /Y .env apps\api\.env >nul
+start "VS System API" cmd /k "cd /d "%~dp0" && pnpm dev:api"
+timeout /t 4 /nobreak >nul
 start "VS System WEB" cmd /k "cd /d "%~dp0" && pnpm dev:web"
-
-timeout /t 8 /nobreak >nul
-start "" http://localhost:3000/dashboard
+timeout /t 10 /nobreak >nul
 
 echo.
-echo [Firewall] Atveru portus 3000 un 4000 LAN klientiem...
+echo [Firewall] LAN porti 3000 + 4000...
 netsh advfirewall firewall delete rule name="VS System Web 3000" >nul 2>&1
 netsh advfirewall firewall delete rule name="VS System API 4000" >nul 2>&1
 netsh advfirewall firewall add rule name="VS System Web 3000" dir=in action=allow protocol=TCP localport=3000 >nul
 netsh advfirewall firewall add rule name="VS System API 4000" dir=in action=allow protocol=TCP localport=4000 >nul
 
 echo.
+echo [7/7] Cloudflare remote tunnel (klienti bez Wi-Fi)...
+start "VS System TUNNEL" cmd /k "cd /d "%~dp0" && node scripts\start-tunnel.mjs"
+
+timeout /t 3 /nobreak >nul
+start "" http://localhost:3000/dashboard
+
+echo.
 echo ========================================
-echo   Gatavs  (command deck uz SAVA datora)
-echo   Dashboard:  http://localhost:3000/dashboard
-echo   Strategies: http://localhost:3000/strategies
-echo   API: http://localhost:4000/api/health
+echo   VS SYSTEM SKRIEN
 echo.
-echo   !!! KLIENTIEM SUTI TIKAI /client LINKU !!!
-echo   Nevis /dashboard — dashboard ir TEV uz PC.
+echo   DESK (tev uz PC):
+echo     http://localhost:3000/dashboard
+echo     http://localhost:3000/strategies
+echo     API health: http://localhost:4000/api/health
 echo.
-echo   --- VS Client (telefons / cits Wi-Fi klients) ---
+echo   KLIENTI — tikai /client (NE dashboard):
 > "%~dp0client-url.txt" echo.
 for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
   for /f "tokens=1" %%b in ("%%a") do (
-    echo   http://%%b:3000/client
+    echo     LAN:  http://%%b:3000/client
     >> "%~dp0client-url.txt" echo http://%%b:3000/client
   )
 )
+echo     Remote: skati logu "VS System TUNNEL"
+echo             + fails remote-client-url.txt
 echo.
-echo   Saglabats faila: client-url.txt  ^(nosuti klientam^)
-echo   PC un telefons = VIENA Wi-Fi. Bez localhost.
+echo   Login: owner@nexus.pro / NexusOwner123!
+echo   PIN:   123456
 echo.
-echo   --- Bez Wi-Fi (jebkur internetā) ---
-echo   Palaid otru failu: start-vs-remote.bat
-echo   Tas dos https://....trycloudflare.com/client
-echo.
-echo   Login desk: owner@nexus.pro / NexusOwner123!
-echo   PIN desk:   123456
+echo   Apturet:  STOP-VS-SYSTEM.bat
+echo   Logus NEAIZVER (API / WEB / TUNNEL)
 echo ========================================
 pause
 exit /b 0

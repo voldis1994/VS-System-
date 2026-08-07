@@ -47,4 +47,4 @@ jobs:
       - run: pnpm --filter @nexus/api exec prisma migrate deploy
       - run: pnpm --filter @nexus/api exec tsc -p tsconfig.json --noEmit
       - run: pnpm --filter @nexus/web typecheck
-      - run: pnpm --filter @nexus/worker typecheck
+      - run: pnpm --filter @nexus/api test

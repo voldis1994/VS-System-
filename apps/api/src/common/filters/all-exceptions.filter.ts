@@ -69,7 +69,7 @@ function sanitizePublicError(raw: string): string {
   if (/botPosition|api-desktop|bot-runtime/i.test(s)) {
     return (
       "PC darbojas vecs/nepareizs API (api-desktop/botPosition). " +
-      "Aizver to, mapē jābūt apps\\api (ne api-desktop). Palaid start-vs-system.bat no git main."
+      "Aizver to, mapē jābūt apps\\api (ne api-desktop). Palaid START-VS-SYSTEM.bat no git main."
     );
   }
   if (/PrismaClientKnownRequestError|Invalid\s+`prisma\./i.test(s)) {

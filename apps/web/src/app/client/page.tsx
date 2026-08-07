@@ -142,17 +142,17 @@ async function portalApi<T>(
     const raw = String(data.message || data.error || `HTTP ${res.status}`);
     if (/botPosition|api-desktop|bot-runtime/i.test(raw)) {
       throw new Error(
-        "PC API nav VS System (api-desktop/botPosition). Aizver veco procesu, mapē jābūt apps\\api, palaid start-vs-system.bat (git pull main).",
+        "PC API nav VS System (api-desktop/botPosition). Aizver veco procesu, mapē jābūt apps\\api, palaid START-VS-SYSTEM.bat (git pull main).",
       );
     }
     if (/Unique constraint|P2002/i.test(raw)) {
       throw new Error(
-        "DB konflikts — STOP, tad SAVE/START. Ja atkārtojas: restartē start-vs-system.bat.",
+        "DB konflikts — STOP, tad SAVE/START. Ja atkārtojas: restartē START-VS-SYSTEM.bat.",
       );
     }
     if (/EMA_TICK_SCALP|invalid.*enum|StrategyMode/i.test(raw)) {
       throw new Error(
-        "EMA režīms nav DB — uz PC palaid start-vs-system.bat (migrate) un restartē",
+        "EMA režīms nav DB — uz PC palaid START-VS-SYSTEM.bat (migrate) un restartē",
       );
     }
     if (/Insufficient permissions|PERMISSION/i.test(raw)) {

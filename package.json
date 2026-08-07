@@ -1,5 +1,5 @@
 {
-  "name": "nexus-pro",
+  "name": "vs-system",
   "version": "1.0.0",
   "private": true,
   "description": "VS System — multi-account trading management platform",
@@ -8,7 +8,6 @@
     "dev": "turbo run dev --parallel",
     "dev:api": "turbo run dev --filter=@nexus/api",
     "dev:web": "turbo run dev --filter=@nexus/web",
-    "dev:worker": "turbo run dev --filter=@nexus/worker",
     "build": "turbo run build",
     "test": "turbo run test",
     "test:unit": "turbo run test:unit",

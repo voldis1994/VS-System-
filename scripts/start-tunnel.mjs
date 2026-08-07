@@ -2,7 +2,7 @@
  * Starts a Cloudflare quick tunnel to the local VS System web UI (:3000).
  * Clients anywhere open the printed HTTPS /client URL — no shared Wi‑Fi needed.
  *
- * Requires: VS System already running (start-vs-system.bat).
+ * Requires: VS System already running (START-VS-SYSTEM.bat starts tunnel too).
  * Downloads cloudflared.exe into tools/ on first run (Windows x64).
  */
 import { spawn } from "node:child_process";

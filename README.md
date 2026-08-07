@@ -1,29 +1,35 @@
 # VS System
 
-Multi-account trading operations platform (management & execution coordination — not a broker).
+Multi-account trading desk + client portal (Capital.com / paper).
 
 ## Stack
 
-- **apps/web** — Next.js 15, React, Tailwind, TanStack Query, Zustand
-- **apps/api** — NestJS, Prisma, PostgreSQL, WebSocket gateway
-- **apps/worker** — background workers
-- **packages/domain** — enums, events, RBAC, Zod schemas
-- **packages/shared** — Decimal math, risk formulas, time helpers
-- **packages/broker-adapters** — Paper + Capital.com + mock brokers
+- **apps/web** — Next.js desk (`/dashboard`) + client (`/client`)
+- **apps/api** — NestJS, Prisma, PostgreSQL, strategy runtime
+- **packages/domain** — modes, RBAC, Zod schemas
+- **packages/shared** — Decimal, risk, instrument distances
+- **packages/broker-adapters** — Paper + Capital.com
 - **packages/config** — env validation
 
-## Quick start (Windows)
+## Windows — viena palaide
 
-1. Install [Node.js LTS](https://nodejs.org), [Docker Desktop](https://www.docker.com/products/docker-desktop/), enable WSL if asked.
-2. Start Docker Desktop (Engine running).
-3. Double-click `start-nexus.bat` (or `start-vs-system.bat`) in the project folder.
+1. Uzliec [Node.js LTS](https://nodejs.org) + [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+2. Palaid Docker Desktop (Engine running).
+3. Dubultklikšķis: **`START-VS-SYSTEM.bat`**
 
-UI: http://localhost:3000  
-Login: `owner@nexus.pro` / `NexusOwner123!` (PIN `123456`)
+Tas dara visu: git pull → install → build → Postgres/Redis → migrate → API + Web → Cloudflare tunnel.
 
-Stop containers: `stop-nexus.bat`
+| Kas | URL |
+|-----|-----|
+| Desk (tev) | http://localhost:3000/dashboard |
+| Client (telefonam) | LAN no `client-url.txt` vai remote no `remote-client-url.txt` |
+| API | http://localhost:4000/api/health |
 
-## Quick start (Mac/Linux)
+Login: `owner@nexus.pro` / `NexusOwner123!` · PIN `123456`
+
+Apturēt: **`STOP-VS-SYSTEM.bat`**
+
+## Mac / Linux
 
 ```bash
 cp .env.example .env
@@ -32,19 +38,13 @@ pnpm install
 pnpm --filter @nexus/domain build && pnpm --filter @nexus/shared build && pnpm --filter @nexus/config build && pnpm --filter @nexus/broker-adapters build
 pnpm db:generate && pnpm --filter @nexus/api exec prisma migrate deploy
 pnpm db:seed
-pnpm dev:api
-pnpm dev:web
+pnpm dev:api   # terminal 1
+pnpm dev:web   # terminal 2
+pnpm tunnel    # optional remote /client
 ```
-
-## Defaults
-
-- System starts in **Paper Trading**
-- Live Trading requires identity, 2FA, trading PIN, broker health, permissions, and explicit risk acknowledgement
-- All money values use Decimal; timestamps stored UTC
 
 ## Docs
 
-- `docs/IMPLEMENTATION_STATUS.md`
+- `docs/CAPITAL_COM.md` — Capital.com API / LIVE
+- `docs/API.md` — API overview
 - `docs/KNOWN_LIMITATIONS.md`
-- `docs/API.md`
-- `docs/TEST_REPORT.md`

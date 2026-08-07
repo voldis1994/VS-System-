@@ -1036,7 +1036,7 @@ export class StrategiesService {
     ) {
       throw new AppError(
         ErrorCodes.VALIDATION_FAILED,
-        `Režīms ${mode} nav DB. Uz PC: start-vs-system.bat (Prisma migrate) un restartē API.`,
+        `Režīms ${mode} nav DB. Uz PC: START-VS-SYSTEM.bat (Prisma migrate) un restartē API.`,
         HttpStatus.BAD_REQUEST,
         { mode, cause: msg.slice(0, 240) },
       );
