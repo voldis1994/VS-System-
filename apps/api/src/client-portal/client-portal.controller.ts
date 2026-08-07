@@ -21,6 +21,7 @@ import { AccountsService } from "../accounts/accounts.service";
 import { StrategiesService } from "../strategies/strategies.service";
 import { MarketDataService } from "../market-data/market-data.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { normalizeFixedLotStrategyConfig } from "@nexus/shared";
 
 @Controller("client-portal")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -70,7 +71,9 @@ export class ClientPortalController {
               mode: strategy.mode,
               status: strategy.status,
               assignedSymbols: strategy.assignedSymbols,
-              configuration: strategy.configurationJson,
+              configuration: normalizeFixedLotStrategyConfig(
+                (strategy.configurationJson ?? {}) as Record<string, unknown>,
+              ),
               deploymentStateJson: strategy.deploymentStateJson ?? null,
             }
           : null,
@@ -96,13 +99,16 @@ export class ClientPortalController {
   ) {
     const accountId = this.requirePortalAccount(req.user);
     const input = ClientPortalStrategySchema.parse(body);
+    const configuration = normalizeFixedLotStrategyConfig(
+      (input.configuration ?? {}) as Record<string, unknown>,
+    );
     return this.strategies.runForAccount(
       req.user.organizationId,
       req.user.userId,
       {
         accountId,
         mode: input.mode,
-        configuration: input.configuration,
+        configuration,
         assignedSymbols: input.assignedSymbols,
         action: input.action,
       },

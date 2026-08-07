@@ -13,7 +13,7 @@ import {
   tfMinutes,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -55,13 +55,16 @@ export class StrategiesService {
     correlationId: string,
   ) {
     const input = CreateStrategySchema.parse(raw);
+    const configuration = normalizeFixedLotStrategyConfig(
+      input.configuration as Record<string, unknown>,
+    );
     const strategy = await this.prisma.strategy.create({
       data: {
         organizationId,
         name: input.name,
         mode: input.mode,
         status: StrategyStatus.DRAFT,
-        configurationJson: input.configuration as Prisma.InputJsonValue,
+        configurationJson: configuration as Prisma.InputJsonValue,
         assignedAccountIds: input.assignedAccountIds,
         assignedSymbols: input.assignedSymbols,
         createdById: actorId,
@@ -146,7 +149,9 @@ export class StrategiesService {
       ...prevConfig,
       oneTradeOnly: prevConfig.oneTradeOnly !== false,
       closeOnlyNoFlip: prevConfig.closeOnlyNoFlip === true,
+      useRiskPercent: false,
     };
+    delete (configurationJson as Record<string, unknown>).riskPercent;
 
     const updated = await this.prisma.strategy.update({
       where: { id },
@@ -698,14 +703,17 @@ export class StrategiesService {
       before.configurationJson && typeof before.configurationJson === "object"
         ? (before.configurationJson as Record<string, unknown>)
         : {};
+    const merged = normalizeFixedLotStrategyConfig(
+      body.configuration
+        ? { ...prevConfig, ...body.configuration }
+        : prevConfig,
+    );
     const updated = await this.prisma.strategy.update({
       where: { id },
       data: {
         name: body.name ?? before.name,
         mode: (body.mode as never) ?? before.mode,
-        configurationJson: (body.configuration
-          ? { ...prevConfig, ...body.configuration, useRiskPercent: false }
-          : { ...prevConfig, useRiskPercent: false }) as Prisma.InputJsonValue,
+        configurationJson: merged as Prisma.InputJsonValue,
         assignedAccountIds: (body.assignedAccountIds ??
           before.assignedAccountIds) as Prisma.InputJsonValue,
         assignedSymbols: (body.assignedSymbols ??
@@ -785,10 +793,12 @@ export class StrategiesService {
     }
 
     const displayName = `${account.name} · ${input.mode}`.slice(0, 120);
-    const cfgIn = input.configuration as Record<string, unknown>;
+    const cfgIn = normalizeFixedLotStrategyConfig(
+      input.configuration as Record<string, unknown>,
+    );
     const auto = modeAutoExit(input.mode);
     const configuration = {
-      ...input.configuration,
+      ...cfgIn,
       useRiskPercent: false,
       ...(auto
         ? {

@@ -1179,6 +1179,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         // Always FIXED lot for bot strategies — never Risk % sizing.
         // Do not auto-rewrite saved lot from equity heuristics (operator owns LOT).
         const equityNum = Number(account.equity ?? account.balance ?? 0);
+        // Legacy DB rows may still have useRiskPercent:true — ignore completely.
+        if (config.useRiskPercent) {
+          config.useRiskPercent = false;
+        }
         const orderVolume = String(config.volume ?? "0.01");
         if (
           Number.isFinite(equityNum) &&

@@ -313,7 +313,7 @@ export default function ClientPortalPage() {
   const [openPositions, setOpenPositions] = useState(0);
 
   const [mode, setMode] = useState<string>(StrategyMode.SCALPING);
-  const [lotSize, setLotSize] = useState("0.001");
+  const [lotSize, setLotSize] = useState("0.01");
   const [exit, setExit] = useState<ExitVersion>("SCALP");
   const [epic, setEpic] = useState("US100");
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
@@ -435,23 +435,22 @@ export default function ClientPortalPage() {
       setAccount(session.account);
       setStrategy(session.strategy);
       setOpenPositions(session.openPositions);
-      const eq = Number(session.account?.equity ?? session.account?.balance ?? 0);
       if (session.strategy) {
         setMode(session.strategy.mode);
         const syms = (session.strategy.assignedSymbols as string[]) ?? [];
         if (syms[0]) setEpic(syms[0]);
         const cfg = session.strategy.configuration ?? {};
         const sym = syms[0] ?? epic;
-        if (typeof cfg.volume === "string") {
+        if (typeof cfg.volume === "string" && Number(cfg.volume) > 0) {
           setLotSize(cfg.volume);
-        } else if (Number.isFinite(eq) && eq > 0) {
-          setLotSize(suggestLotForEquity(eq, sym));
+        } else {
+          setLotSize("0.01");
         }
         if (cfg.exitVersion === "SWING" || cfg.exitVersion === "RUNNER" || cfg.exitVersion === "SCALP") {
           setExit(cfg.exitVersion);
         }
-      } else if (Number.isFinite(eq) && eq > 0) {
-        setLotSize(suggestLotForEquity(eq, epic));
+      } else {
+        setLotSize("0.01");
       }
       try {
         const m = await portalApi<{ markets: CapitalMarket[] }>(
@@ -524,7 +523,7 @@ export default function ClientPortalPage() {
         lotLooksTooBigForEquity(volume, eq, symbol)
       ) {
         setStatusMsg(
-          `Brīdinājums: lot ${volume} izskatās liels priekš $${eq.toFixed(0)} — atstāju Tavu FIXED lot. Ieteikums: ${suggestLotForEquity(eq, symbol)}.`,
+          `Brīdinājums: lot ${volume} var būt par lielu priekš $${eq.toFixed(0)} — FIXED lot atstāts. Ieteikums: ${suggestLotForEquity(eq, symbol)}.`,
         );
       }
       await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
@@ -843,7 +842,9 @@ export default function ClientPortalPage() {
         </section>
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
-          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">LOT</p>
+          <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">
+            FIXED LOT
+          </p>
           <div className="grid grid-cols-3 gap-1.5">
             {LOTS.map((l) => (
               <button
@@ -861,8 +862,9 @@ export default function ClientPortalPage() {
             ))}
           </div>
           <p className="mt-2 text-[11px] leading-snug text-[#8aa3b8]">
-            US100 pie mazas equity: izmanto <span className="text-[#7af6ff]">0.001</span>.
-            Lot 0.1 ar ~$20 Capital gandrīz vienmēr noraida (margin).
+            Tu izvēlies lot — Risk % netiek lietots. GOLD tipiski{" "}
+            <span className="text-[#7af6ff]">0.01</span>. US100 mazam kontam{" "}
+            <span className="text-[#7af6ff]">0.001</span>.
           </p>
           {account &&
           lotLooksTooBigForEquity(
@@ -871,9 +873,9 @@ export default function ClientPortalPage() {
             epic,
           ) ? (
             <p className="mt-2 border border-[#ff2d55]/40 bg-[#1a080c] px-2 py-2 text-[12px] text-[#ff8fa3]">
-              Lot {lotSize} ir par lielu priekš{" "}
-              {Number(account.equity).toFixed(0)} {account.baseCurrency} — treidi
-              netiks atvērti. Izvēlies{" "}
+              Lot {lotSize} var būt par lielu priekš{" "}
+              {Number(account.equity).toFixed(0)} {account.baseCurrency} (Capital
+              margin). Lot netiek mainīts automātiski — ieteikums{" "}
               {suggestLotForEquity(Number(account.equity), epic)}.
             </p>
           ) : null}
