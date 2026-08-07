@@ -15,7 +15,8 @@ Multi-account trading desk + client portal (Capital.com / paper).
 
 1. Uzliec [Node.js LTS](https://nodejs.org) + [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 2. Palaid Docker Desktop (Engine running).
-3. Dubultklikšķis: **`START-VS-SYSTEM.bat`**
+3. **Atjaunināt kodu** (bez jaunas mapes): **`UPDATE-VS-SYSTEM.bat`** — `git pull origin main`
+4. Dubultklikšķis: **`START-VS-SYSTEM.bat`**
 
 Tas dara visu: git pull → install → build → Postgres/Redis → migrate → API + Web → Cloudflare tunnel.
 
