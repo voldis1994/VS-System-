@@ -1,3 +1,3 @@
-main tip: fix P2003 stale session after DB reset
+main tip: tiny equity — GOLD 0.01 needs more margin; use US100 0.001
 repo: https://github.com/voldis1994/VS-System-
-fix: clearer P2003 logout hint; audit/notifications ignore stale userId FK
+fix: RISK_CHECK hints point micro accounts to US100 0.001 instead of GOLD

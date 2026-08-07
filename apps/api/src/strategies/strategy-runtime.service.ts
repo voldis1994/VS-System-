@@ -1416,7 +1416,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 : "Strategy order failed",
               body: `${strategy.name} ${brokerSymbol}: ${
                 marginFail
-                  ? `Capital RISK_CHECK — free margin par mazu priekš FIXED lot ${orderVolume}. Nemainīju Tavu lot. Iestatī manuāli mazāku (ieteikums ${suggested}; GOLD min bieži 0.01) vai aizver citas pozīcijas Capital app.`
+                  ? `Capital RISK_CHECK — free margin par mazu priekš FIXED lot ${orderVolume}. Nemainīju Tavu lot. GOLD ar mazu equity (~$20) bieži NEIET (min 0.01). Ieteikums: US100 lot 0.001, vai GOLD lot ${suggested} ja free margin pietiek.`
                   : isCapitalSizeError(msg)
                     ? capitalSizeErrorHint(
                         brokerSymbol,

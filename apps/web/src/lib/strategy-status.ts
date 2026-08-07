@@ -39,7 +39,7 @@ export type DeploymentState = {
 
 export function deploymentHint(d: DeploymentState): string | null {
   if (d.skip === "insufficient_margin" || /insufficient|margin|funds|RISK_CHECK/i.test(String(d.error ?? ""))) {
-    return "Capital noraida FIXED lot (margin) — samazini LOT manuāli (GOLD bieži 0.01) → SAVE → START. Risk % netiek lietots.";
+    return "Capital RISK_CHECK (margin) — GOLD min 0.01 bieži vajag >$50 free margin. Ar mazu equity: US100 + lot 0.001 → SAVE → START.";
   }
   if (d.candleSource1m === "sim" || d.candleSource === "sim" || d.skip === "sim_candles") {
     return "SIM sveces — orderi BLOĶĒTI. Desk → Accounts → Connect Capital, tad STOP/START.";

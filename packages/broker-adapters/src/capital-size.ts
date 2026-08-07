@@ -171,7 +171,9 @@ export function capitalRiskCheckHint(epic: string, attempted?: string): string {
     `Capital RISK_CHECK (margin/risk) uz ${epic}` +
     (attempted ? ` pie lot ${attempted}` : "") +
     `. Min lot ${rules.minSize}` +
-    (isMetal ? " (GOLD tipiski no 0.01, ne 0.001)" : "") +
-    `. Samazini lot, aizver citas pozīcijas Capital app, pagaidi pēc flip-close, vai pārbaudi free margin.`
+    (isMetal
+      ? " (GOLD min 0.01). Ar ~$20–50 equity GOLD bieži NEIET — pārslēdz uz US100 lot 0.001."
+      : "") +
+    `. Samazini lot / aizver citas pozīcijas Capital app / pārbaudi free margin.`
   );
 }
