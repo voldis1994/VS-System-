@@ -9,6 +9,15 @@ echo   API + Web + DB  (stabils LAN /client)
 echo ========================================
 echo.
 
+if exist "VERSION.txt" (
+  echo Versija no pedeja UPDATE:
+  type "VERSION.txt"
+  echo.
+) else if exist ".git" (
+  for /f "delims=" %%h in ('git rev-parse --short HEAD 2^>nul') do echo Git commit: %%h
+  echo.
+)
+
 if exist "apps\api-desktop" (
   echo WARNING: atrasta mape apps\api-desktop
   echo   Pareiza mape: apps\api  — aizver api-desktop procesu!
@@ -17,13 +26,25 @@ if exist "apps\api-desktop" (
 
 where git >nul 2>&1
 if not errorlevel 1 (
-  for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "VS_BRANCH=%%b"
-  if /I "%VS_BRANCH%"=="main" (
-    echo [0/7] git pull origin main...
-    git pull origin main
-    if errorlevel 1 echo WARNING: git pull neizdevas — turpinu
+  if exist ".git" (
+    for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "VS_BRANCH=%%b"
+    if /I "%VS_BRANCH%"=="main" (
+      echo [0/7] sync origin/main ^(fetch + reset --hard^)...
+      git fetch origin main
+      if not errorlevel 1 (
+        git reset --hard origin/main
+        for /f "delims=" %%h in ('git rev-parse --short HEAD 2^>nul') do (
+          echo   commit = %%h
+          > "%~dp0VERSION.txt" echo commit=%%h
+        )
+      ) else (
+        echo WARNING: git fetch neizdevas — turpinu ar lokalo
+      )
+    ) else (
+      echo [0/7] skip sync — branch=%VS_BRANCH% ^(vajag main^)
+    )
   ) else (
-    echo [0/7] skip git pull — branch=%VS_BRANCH%
+    echo WARNING: nav .git — START nevelk update. Izmanto git clone + FORCE-UPDATE.
   )
 )
 

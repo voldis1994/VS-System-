@@ -49,8 +49,7 @@ if /I not "%VS_BRANCH%"=="main" (
   echo [2/4] Jau uz main — OK
 )
 
-echo.
-echo [3/4] git fetch + pull origin main...
+echo [3/4] git fetch + PIESPIEDU reset origin/main...
 git fetch origin main
 if errorlevel 1 (
   echo ERROR: git fetch neizdevas — parbaudi internetu / GitHub pieeju
@@ -58,27 +57,21 @@ if errorlevel 1 (
   exit /b 1
 )
 
-git pull --ff-only origin main
+git reset --hard origin/main
 if errorlevel 1 (
-  echo.
-  echo WARNING: ff-only pull neizdevas (lokālas izmainas?).
-  echo   Meģinu: git reset --hard origin/main
-  echo   ^(!^) Tas izdzes lokālas necommitotas izmainas so mapē.
-  choice /C YN /M "Vai reset hard uz origin/main"
-  if errorlevel 2 (
-    echo Atcelts — nekas nav mainits.
-    pause
-    exit /b 1
-  )
-  git reset --hard origin/main
-  if errorlevel 1 (
-    echo ERROR: reset neizdevas
-    pause
-    exit /b 1
-  )
+  echo ERROR: reset neizdevas — aizver STOP-VS-SYSTEM.bat / editorus
+  pause
+  exit /b 1
 )
 
 for /f "delims=" %%h in ('git rev-parse --short HEAD 2^>nul') do set "VS_AFTER=%%h"
+for /f "delims=" %%f in ('git rev-parse HEAD 2^>nul') do set "VS_FULL=%%f"
+> "%~dp0VERSION.txt" (
+  echo commit=%VS_AFTER%
+  echo full=%VS_FULL%
+  echo branch=main
+)
+
 echo.
 echo [4/4] Dependencies (pnpm^)...
 where pnpm >nul 2>&1
@@ -92,7 +85,8 @@ if errorlevel 1 (
 where pnpm >nul 2>&1
 if not errorlevel 1 (
   call pnpm install
-  if errorlevel 1 echo WARNING: pnpm install neizdevas — START mēģinās vēlreiz
+  call pnpm --filter @nexus/domain --filter @nexus/shared --filter @nexus/broker-adapters --filter @nexus/config build
+  if errorlevel 1 echo WARNING: package build neizdevas — START mēģinās vēlreiz
 ) else (
   echo   pnpm nav — izlaizu; START-VS-SYSTEM.bat uzinstalēs
 )
@@ -105,9 +99,13 @@ if /I "%VS_BEFORE%"=="%VS_AFTER%" (
 ) else (
   echo   Atjauninats: %VS_BEFORE%  -^>  %VS_AFTER%
 )
+echo   VERSION.txt = %VS_AFTER%
+echo.
+echo   Ja nav b8ad46a ^(vai jaunaks^) — nepareiza mape / nav git clone.
 echo.
 echo   Tagad: START-VS-SYSTEM.bat
 echo   Apturet: STOP-VS-SYSTEM.bat
+echo   Spiedigs: FORCE-UPDATE-VS-SYSTEM.bat
 echo ========================================
 echo.
 pause
