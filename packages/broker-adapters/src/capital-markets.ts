@@ -29,6 +29,10 @@ export const CAPITAL_EPIC_ALIASES: Record<string, string> = {
   NAS100: "US100",
   NASDAQ100: "US100",
   US100: "US100",
+  /** Capital search sometimes returns UST100 for US Tech 100 */
+  UST100: "US100",
+  USTECH100: "US100",
+  TECH100: "US100",
   NDX: "US100",
   US30: "US30",
   DJI: "US30",

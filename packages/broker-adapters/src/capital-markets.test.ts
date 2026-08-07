@@ -3,7 +3,16 @@ import {
   formatMarketCode,
   pickPreferredEpic,
   prioritizeCapitalMarkets,
+  resolveCapitalEpic,
 } from "./capital-markets";
+
+describe("resolveCapitalEpic", () => {
+  it("maps UST100 / NAS aliases to US100", () => {
+    expect(resolveCapitalEpic("UST100")).toBe("US100");
+    expect(resolveCapitalEpic("NAS100")).toBe("US100");
+    expect(resolveCapitalEpic("US100")).toBe("US100");
+  });
+});
 
 describe("pickPreferredEpic", () => {
   it("skips numeric share epics when a desk favorite exists", () => {

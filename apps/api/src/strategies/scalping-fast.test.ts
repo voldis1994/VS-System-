@@ -33,7 +33,7 @@ function bullScalpCandles(): CandleLike[] {
 
 describe("SCALPING FAST mode", () => {
   it("min score is lower than EMA (fires more often)", () => {
-    expect(modeMinScore(StrategyMode.SCALPING)).toBe(42);
+    expect(modeMinScore(StrategyMode.SCALPING)).toBe(36);
     expect(modeMinScore(StrategyMode.EMA_TICK_SCALP)).toBe(50);
   });
 
@@ -49,7 +49,7 @@ describe("SCALPING FAST mode", () => {
     );
     expect(scored.signal).toBe("BUY");
     expect(scored.gate).toMatch(/scalp_fast/);
-    expect(scored.buyScore).toBeGreaterThanOrEqual(42);
+    expect(scored.buyScore).toBeGreaterThanOrEqual(36);
   });
 
   it("does not require fresh EMA1×EMA3 cross (unlike EMA mode)", () => {

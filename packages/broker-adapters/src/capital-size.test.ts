@@ -16,6 +16,12 @@ describe("capital-size", () => {
     expect(volumePrecisionForStep(r.step)).toBe(3);
   });
 
+  it("UST100 alias uses index micro-lot rules", () => {
+    const r = capitalDealRulesFallback("UST100");
+    expect(r.minSize).toBe(0.001);
+    expect(r.step).toBe(0.001);
+  });
+
   it("keeps 0.001 without bumping to 0.1", () => {
     const r = capitalDealRulesFallback("US100");
     const n = normalizeCapitalDealSize(0.001, r);

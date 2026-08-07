@@ -72,6 +72,10 @@ export function deploymentHint(d: DeploymentState): string | null {
     return "EMA 1/3: gaida svaigu EMA1×EMA3 krustojumu (tagad jau vienā pusē — bez jauna cross neieies). Labāk SCALPING FAST.";
   }
   if (d.gate === "scalp_fast_long" || d.gate === "scalp_fast_short") {
+    if (d.skip === "quality_wait" || d.signal === "HOLD") {
+      const bar = d.minScore && d.minScore > 0 ? d.minScore : 36;
+      return `SCALPING FAST gaida — score ${d.score ?? 0}/${bar}+ (B${d.buyScore ?? "?"} S${d.sellScore ?? "?"}).`;
+    }
     return `SCALPING FAST: momentum → ${d.gate === "scalp_fast_long" ? "BUY" : "SELL"} (ciešs trail exit).`;
   }
   if (d.gate === "scalp_quiet") {

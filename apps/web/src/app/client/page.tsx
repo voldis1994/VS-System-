@@ -2,6 +2,7 @@
 
 import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers, modeMinScore } from "@nexus/domain";
 import { useEffect, useMemo, useState } from "react";
+import { deploymentHint, type DeploymentState } from "@/lib/strategy-status";
 import {
   apiBaseFromConfig,
   clearServerConfig,
@@ -20,6 +21,7 @@ type PortalAccount = {
   equity: string;
   balance: string;
   connectionStatus: string;
+  liveTradingEnabled?: boolean;
 };
 
 type PortalStrategy = {
@@ -28,6 +30,7 @@ type PortalStrategy = {
   status: string;
   assignedSymbols: unknown;
   configuration: Record<string, unknown> | null;
+  deploymentStateJson?: DeploymentState | null;
 };
 
 type CapitalMarket = {
@@ -229,7 +232,7 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "Reāls 10s scalp · EMA/MACD/stoch momentum · uzreiz ciešs trail exit · der US100/GOLD/FX",
+    tip: "BUY un SELL · 10s momentum (EMA/MACD/stoch) · uzreiz ciešs trail · US100/GOLD/FX",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
@@ -328,6 +331,33 @@ export default function ClientPortalPage() {
     void loadSession(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, server?.host, server?.apiPort]);
+
+  // Live engine status while RUNNING (skip / score / why no trade)
+  useEffect(() => {
+    if (!token || !server || strategy?.status !== "RUNNING") return;
+    const id = window.setInterval(() => {
+      void (async () => {
+        try {
+          const session = await portalApi<{
+            account: PortalAccount;
+            strategy: PortalStrategy | null;
+            openPositions: number;
+          }>(apiBaseFromConfig(server), "/client-portal/session", { token });
+          setStrategy(session.strategy);
+          setOpenPositions(session.openPositions);
+          if (session.account) setAccount(session.account);
+        } catch {
+          // keep last status
+        }
+      })();
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [token, server, strategy?.status]);
+
+  const engineHint = useMemo(() => {
+    if (!strategy?.deploymentStateJson) return null;
+    return deploymentHint(strategy.deploymentStateJson);
+  }, [strategy?.deploymentStateJson]);
 
   const filteredMarkets = useMemo(() => {
     const q = marketQ.trim().toLowerCase();
@@ -444,16 +474,21 @@ export default function ClientPortalPage() {
     setError(null);
     setStatusMsg(null);
     try {
+      // Normalize Capital US Tech aliases so history/orders hit US100
+      const symbol = /^(UST100|USTECH100|TECH100|NAS100|NASDAQ100|NDX)$/i.test(epic)
+        ? "US100"
+        : epic;
       await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
         method: "POST",
         token,
         body: JSON.stringify({
           mode,
-          assignedSymbols: [epic],
+          assignedSymbols: [symbol],
           action,
           configuration: buildConfig({ lotSize, exit, mode }),
         }),
       });
+      if (symbol !== epic) setEpic(symbol);
       setStatusMsg(action === "stop" ? "Apturēts" : action === "save" ? "Saglabāts" : "Palaists");
       await loadSession(token);
     } catch (err) {
@@ -637,6 +672,47 @@ export default function ClientPortalPage() {
         >
           {strategy ? `${strategy.status} · ${strategy.mode}` : "NO STRATEGY"}
         </div>
+        {strategy?.status === "RUNNING" && engineHint ? (
+          <div className="border border-[#00f0ff]/20 bg-[#070d16]/90 px-3 py-2 text-[12px] leading-snug text-[#9ec0d4]">
+            {engineHint}
+            {strategy.deploymentStateJson ? (
+              <p className="mt-1 font-mono text-[10px] text-[#5c6d80]">
+                {[
+                  typeof strategy.deploymentStateJson.score === "number"
+                    ? `score ${strategy.deploymentStateJson.score}/${strategy.deploymentStateJson.minScore ?? "?"}`
+                    : null,
+                  strategy.deploymentStateJson.buyScore != null
+                    ? `B${strategy.deploymentStateJson.buyScore}/S${strategy.deploymentStateJson.sellScore}`
+                    : null,
+                  strategy.deploymentStateJson.gate
+                    ? `gate:${strategy.deploymentStateJson.gate}`
+                    : null,
+                  strategy.deploymentStateJson.skip
+                    ? `skip:${strategy.deploymentStateJson.skip}`
+                    : null,
+                  strategy.deploymentStateJson.candleSource
+                    ? `candles:${strategy.deploymentStateJson.candleSource}`
+                    : null,
+                  strategy.deploymentStateJson.placed ? "ORDER SENT" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {strategy?.status === "RUNNING" &&
+        account?.accountType === "LIVE" &&
+        account.liveTradingEnabled === false ? (
+          <div className="border border-[#ff2d55]/35 bg-[#1a080c] px-3 py-2 text-[12px] text-[#ff8fa3]">
+            LIVE trading OFF — PC desk → Accounts → ieslēdz LIVE ON, citādi orderi netiek sūtīti.
+          </div>
+        ) : null}
+        {strategy?.status === "RUNNING" && account?.connectionStatus !== "CONNECTED" ? (
+          <div className="border border-[#ff2d55]/35 bg-[#1a080c] px-3 py-2 text-[12px] text-[#ff8fa3]">
+            Capital nav CONNECTED — treidi netiks izpildīti. PC desk → Accounts → Connect.
+          </div>
+        ) : null}
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
           <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">MARKET</p>
@@ -739,8 +815,8 @@ export default function ClientPortalPage() {
                 <>
                   <p className="text-[#7af6ff]">AUTO · SCALPING FAST</p>
                   <p>
-                    Bez TP. Pēc entry uzreiz ciešs trailing + BE. Ātrs exit —
-                    der US100, GOLD, FX. Mode/tirgu maini → SAVE / START.
+                    BUY + SELL. Bez fiksēta TP — pēc entry uzreiz ciešs trailing + BE.
+                    Ja nav treidu: skaties statusa rindu (score / skip). Mode/tirgu maini → SAVE / START.
                   </p>
                 </>
               ) : (

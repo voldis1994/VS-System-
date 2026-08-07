@@ -595,6 +595,12 @@ export function evaluateStrategyMode(
       else if (i.minusDi > i.plusDi) s += 10;
       if (i.rsi >= 42 && i.rsi <= 75) b += 8;
       if (i.rsi >= 25 && i.rsi <= 58) s += 8;
+      // Live mid vs last bar close — Capital 10s = 1m bars; tick bias matters
+      if (Number.isFinite(i.open) && Number.isFinite(i.price) && i.open > 0) {
+        const barMid = (i.high + i.low) / 2;
+        if (i.price > barMid) b += 10;
+        else if (i.price < barMid) s += 10;
+      }
       // Mild ADX preference — never a hard block
       if (i.adx >= 12) {
         if (b >= s) b += 6;
@@ -1169,7 +1175,7 @@ export function evaluateStrategyMode(
   buy = Math.max(0, Math.min(100, buy));
   sell = Math.max(0, Math.min(100, sell));
 
-  const edge = mode === StrategyMode.SCALPING ? 2 : 3;
+  const edge = mode === StrategyMode.SCALPING ? 1 : 3;
 
   if (buy >= minScore && buy >= sell + edge) {
     return { signal: "BUY", score: buy, gate, bias: "bull", buyScore: buy, sellScore: sell };

@@ -461,9 +461,68 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             : undefined,
       };
 
-      // Micro modes: only require strategy TF candles (don't block on 1m sim/unknown)
+      // Micro modes: only require strategy TF candles (don't block on 1m sim/unknown).
+      // If 10s path fell to sim, retry explicit 1m Capital history before refusing entries.
+      let effectiveCandleSource = candleSource;
+      if (
+        (isEmaTickScalp || isClassicScalping) &&
+        (candleSource === "sim" || candleSource === "unknown")
+      ) {
+        const m1Fallback = await this.market.getCandles(brokerSymbol, "1m", 220);
+        const m1FbSource = this.market.getCandleSource(brokerSymbol, "1m");
+        if (
+          (m1FbSource === "capital" || m1FbSource === "db") &&
+          m1Fallback.length >= 60
+        ) {
+          const m1Ind = computeIndicators(m1Fallback);
+          if (m1Ind && m1Ind.atr > 0) {
+            ind = m1Ind as typeof ind;
+            effectiveCandleSource = m1FbSource;
+            m1 = m1Fallback;
+            m1Source = m1FbSource;
+            // Re-apply live mid after swapping to 1m bars
+            const live = this.market.getTick(brokerSymbol);
+            if (live) {
+              const mid = (Number(live.bid) + Number(live.ask)) / 2;
+              if (Number.isFinite(mid) && mid > 0) {
+                if (isEmaTickScalp) {
+                  ind = applyEmaTickLivePrice(ind, m1Fallback, mid);
+                } else {
+                  ind = { ...ind, price: mid };
+                }
+              }
+            }
+            const rescored = evaluateStrategyMode(
+              mode,
+              ind,
+              minScore,
+              sessionFilter,
+              {
+                hasOpenBuy,
+                hasOpenSell,
+                at: lastBar?.closeTime ?? lastBar?.openTime ?? new Date(),
+                prevEmaSide,
+              },
+            );
+            Object.assign(scored, rescored);
+            lastStatus = {
+              ...lastStatus,
+              score: scored.score,
+              buyScore: scored.buyScore,
+              sellScore: scored.sellScore,
+              gate: scored.gate,
+              bias: scored.bias,
+              strategySignal: scored.signal,
+              candleSource: effectiveCandleSource,
+              candleSource1m: m1Source,
+              tfNote: "10s sim avoided — using Capital 1m bars + live mid",
+            };
+          }
+        }
+      }
+
       const badTf =
-        candleSource === "sim" || candleSource === "unknown";
+        effectiveCandleSource === "sim" || effectiveCandleSource === "unknown";
       const badM1 =
         !isEmaTickScalp &&
         !isClassicScalping &&
@@ -474,6 +533,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           signal: scored.signal,
           skip: "sim_candles",
           reason: "Capital history missing — refusing LIVE/sim entries",
+          candleSource: effectiveCandleSource,
         };
         continue;
       }

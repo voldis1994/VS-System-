@@ -212,21 +212,22 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
       const newest = existing[0]?.openTime
         ? new Date(existing[0].openTime).getTime()
         : 0;
-      const fresh = Date.now() - newest < timeframeStepMs(timeframe) * 3;
-      // Sim candles are no longer persisted — fresh DB rows are Capital history.
-      // Keep them on transient Capital fetch failures (do not wipe).
-      if (fresh) {
+      // 10s uses Capital MINUTE bars — freshness must follow 1m, not 10s*3 (=30s wipe)
+      const fresh =
+        Date.now() - newest < candleFreshnessStepMs(timeframe) * 3;
+      // Sim candles are no longer persisted — DB rows are Capital history.
+      // Keep them on transient Capital fetch failures (do not wipe → sim → block entries).
+      if (fresh || (adapter && existing.length >= 60)) {
         this.candleSourceByKey.set(key, "db");
         return existing.reverse();
       }
       if (!adapter) {
         this.candleSourceByKey.set(key, "sim");
         // fall through to in-memory sim
-      } else {
-        // Very stale DB with adapter that failed above — wipe and regenerate UI-only sim
-        await this.prisma.candle.deleteMany({
-          where: { symbol: resolved, timeframe },
-        });
+      } else if (existing.length >= minAccept) {
+        // Stale but usable — prefer real history over sim (strategy refuses sim)
+        this.candleSourceByKey.set(key, "db");
+        return existing.reverse();
       }
     }
 
@@ -617,6 +618,12 @@ function timeframeToCapitalResolution(tf: string): string {
     default:
       return "MINUTE_15";
   }
+}
+
+/** How old DB candles may be before we treat them as stale (matches Capital resolution). */
+function candleFreshnessStepMs(tf: string): number {
+  if (tf === "10s") return 60_000; // stored as MINUTE bars under 10s key
+  return timeframeStepMs(tf);
 }
 
 function timeframeStepMs(tf: string): number {

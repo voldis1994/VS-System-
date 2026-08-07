@@ -63,16 +63,17 @@ export class ClientPortalController {
       account: this.accounts.sanitizeAccount(
         account as unknown as Record<string, unknown>,
       ),
-      strategy: strategy
-        ? {
-            id: strategy.id,
-            name: strategy.name,
-            mode: strategy.mode,
-            status: strategy.status,
-            assignedSymbols: strategy.assignedSymbols,
-            configuration: strategy.configurationJson,
-          }
-        : null,
+        strategy: strategy
+          ? {
+              id: strategy.id,
+              name: strategy.name,
+              mode: strategy.mode,
+              status: strategy.status,
+              assignedSymbols: strategy.assignedSymbols,
+              configuration: strategy.configurationJson,
+              deploymentStateJson: strategy.deploymentStateJson ?? null,
+            }
+          : null,
       openPositions,
     };
   }
