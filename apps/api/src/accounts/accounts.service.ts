@@ -206,15 +206,57 @@ export class AccountsService {
     try {
       const adapter = await this.brokers.connectAccount(account);
       const health = await adapter.healthCheck();
-      const state = await adapter.getAccountState();
+      let state = await adapter.getAccountState();
+
+      // If pinned CFD is a leftover micro account but another CFD has real balance
+      // (user trades manually on the big one), auto-switch to the richest CFD.
+      let boundExternal =
+        (health.details?.externalAccountId as string | undefined) ??
+        account.externalAccountId ??
+        null;
+      if (
+        account.provider === "CAPITAL" &&
+        typeof adapter.listCapitalAccounts === "function" &&
+        typeof adapter.bindCapitalAccount === "function"
+      ) {
+        try {
+          const subs = await adapter.listCapitalAccounts();
+          const richest = [...subs].sort(
+            (a, b) =>
+              Number(b.available ?? b.balance ?? 0) -
+              Number(a.available ?? a.balance ?? 0),
+          )[0];
+          const richestAvail = Number(
+            richest?.available ?? richest?.balance ?? 0,
+          );
+          const currentAvail = Number(state.freeMargin ?? state.equity ?? 0);
+          if (
+            richest?.accountId &&
+            richestAvail > 50 &&
+            richestAvail > currentAvail * 2 + 10 &&
+            richest.accountId !== boundExternal
+          ) {
+            await adapter.bindCapitalAccount(richest.accountId);
+            boundExternal = richest.accountId;
+            state = await adapter.getAccountState();
+            await this.notifications.create({
+              organizationId,
+              userId: actorId,
+              title: "CFD konts pārslēgts",
+              body: `${account.name} → ${richest.accountName ?? richest.accountId} ($${richestAvail.toFixed(0)})`,
+              severity: "INFO",
+            });
+          }
+        } catch {
+          // keep original bind
+        }
+      }
 
       const updated = await this.prisma.tradingAccount.update({
         where: { id },
         data: {
           connectionStatus: health.healthy ? "CONNECTED" : "ERROR",
-          externalAccountId:
-            (health.details?.externalAccountId as string | undefined) ??
-            account.externalAccountId,
+          externalAccountId: boundExternal ?? account.externalAccountId,
           balance: state.balance,
           equity: state.equity,
           freeMargin: state.freeMargin,
@@ -255,7 +297,11 @@ export class AccountsService {
         organizationId,
         userId: actorId,
         title: "Account connected",
-        body: `${updated.name} is ${updated.connectionStatus}`,
+        body: `${updated.name} is ${updated.connectionStatus}${
+          updated.externalAccountId
+            ? ` · CFD ${updated.externalAccountId} · equity $${Number(updated.equity).toFixed(2)}`
+            : ""
+        }`,
         severity: "SUCCESS",
       });
 

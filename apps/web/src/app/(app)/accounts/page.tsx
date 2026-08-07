@@ -167,7 +167,10 @@ export default function AccountsPage() {
           token: token!,
           body: JSON.stringify({ riskAccepted: true }),
         });
-        toast.success("Capital.com LIVE connected — real orders enabled");
+        toast.success("Capital LIVE connected — izvēlies CFD kontu", {
+          duration: 6000,
+        });
+        await openCapitalBind(account.id);
       } else {
         toast.success(
           provider === "CAPITAL"
@@ -176,6 +179,7 @@ export default function AccountsPage() {
               : "Connected"
             : "Paper account created",
         );
+        if (provider === "CAPITAL") await openCapitalBind(account.id);
       }
       setApiKey("");
       setPassword("");

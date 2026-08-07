@@ -747,7 +747,7 @@ export default function StrategiesPage() {
                     />
                   </div>
                   <p className="mt-1 text-[11px] text-white/35">
-                    Tikai fiksēts lot — Risk % sizing ir izslēgts. Mazam kontam: US100 bieži 0.001; GOLD no 0.01.
+                    Fixed lot — Tu izvēlies size.
                   </p>
                 </Field>
               </div>

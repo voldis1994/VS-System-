@@ -8,6 +8,7 @@ import {
   isCapitalSizeError,
   normalizeCapitalDealSize,
   parseCapitalDealRules,
+  pickBestCapitalSubAccount,
   volumePrecisionForStep,
 } from "./capital-size";
 
@@ -60,7 +61,32 @@ describe("capital-size", () => {
     expect(ladder[0]).toBe(0.1);
     expect(ladder[ladder.length - 1]).toBe(0.01);
     expect(ladder.length).toBeGreaterThan(1);
-    expect(capitalRiskCheckHint("GOLD", "0.1")).toMatch(/RISK_CHECK|0\.01/i);
+    expect(capitalRiskCheckHint("GOLD", "0.1")).toMatch(/RISK_CHECK|Bind|CFD/i);
+  });
+
+  it("picks richest CFD sub-account, not preferred micro", () => {
+    const best = pickBestCapitalSubAccount([
+      {
+        accountId: "tiny",
+        preferred: true,
+        balance: { balance: 21, available: 21 },
+      },
+      {
+        accountId: "big",
+        preferred: false,
+        balance: { balance: 500, available: 480 },
+      },
+    ]);
+    expect(best?.accountId).toBe("big");
+    expect(
+      pickBestCapitalSubAccount(
+        [
+          { accountId: "tiny", available: 21 },
+          { accountId: "big", available: 480 },
+        ],
+        "tiny",
+      )?.accountId,
+    ).toBe("tiny");
   });
 
   it("rounds 0.0015 up to US100 step 0.001 → 0.002", () => {

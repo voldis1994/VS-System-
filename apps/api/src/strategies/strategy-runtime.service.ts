@@ -19,8 +19,6 @@ import {
   formatInstrumentPrice,
   buildEqualMultiTpPlan,
   resolveScalpDistance,
-  suggestLotForEquity,
-  lotLooksTooBigForEquity,
   isMarginOrFundsError,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -1176,28 +1174,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           payload: { accountId, symbol: brokerSymbol, direction: signal },
         });
 
-        // Always FIXED lot for bot strategies — never Risk % sizing.
-        // Do not auto-rewrite saved lot from equity heuristics (operator owns LOT).
-        const equityNum = Number(account.equity ?? account.balance ?? 0);
-        // Legacy DB rows may still have useRiskPercent:true — ignore completely.
+        // Always FIXED lot — operator owns LOT; never Risk % / never lecture about size.
         if (config.useRiskPercent) {
           config.useRiskPercent = false;
         }
         const orderVolume = String(config.volume ?? "0.01");
-        if (
-          Number.isFinite(equityNum) &&
-          equityNum > 0 &&
-          lotLooksTooBigForEquity(orderVolume, equityNum, brokerSymbol)
-        ) {
-          this.log.warn(
-            `Lot ${orderVolume} looks large for equity ${equityNum} on ${brokerSymbol} — keeping FIXED lot (no auto Risk%/clamp). Suggest ${suggestLotForEquity(equityNum, brokerSymbol)}`,
-          );
-          lastStatus = {
-            ...lastStatus,
-            volume: orderVolume,
-            reason: `lot_large_for_equity_${equityNum.toFixed(0)}_kept_fixed`,
-          };
-        }
         try {
           const result = await this.orders.place(
             strategy.organizationId,
@@ -1404,25 +1385,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               this.lastSignalAt.set(key, Date.now());
             }
             const marginFail = isMarginOrFundsError(msg);
-            const suggested = suggestLotForEquity(
-              Number(account.equity ?? 0),
-              brokerSymbol,
-            );
             await this.notifications.create({
               organizationId: strategy.organizationId,
               userId: actorId === "system" ? null : actorId,
               title: marginFail
-                ? "Capital noraidīja lot (margin)"
+                ? "Capital rejected (RISK_CHECK)"
                 : "Strategy order failed",
-              body: `${strategy.name} ${brokerSymbol}: ${
-                marginFail
-                  ? `Capital RISK_CHECK — free margin par mazu priekš FIXED lot ${orderVolume}. Nemainīju Tavu lot. GOLD ar mazu equity (~$20) bieži NEIET (min 0.01). Ieteikums: US100 lot 0.001, vai GOLD lot ${suggested} ja free margin pietiek.`
-                  : isCapitalSizeError(msg)
-                    ? capitalSizeErrorHint(
-                        brokerSymbol,
-                        String(config.volume ?? "0.01"),
-                      )
-                    : msg
+              body: `${strategy.name} ${brokerSymbol} lot ${orderVolume}: ${
+                isCapitalSizeError(msg)
+                  ? capitalSizeErrorHint(
+                      brokerSymbol,
+                      String(config.volume ?? "0.01"),
+                    )
+                  : msg
               }`,
               severity: "WARNING",
             });
@@ -1441,25 +1416,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             this.lastSignalAt.set(key, Date.now());
           }
           const marginFail = isMarginOrFundsError(msg);
-          const suggested = suggestLotForEquity(
-            Number(account.equity ?? 0),
-            brokerSymbol,
-          );
           await this.notifications.create({
             organizationId: strategy.organizationId,
             userId: actorId === "system" ? null : actorId,
             title: marginFail
-              ? "Capital noraidīja lot (margin)"
+              ? "Capital rejected (RISK_CHECK)"
               : "Strategy order error",
-            body: `${strategy.name} ${brokerSymbol}: ${
-              marginFail
-                ? `Capital RISK_CHECK — free margin par mazu priekš FIXED lot ${orderVolume}. Nemainīju Tavu lot. Iestatī manuāli ${suggested} (GOLD min bieži 0.01).`
-                : isCapitalSizeError(msg)
-                  ? capitalSizeErrorHint(
-                      brokerSymbol,
-                      String(config.volume ?? "0.01"),
-                    )
-                  : msg
+            body: `${strategy.name} ${brokerSymbol} lot ${orderVolume}: ${
+              isCapitalSizeError(msg)
+                ? capitalSizeErrorHint(
+                    brokerSymbol,
+                    String(config.volume ?? "0.01"),
+                  )
+                : msg
             }`,
             severity: "CRITICAL",
           });

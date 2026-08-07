@@ -165,15 +165,54 @@ export function capitalSizeErrorHint(epic: string, attempted?: string): string {
 }
 
 export function capitalRiskCheckHint(epic: string, attempted?: string): string {
-  const rules = capitalDealRulesFallback(epic);
-  const isMetal = /XAU|GOLD|XAG|SILVER/i.test(epic);
   return (
-    `Capital RISK_CHECK (margin/risk) uz ${epic}` +
-    (attempted ? ` pie lot ${attempted}` : "") +
-    `. Min lot ${rules.minSize}` +
-    (isMetal
-      ? " (GOLD min 0.01). Ar ~$20–50 equity GOLD bieži NEIET — pārslēdz uz US100 lot 0.001."
-      : "") +
-    `. Samazini lot / aizver citas pozīcijas Capital app / pārbaudi free margin.`
+    `Capital RISK_CHECK uz ${epic}` +
+    (attempted ? ` lot ${attempted}` : "") +
+    `. Ja APP to pašu lot atver — VS CFD bind ir cits konts (Accounts → Bind).`
   );
+}
+
+/**
+ * When no CFD sub-account is pinned, prefer highest available balance —
+ * Capital "preferred" is often a leftover micro account while the app trades another.
+ */
+export function pickBestCapitalSubAccount<
+  T extends {
+    accountId: string;
+    preferred?: boolean;
+    balance?:
+      | number
+      | {
+          balance?: number;
+          available?: number;
+        };
+    available?: number;
+  },
+>(accounts: T[], pinned?: string): T | undefined {
+  if (!accounts.length) return undefined;
+  const pin = String(pinned ?? "").trim();
+  if (pin) {
+    const hit = accounts.find((a) => a.accountId === pin);
+    if (hit) return hit;
+  }
+  const availOf = (a: T): number => {
+    if (typeof a.available === "number" && Number.isFinite(a.available)) {
+      return a.available;
+    }
+    if (typeof a.balance === "number" && Number.isFinite(a.balance)) {
+      return a.balance;
+    }
+    if (a.balance && typeof a.balance === "object") {
+      const n = Number(a.balance.available ?? a.balance.balance ?? 0);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+  return [...accounts].sort((a, b) => {
+    const d = availOf(b) - availOf(a);
+    if (d !== 0) return d;
+    if (a.preferred && !b.preferred) return -1;
+    if (!a.preferred && b.preferred) return 1;
+    return 0;
+  })[0];
 }

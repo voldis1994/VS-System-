@@ -12,37 +12,6 @@ import {
   type ClientServerConfig,
 } from "./server-config";
 
-/** Tiny accounts cannot open US100 at 0.1 — Capital rejects on margin.
- * GOLD min is usually 0.01 (not 0.001) — RISK_CHECK if lot > free margin. */
-function suggestLotForEquity(equity: number, epic: string): string {
-  const eq = Number.isFinite(equity) ? equity : 0;
-  const metal = /XAU|GOLD|XAG|SILVER/i.test(epic);
-  if (metal) {
-    if (eq < 150) return "0.01";
-    if (eq < 400) return "0.02";
-    if (eq < 1000) return "0.05";
-    return "0.1";
-  }
-  const index = /US100|UST100|USX|US500|US30|NAS|NDX|GER|UK100|DE40/i.test(epic);
-  if (index) {
-    if (eq < 40) return "0.001";
-    if (eq < 120) return "0.01";
-    if (eq < 300) return "0.02";
-    if (eq < 800) return "0.05";
-    return "0.1";
-  }
-  if (eq < 50) return "0.01";
-  if (eq < 200) return "0.02";
-  if (eq < 500) return "0.05";
-  return "0.1";
-}
-
-function lotLooksTooBigForEquity(lot: string, equity: number, epic: string): boolean {
-  const size = Number(lot);
-  if (!Number.isFinite(size) || size <= 0) return true;
-  return size > Number(suggestLotForEquity(equity, epic)) + 1e-9;
-}
-
 type PortalAccount = {
   id: string;
   name: string;
@@ -515,17 +484,6 @@ export default function ClientPortalPage() {
         ? "US100"
         : epic;
       const volume = lotSize;
-      const eq = Number(account?.equity ?? account?.balance ?? 0);
-      if (
-        action !== "stop" &&
-        Number.isFinite(eq) &&
-        eq > 0 &&
-        lotLooksTooBigForEquity(volume, eq, symbol)
-      ) {
-        setStatusMsg(
-          `Brīdinājums: lot ${volume} var būt par lielu priekš $${eq.toFixed(0)} — FIXED lot atstāts. Ieteikums: ${suggestLotForEquity(eq, symbol)}.`,
-        );
-      }
       await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
         method: "POST",
         token,
@@ -537,12 +495,12 @@ export default function ClientPortalPage() {
         }),
       });
       if (symbol !== epic) setEpic(symbol);
-      setStatusMsg((prev) =>
+      setStatusMsg(
         action === "stop"
           ? "Apturēts"
           : action === "save"
-            ? prev ?? "Saglabāts"
-            : prev ?? "Palaists",
+            ? "Saglabāts"
+            : "Palaists",
       );
       await loadSession(token);
     } catch (err) {
@@ -843,7 +801,7 @@ export default function ClientPortalPage() {
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
           <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">
-            FIXED LOT
+            LOT
           </p>
           <div className="grid grid-cols-3 gap-1.5">
             {LOTS.map((l) => (
@@ -861,24 +819,6 @@ export default function ClientPortalPage() {
               </button>
             ))}
           </div>
-          <p className="mt-2 text-[11px] leading-snug text-[#8aa3b8]">
-            Tu izvēlies lot — Risk % netiek lietots. GOLD tipiski{" "}
-            <span className="text-[#7af6ff]">0.01</span>. US100 mazam kontam{" "}
-            <span className="text-[#7af6ff]">0.001</span>.
-          </p>
-          {account &&
-          lotLooksTooBigForEquity(
-            lotSize,
-            Number(account.equity ?? account.balance ?? 0),
-            epic,
-          ) ? (
-            <p className="mt-2 border border-[#ff2d55]/40 bg-[#1a080c] px-2 py-2 text-[12px] text-[#ff8fa3]">
-              Lot {lotSize} var būt par lielu priekš{" "}
-              {Number(account.equity).toFixed(0)} {account.baseCurrency} (Capital
-              margin). Lot netiek mainīts automātiski — ieteikums{" "}
-              {suggestLotForEquity(Number(account.equity), epic)}.
-            </p>
-          ) : null}
         </section>
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">

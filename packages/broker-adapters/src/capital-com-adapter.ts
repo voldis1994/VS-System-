@@ -19,6 +19,7 @@ import {
   isCapitalSizeError,
   normalizeCapitalDealSize,
   parseCapitalDealRules,
+  pickBestCapitalSubAccount,
   volumePrecisionForStep,
   type CapitalDealRules,
 } from "./capital-size";
@@ -203,8 +204,6 @@ export class CapitalComAdapter implements BrokerAdapter {
       }>;
     }>("GET", "/api/v1/accounts");
 
-    const preferred =
-      accounts.accounts?.find((a) => a.preferred) ?? accounts.accounts?.[0];
     const currentAccountId = String(
       session.currentAccountId ??
         session.accountId ??
@@ -212,10 +211,15 @@ export class CapitalComAdapter implements BrokerAdapter {
         "",
     );
 
-    // Pin to stored CFD sub-account when set; otherwise Capital preferred
+    // Pin stored CFD when set; otherwise highest available (NOT Capital "preferred" —
+    // preferred is often a leftover ~$20 account while the app trades another).
+    const best = pickBestCapitalSubAccount(
+      accounts.accounts ?? [],
+      this.targetExternalAccountId || undefined,
+    );
     const desired =
       this.targetExternalAccountId ||
-      preferred?.accountId ||
+      best?.accountId ||
       currentAccountId ||
       "";
 
@@ -343,8 +347,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     const list = accountsRes.accounts ?? [];
     const target = this.targetExternalAccountId || this.externalAccountId;
     const selected =
-      list.find((a) => a.accountId === target) ??
-      list.find((a) => a.accountId === this.externalAccountId) ??
+      pickBestCapitalSubAccount(list, target) ??
       list.find((a) => a.preferred) ??
       list[0];
 
