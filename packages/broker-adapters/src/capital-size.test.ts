@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   capitalDealRulesFallback,
+  capitalRiskCheckHint,
   capitalSizeErrorHint,
+  dealSizeRetryLadder,
+  isCapitalRiskCheckError,
   isCapitalSizeError,
   normalizeCapitalDealSize,
   parseCapitalDealRules,
@@ -20,6 +23,12 @@ describe("capital-size", () => {
     const r = capitalDealRulesFallback("UST100");
     expect(r.minSize).toBe(0.001);
     expect(r.step).toBe(0.001);
+  });
+
+  it("GOLD fallback min is 0.01", () => {
+    const r = capitalDealRulesFallback("GOLD");
+    expect(r.minSize).toBe(0.01);
+    expect(r.step).toBe(0.01);
   });
 
   it("keeps 0.001 without bumping to 0.1", () => {
@@ -41,6 +50,17 @@ describe("capital-size", () => {
       ),
     ).toBe(true);
     expect(capitalSizeErrorHint("US100", "0.00")).toContain("0.001");
+  });
+
+  it("detects RISK_CHECK and builds ladder toward min", () => {
+    expect(isCapitalRiskCheckError("RISK_CHECK")).toBe(true);
+    expect(isCapitalRiskCheckError("Capital rejected: RISK_CHECK")).toBe(true);
+    const r = capitalDealRulesFallback("GOLD");
+    const ladder = dealSizeRetryLadder(0.1, r);
+    expect(ladder[0]).toBe(0.1);
+    expect(ladder[ladder.length - 1]).toBe(0.01);
+    expect(ladder.length).toBeGreaterThan(1);
+    expect(capitalRiskCheckHint("GOLD", "0.1")).toMatch(/RISK_CHECK|0\.01/i);
   });
 
   it("rounds 0.0015 up to US100 step 0.001 → 0.002", () => {

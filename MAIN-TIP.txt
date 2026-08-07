@@ -1,3 +1,3 @@
-main tip: capital multi-account session lock
-repo: https://github.com/voldis1994/VS-System-
-fix: shared CST + placeOrder lock for both CFD accounts; clearer REJECTED reasons
+main tip: capital RISK_CHECK auto-retry smaller lot
+repo: https://github.com/voldis1994/VS-System_
+fix: RISK_CHECK → step lot down to instrument min; GOLD min 0.01; flip-close settle delay

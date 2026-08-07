@@ -106,6 +106,54 @@ export function isCapitalSizeError(message: string): boolean {
   );
 }
 
+/** Capital deal confirm reason — free margin / exposure / broker risk gate. */
+export function isCapitalRiskCheckError(message: string): boolean {
+  return /RISK_CHECK|INSUFFICIENT_FUNDS|AVAILABLE_TO_DEAL|insufficient.?funds|not enough.*(margin|fund)|exposure.?limit/i.test(
+    String(message ?? ""),
+  );
+}
+
+/**
+ * Step sizes down toward instrument min after RISK_CHECK.
+ * First entry is the (normalized) start size; callers usually skip it.
+ */
+export function dealSizeRetryLadder(
+  start: number,
+  rules: CapitalDealRules,
+): number[] {
+  const step = rules.step > 0 ? rules.step : rules.minSize;
+  const prec = volumePrecisionForStep(step);
+  const seen = new Set<string>();
+  const out: number[] = [];
+  const push = (n: number) => {
+    const sized = normalizeCapitalDealSize(n, rules).size;
+    if (sized + 1e-12 < rules.minSize) return;
+    const key = sized.toFixed(prec);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(sized);
+  };
+  push(start);
+  let cur = out[0] ?? rules.minSize;
+  for (let i = 0; i < 8; i++) {
+    const half = normalizeCapitalDealSize(cur / 2, rules).size;
+    if (half + 1e-12 < cur) {
+      push(half);
+      cur = half;
+      continue;
+    }
+    const stepped = normalizeCapitalDealSize(cur - step, rules).size;
+    if (stepped + 1e-12 < cur) {
+      push(stepped);
+      cur = stepped;
+      continue;
+    }
+    break;
+  }
+  push(rules.minSize);
+  return out;
+}
+
 export function capitalSizeErrorHint(epic: string, attempted?: string): string {
   const rules = capitalDealRulesFallback(epic);
   return (
@@ -113,5 +161,17 @@ export function capitalSizeErrorHint(epic: string, attempted?: string): string {
     (attempted ? ` (${attempted})` : "") +
     ` priekš ${epic}. Derīgs lot ≥ ${rules.minSize} (step ${rules.step}). ` +
     `Pārbaudi LOT Strategies / Client — 0.001 nedrīkst noapaļoties uz 0.`
+  );
+}
+
+export function capitalRiskCheckHint(epic: string, attempted?: string): string {
+  const rules = capitalDealRulesFallback(epic);
+  const isMetal = /XAU|GOLD|XAG|SILVER/i.test(epic);
+  return (
+    `Capital RISK_CHECK (margin/risk) uz ${epic}` +
+    (attempted ? ` pie lot ${attempted}` : "") +
+    `. Min lot ${rules.minSize}` +
+    (isMetal ? " (GOLD tipiski no 0.01, ne 0.001)" : "") +
+    `. Samazini lot, aizver citas pozīcijas Capital app, pagaidi pēc flip-close, vai pārbaudi free margin.`
   );
 }

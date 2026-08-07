@@ -934,6 +934,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             };
             continue;
           }
+          // Capital free-margin update after close lags — avoid instant RISK_CHECK on flip open
+          await new Promise((r) => setTimeout(r, 900));
         }
 
         const sameSide = openOnSymbol.filter((p) => p.direction === signal);
@@ -1459,7 +1461,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 : "Strategy order failed",
               body: `${strategy.name} ${brokerSymbol}: ${
                 marginFail
-                  ? `Capital noraidīja — equity par mazu šim lot. Pārslēdzu uz ${suggestLotForEquity(Number(account.equity ?? 0), brokerSymbol)}. SAVE/START ar 0.001.`
+                  ? `Capital RISK_CHECK / margin — equity par mazu šim lot. Pārslēdzu uz ${suggestLotForEquity(Number(account.equity ?? 0), brokerSymbol)}. GOLD min bieži 0.01; aizver citas pozīcijas Capital app.`
                   : isCapitalSizeError(msg)
                     ? capitalSizeErrorHint(
                         brokerSymbol,
@@ -1518,7 +1520,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               : "Strategy order error",
             body: `${strategy.name} ${brokerSymbol}: ${
               marginFail
-                ? `Capital noraidīja — equity par mazu. Izmanto lot 0.001.`
+                ? `Capital RISK_CHECK / margin — equity par mazu. GOLD min bieži 0.01 (ne 0.001). Izmanto ${suggestLotForEquity(Number(account.equity ?? 0), brokerSymbol)}.`
                 : isCapitalSizeError(msg)
                   ? capitalSizeErrorHint(
                       brokerSymbol,

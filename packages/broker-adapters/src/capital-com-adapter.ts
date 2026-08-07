@@ -12,7 +12,10 @@ import {
 } from "./capital-markets";
 import {
   capitalDealRulesFallback,
+  capitalRiskCheckHint,
   capitalSizeErrorHint,
+  dealSizeRetryLadder,
+  isCapitalRiskCheckError,
   isCapitalSizeError,
   normalizeCapitalDealSize,
   parseCapitalDealRules,
@@ -927,24 +930,45 @@ export class CapitalComAdapter implements BrokerAdapter {
     // MARKET: open bare (size+direction only). Capital often REJECTS create when
     // stopLevel violates min distance — EMA/SCALPING tight SL on US100 is typical.
     // Caller attaches SL/TP via modifyPosition after fill.
-    const body: Record<string, unknown> = {
+    const rules = await this.resolveDealRules(epic);
+    const prec = volumePrecisionForStep(rules.step);
+    const baseBody: Record<string, unknown> = {
       epic,
       direction: request.direction,
       size: sized.size,
     };
     const trailDist = request.stopDistance != null ? Number(request.stopDistance) : NaN;
     if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
-      body.trailingStop = true;
-      body.stopDistance = trailDist;
+      baseBody.trailingStop = true;
+      baseBody.stopDistance = trailDist;
     }
 
-    let res: { dealReference: string };
-    try {
-      res = await this.request<{ dealReference: string }>(
+    const postMarket = async (size: number) => {
+      const body = { ...baseBody, size };
+      const res = await this.request<{ dealReference: string }>(
         "POST",
         "/api/v1/positions",
         body,
       );
+      const confirm = await this.waitConfirm(res.dealReference);
+      return { res, confirm, size };
+    };
+
+    let res: { dealReference: string };
+    let confirm: CapitalConfirm;
+    let dealId: string | undefined;
+    let fillLevel: number | undefined;
+    let accepted = false;
+    let usedSize = sized.size;
+
+    try {
+      const first = await postMarket(sized.size);
+      res = first.res;
+      confirm = first.confirm;
+      dealId = confirm.dealId;
+      fillLevel = confirm.level;
+      accepted = isCapitalConfirmAccepted(confirm);
+      usedSize = first.size;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (isCapitalSizeError(msg)) {
@@ -963,11 +987,6 @@ export class CapitalComAdapter implements BrokerAdapter {
       throw err;
     }
 
-    let confirm = await this.waitConfirm(res.dealReference);
-    let dealId = confirm.dealId;
-    let fillLevel = confirm.level;
-    let accepted = isCapitalConfirmAccepted(confirm);
-
     // Empty REJECTED often = wrong CFD sub-account after sibling session steal.
     // Re-pin account once and verify live positions before giving up.
     if (
@@ -981,7 +1000,7 @@ export class CapitalComAdapter implements BrokerAdapter {
         const match = await this.findRecentOpenPosition({
           epic,
           direction: request.direction,
-          size: sized.size,
+          size: usedSize,
         });
         if (match?.brokerPositionId) {
           accepted = true;
@@ -989,19 +1008,46 @@ export class CapitalComAdapter implements BrokerAdapter {
           fillLevel = Number(match.averageEntry);
         } else {
           // One bare retry after re-bind (common when two accounts share login)
-          const retry = await this.request<{ dealReference: string }>(
-            "POST",
-            "/api/v1/positions",
-            body,
-          );
-          confirm = await this.waitConfirm(retry.dealReference);
+          const retry = await postMarket(usedSize);
+          res = retry.res;
+          confirm = retry.confirm;
           dealId = confirm.dealId;
           fillLevel = confirm.level;
           accepted = isCapitalConfirmAccepted(confirm);
-          res = retry;
         }
       } catch {
         // keep original reject
+      }
+    }
+
+    // RISK_CHECK = Capital margin/exposure gate — step lot down to instrument min.
+    if (
+      !accepted &&
+      isCapitalRiskCheckError(String(confirm.reason ?? ""))
+    ) {
+      const ladder = dealSizeRetryLadder(usedSize, rules).slice(1);
+      for (const trySize of ladder) {
+        try {
+          await new Promise((r) => setTimeout(r, 350));
+          const attempt = await postMarket(trySize);
+          res = attempt.res;
+          confirm = attempt.confirm;
+          dealId = confirm.dealId;
+          fillLevel = confirm.level;
+          accepted = isCapitalConfirmAccepted(confirm);
+          if (accepted) {
+            usedSize = trySize;
+            sized.size = trySize;
+            sized.sizeStr = trySize.toFixed(prec);
+            sized.note = `RISK_CHECK → lot ${trySize}`;
+            break;
+          }
+          if (!isCapitalRiskCheckError(String(confirm.reason ?? ""))) {
+            break;
+          }
+        } catch {
+          break;
+        }
       }
     }
 
@@ -1010,7 +1056,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       const match = await this.findRecentOpenPosition({
         epic,
         direction: request.direction,
-        size: sized.size,
+        size: usedSize,
       });
       if (match?.brokerPositionId) {
         accepted = true;
@@ -1039,6 +1085,7 @@ export class CapitalComAdapter implements BrokerAdapter {
 
     const rejected =
       !accepted && (confirm.dealStatus ?? "").toUpperCase() === "REJECTED";
+    const reasonStr = String(confirm.reason ?? "");
     const response: BrokerOrderResponse = {
       accepted,
       brokerOrderId: dealId ?? res.dealReference,
@@ -1056,9 +1103,11 @@ export class CapitalComAdapter implements BrokerAdapter {
           : confirm.reason ?? "CONFIRM_TIMEOUT",
       rejectionMessage: accepted
         ? undefined
-        : isCapitalSizeError(String(confirm.reason ?? ""))
+        : isCapitalSizeError(reasonStr)
           ? capitalSizeErrorHint(epic, String(request.volume))
-          : formatCapitalConfirmRejection(confirm),
+          : isCapitalRiskCheckError(reasonStr)
+            ? capitalRiskCheckHint(epic, sized.sizeStr)
+            : formatCapitalConfirmRejection(confirm),
     };
     this.processed.set(request.clientRequestId, response);
     this.invalidatePositionsCache();

@@ -12,10 +12,18 @@ import {
   type ClientServerConfig,
 } from "./server-config";
 
-/** Tiny accounts cannot open US100 at 0.1 — Capital rejects on margin. */
+/** Tiny accounts cannot open US100 at 0.1 — Capital rejects on margin.
+ * GOLD min is usually 0.01 (not 0.001) — RISK_CHECK if lot > free margin. */
 function suggestLotForEquity(equity: number, epic: string): string {
   const eq = Number.isFinite(equity) ? equity : 0;
-  const index = /US100|UST100|USX|US500|US30|NAS|GOLD|XAU/i.test(epic);
+  const metal = /XAU|GOLD|XAG|SILVER/i.test(epic);
+  if (metal) {
+    if (eq < 150) return "0.01";
+    if (eq < 400) return "0.02";
+    if (eq < 1000) return "0.05";
+    return "0.1";
+  }
+  const index = /US100|UST100|USX|US500|US30|NAS|NDX|GER|UK100|DE40/i.test(epic);
   if (index) {
     if (eq < 40) return "0.001";
     if (eq < 120) return "0.01";

@@ -29,6 +29,14 @@ describe("capital-confirm", () => {
     expect(formatCapitalConfirmRejection(c)).toContain("min-stop");
   });
 
+  it("explains RISK_CHECK clearly", () => {
+    const c = parseCapitalConfirm({
+      dealStatus: "REJECTED",
+      reason: "RISK_CHECK",
+    });
+    expect(formatCapitalConfirmRejection(c)).toMatch(/RISK_CHECK|margin|lot/i);
+  });
+
   it("formats REJECTED without reason using raw hint", () => {
     const c = parseCapitalConfirm({
       dealStatus: "REJECTED",

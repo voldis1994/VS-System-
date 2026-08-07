@@ -12,8 +12,16 @@ describe("micro-lot", () => {
     expect(lotLooksTooBigForEquity("0.001", 21.34, "US100")).toBe(false);
   });
 
-  it("detects Capital margin rejects", () => {
+  it("never suggests below 0.01 for GOLD", () => {
+    expect(suggestLotForEquity(21.34, "GOLD")).toBe("0.01");
+    expect(suggestLotForEquity(100, "XAUUSD")).toBe("0.01");
+    expect(lotLooksTooBigForEquity("0.1", 50, "GOLD")).toBe(true);
+  });
+
+  it("detects Capital margin rejects including RISK_CHECK", () => {
     expect(isMarginOrFundsError("insufficient free margin")).toBe(true);
     expect(isMarginOrFundsError("error.rejected.balance")).toBe(true);
+    expect(isMarginOrFundsError("Capital rejected RISK_CHECK")).toBe(true);
+    expect(isMarginOrFundsError("Capital rejected: RISK_CHECK")).toBe(true);
   });
 });
