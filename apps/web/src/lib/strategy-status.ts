@@ -120,7 +120,10 @@ export function deploymentHint(d: DeploymentState): string | null {
     return `1m×5 apstiprina ${side} (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
   }
   if (d.skip === "live_trading_off") {
-    return "LIVE trading OFF — Accounts lapā ieslēdz LIVE ON.";
+    return "LIVE trading OFF — STOP tad START vēlreiz (auto ieslēdz) vai desk Accounts → LIVE ON.";
+  }
+  if (d.skip === "sim_candles") {
+    return "SIM sveces — Capital nav history. Desk → Accounts → Connect Capital, tad STOP/START.";
   }
   if (d.skip === "waiting_open_close") {
     if (d.signal === "BUY" || d.signal === "SELL") {

@@ -1,4 +1,4 @@
-import { Injectable, HttpStatus } from "@nestjs/common";
+import { Injectable, HttpStatus, Logger } from "@nestjs/common";
 import {
   AccountStrategyRunSchema,
   CreateStrategySchema,
@@ -24,9 +24,12 @@ import { AppError } from "../common/errors/app-error";
 import { StrategyRuntimeService } from "./strategy-runtime.service";
 import { PositionsService } from "../positions/positions.service";
 import { MarketDataService } from "../market-data/market-data.service";
+import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 
 @Injectable()
 export class StrategiesService {
+  private readonly log = new Logger(StrategiesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventBusService,
@@ -35,6 +38,7 @@ export class StrategiesService {
     private readonly runtime: StrategyRuntimeService,
     private readonly positions: PositionsService,
     private readonly market: MarketDataService,
+    private readonly brokers: BrokerRuntimeService,
   ) {}
 
   list(organizationId: string) {
@@ -859,6 +863,14 @@ export class StrategiesService {
       return { action: "save", accountId: input.accountId, strategy };
     }
 
+    // START: ensure Capital session + LIVE routing + warm candles before ticks
+    await this.ensureBrokerReadyForTrading(
+      organizationId,
+      input.accountId,
+      input.assignedSymbols,
+      correlationId,
+    );
+
     const started = await this.start(
       organizationId,
       actorId,
@@ -866,6 +878,107 @@ export class StrategiesService {
       correlationId,
     );
     return { action: "start", accountId: input.accountId, strategy: started };
+  }
+
+  /**
+   * Client/desk START must not leave the bot in RUNNING with sim candles or
+   * liveTradingOff — reconnect Capital and enable LIVE routing when needed.
+   */
+  private async ensureBrokerReadyForTrading(
+    organizationId: string,
+    accountId: string,
+    assignedSymbols: string[],
+    correlationId: string,
+  ) {
+    const account = await this.prisma.tradingAccount.findFirst({
+      where: { id: accountId, organizationId },
+    });
+    if (!account) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Trading account not found",
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    if (account.status === "LOCKED") {
+      throw new AppError(
+        ErrorCodes.ACCOUNT_LOCKED,
+        "Konts LOCKED — desk → unlock, tad START",
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    if (account.provider === "CAPITAL") {
+      let adapter = this.brokers.get(accountId);
+      if (!adapter || account.connectionStatus !== "CONNECTED") {
+        try {
+          await this.prisma.tradingAccount.update({
+            where: { id: accountId },
+            data: { connectionStatus: "CONNECTING" },
+          });
+          adapter = await this.brokers.connectAccount(account);
+          const health = await adapter.healthCheck();
+          if (!health.healthy) {
+            await this.prisma.tradingAccount.update({
+              where: { id: accountId },
+              data: { connectionStatus: "ERROR" },
+            });
+            throw new AppError(
+              ErrorCodes.BROKER_CONNECTION_FAILED,
+              "Capital savienojums unhealthy — pārbaudi API key / DEMO vs LIVE",
+              HttpStatus.BAD_GATEWAY,
+            );
+          }
+          await this.prisma.tradingAccount.update({
+            where: { id: accountId },
+            data: {
+              connectionStatus: "CONNECTED",
+              liveTradingEnabled:
+                account.accountType === "LIVE"
+                  ? true
+                  : account.liveTradingEnabled,
+            },
+          });
+          await this.brokers.persistState(accountId);
+          this.log.log(
+            `START reconnect Capital ${accountId} ok (${correlationId})`,
+          );
+        } catch (err) {
+          await this.prisma.tradingAccount.update({
+            where: { id: accountId },
+            data: { connectionStatus: "ERROR" },
+          });
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new AppError(
+            ErrorCodes.BROKER_CONNECTION_FAILED,
+            `Capital CONNECT failed — orderi netiks sūtīti: ${msg}`,
+            HttpStatus.BAD_GATEWAY,
+          );
+        }
+      } else if (
+        account.accountType === "LIVE" &&
+        !account.liveTradingEnabled
+      ) {
+        await this.prisma.tradingAccount.update({
+          where: { id: accountId },
+          data: { liveTradingEnabled: true },
+        });
+        this.log.log(`START enabled LIVE routing for ${accountId}`);
+      }
+
+      // Warm Capital history so first ticks are not sim_candles
+      for (const raw of assignedSymbols.slice(0, 3)) {
+        const epic = resolveCapitalEpic(raw);
+        try {
+          await this.market.getCandles(epic, "1m", 120, { accountId });
+          await this.market.getCandles(epic, "10s", 120, { accountId });
+        } catch (err) {
+          this.log.warn(
+            `Candle warm ${epic}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
+    }
   }
 
   /** Push BE/Trail/TP from strategy config onto already-open positions for this strategy/symbols. */
