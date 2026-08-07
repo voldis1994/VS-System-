@@ -146,37 +146,53 @@ netsh advfirewall firewall add rule name="VS System Web 3000" dir=in action=allo
 netsh advfirewall firewall add rule name="VS System API 4000" dir=in action=allow protocol=TCP localport=4000 >nul
 
 echo.
-echo [7/7] Cloudflare remote tunnel (klienti bez Wi-Fi)...
-start "VS System TUNNEL" cmd /k "cd /d "%~dp0" && node scripts\start-tunnel.mjs"
+echo [7/7] Stabilais client URL (VIENA adrese — LAN)...
+> "%~dp0client-url.txt" echo.
+set "VS_LAN="
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
+  for /f "tokens=1" %%b in ("%%a") do (
+    if not defined VS_LAN set "VS_LAN=%%b"
+    >> "%~dp0client-url.txt" echo http://%%b:3000/client
+  )
+)
+if defined VS_LAN (
+  echo   http://%VS_LAN%:3000/client
+) else (
+  echo   http://localhost:3000/client
+  >> "%~dp0client-url.txt" echo http://localhost:3000/client
+)
+echo   Saglabats: client-url.txt
+echo.
+echo   Remote (cita Wi-Fi / 4G)? Palaid ATSEVISKI:
+echo     START-REMOTE-TUNNEL.bat
+echo   ^(brivais Cloudflare katru reizi dod JAUNU linku — tapec nav START^)
 
-timeout /t 3 /nobreak >nul
+timeout /t 2 /nobreak >nul
 start "" http://localhost:3000/dashboard
 
 echo.
 echo ========================================
 echo   VS SYSTEM SKRIEN
 echo.
-echo   DESK (tev uz PC):
+echo   DESK (tev uz PC) — VIENMER tapat:
 echo     http://localhost:3000/dashboard
 echo     http://localhost:3000/strategies
 echo     API health: http://localhost:4000/api/health
 echo.
-echo   KLIENTI — tikai /client (NE dashboard):
-> "%~dp0client-url.txt" echo.
-for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
-  for /f "tokens=1" %%b in ("%%a") do (
-    echo     LAN:  http://%%b:3000/client
-    >> "%~dp0client-url.txt" echo http://%%b:3000/client
-  )
+echo   KLIENTI — VIENA stabila adrese (LAN /client):
+if defined VS_LAN (
+  echo     http://%VS_LAN%:3000/client
+) else (
+  echo     http://localhost:3000/client
 )
-echo     Remote: skati logu "VS System TUNNEL"
-echo             + fails remote-client-url.txt
+echo     fails: client-url.txt
 echo.
 echo   Login: owner@nexus.pro / NexusOwner123!
 echo   PIN:   123456
 echo.
 echo   Apturet:  STOP-VS-SYSTEM.bat
-echo   Logus NEAIZVER (API / WEB / TUNNEL)
+echo   Update:   UPDATE-VS-SYSTEM.bat
+echo   Logus NEAIZVER (API / WEB)
 echo ========================================
 pause
 exit /b 0

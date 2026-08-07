@@ -18,12 +18,19 @@ Multi-account trading desk + client portal (Capital.com / paper).
 3. **Atjaunināt kodu** (bez jaunas mapes): **`UPDATE-VS-SYSTEM.bat`** — `git pull origin main`
 4. Dubultklikšķis: **`START-VS-SYSTEM.bat`**
 
-Tas dara visu: git pull → install → build → Postgres/Redis → migrate → API + Web → Cloudflare tunnel.
+Tas dara: git pull → install → build → Postgres/Redis → migrate → API + Web.
+
+**Viena stabila client adrese** (tā pati katru reizi, kamēr PC IP nemainās):
+`http://PC-LAN-IP:3000/client` — fails `client-url.txt`.
+
+Remote 4G / cita Wi‑Fi (opcija): **`START-REMOTE-TUNNEL.bat`** — brīvais Cloudflare
+katru reizi dod *jaunu* `*.trycloudflare.com` linku (tā strādā free quick tunnel).
 
 | Kas | URL |
 |-----|-----|
 | Desk (tev) | http://localhost:3000/dashboard |
-| Client (telefonam) | LAN no `client-url.txt` vai remote no `remote-client-url.txt` |
+| Client (stabils) | LAN no `client-url.txt` |
+| Client (remote, mainās) | `START-REMOTE-TUNNEL.bat` → `remote-client-url.txt` |
 | API | http://localhost:4000/api/health |
 
 Login: `owner@nexus.pro` / `NexusOwner123!` · PIN `123456`

@@ -1,9 +1,14 @@
 /**
- * Starts a Cloudflare quick tunnel to the local VS System web UI (:3000).
- * Clients anywhere open the printed HTTPS /client URL — no shared Wi‑Fi needed.
+ * Optional Cloudflare *quick* tunnel → local web UI (:3000).
  *
- * Requires: VS System already running (START-VS-SYSTEM.bat starts tunnel too).
- * Downloads cloudflared.exe into tools/ on first run (Windows x64).
+ * Quick tunnels ALWAYS get a NEW random https://….trycloudflare.com URL
+ * each time you start them. That is Cloudflare's free mode — not a VS bug.
+ *
+ * Prefer the stable LAN URL from START-VS-SYSTEM.bat / client-url.txt:
+ *   http://PC-LAN-IP:3000/client
+ *
+ * Use this only when clients are off your Wi‑Fi (see START-REMOTE-TUNNEL.bat).
+ * For one permanent remote hostname you need a Cloudflare *named* tunnel.
  */
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -73,8 +78,10 @@ function saveUrl(url) {
 
 async function main() {
   const exe = await ensureBinary();
-  console.log("Starting Cloudflare tunnel → http://127.0.0.1:3000 ...");
-  console.log("(Keep this window open while clients are connected)");
+  console.log("Starting Cloudflare QUICK tunnel → http://127.0.0.1:3000 ...");
+  console.log("NOTE: free quick tunnel = NEW random URL every start.");
+  console.log("Stable option: same Wi-Fi → client-url.txt (LAN /client)");
+  console.log("(Keep this window open while remote clients are connected)");
 
   const child = spawn(exe, ["tunnel", "--url", "http://127.0.0.1:3000"], {
     stdio: ["ignore", "pipe", "pipe"],
