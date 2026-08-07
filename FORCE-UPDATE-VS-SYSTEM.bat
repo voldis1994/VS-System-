@@ -26,8 +26,8 @@ if not exist ".git" (
   echo   ZIP lejupielade NESTRADA ar UPDATE.
   echo   Dari VIENU REIZI:
   echo     cd Desktop
-  echo     git clone https://github.com/voldis1994/VS-System_.git
-  echo   Tad strādā no VS-System_ mapes ar so UPDATE.
+  echo     git clone https://github.com/voldis1994/VS-System-.git
+  echo   Tad strādā no VS-System- mapes ar so UPDATE.
   pause
   exit /b 1
 )
@@ -104,7 +104,7 @@ echo   2^) Telefonā: Safari refresh / clear cache uz /client
 echo   3^) SAVE → START
 echo.
 echo   Ja commit joprojam vecs — tu esi nepareizaja mapē
-echo   ^(nevis git clone VS-System_^).
+echo   ^(nevis git clone VS-System-^).
 echo ========================================
 pause
 exit /b 0

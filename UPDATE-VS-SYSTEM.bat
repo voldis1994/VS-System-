@@ -15,7 +15,7 @@ where git >nul 2>&1
 if errorlevel 1 (
   echo ERROR: Git nav atrasts.
   echo   Instalē: https://git-scm.com/download/win
-  echo   Tad palaid so failu no VS-System_ mapes (ne ZIP kopijas).
+  echo   Tad palaid so failu no VS-System- mapes (ne ZIP kopijas).
   pause
   exit /b 1
 )
@@ -24,7 +24,7 @@ if not exist ".git" (
   echo ERROR: si mape NAV git repo.
   echo   Pareizi: clone no GitHub vienu reizi, tad tikai so UPDATE.
   echo   Piemers:
-  echo     git clone https://github.com/voldis1994/VS-System_.git
+  echo     git clone https://github.com/voldis1994/VS-System-.git
   echo   Pec tam vienmer dublklikski UPDATE-VS-SYSTEM.bat — NAV jaunas mapes.
   pause
   exit /b 1
