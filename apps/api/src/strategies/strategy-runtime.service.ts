@@ -256,9 +256,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               5_000,
             )
           : (config.cooldownSeconds ?? 30) * 1000;
-    // Per-mode default score bar (10/10 spec); user override only if explicitly lower quality intent
+    // Per-mode default score bar; SCALPING always uses domain bar (ignore stale high saved minScore)
     let minScore = config.minScore ?? modeMinScore(mode);
-    if (config.minScore == null) minScore = modeMinScore(mode);
+    if (config.minScore == null || mode === StrategyMode.SCALPING) {
+      minScore = modeMinScore(mode);
+    }
     const sessionFilter =
       config.sessionFilter === true || mode === StrategyMode.SESSION;
     const oneTradeOnly = config.oneTradeOnly !== false; // default ON
@@ -294,14 +296,43 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       const timeframe =
         config.timeframe ?? modePreferredTimeframe(mode);
 
+      // Ensure Capital session BEFORE candles — otherwise getCandles falls to sim
+      // and strategy refuses entries even though manual Capital app still works.
+      const primaryAccountId = accountIds[0];
+      if (primaryAccountId) {
+        try {
+          if (!this.brokers.get(primaryAccountId)) {
+            const acc = await this.prisma.tradingAccount.findFirst({
+              where: { id: primaryAccountId, organizationId: strategy.organizationId },
+            });
+            if (acc) {
+              await this.brokers.connectAccount(acc);
+              if (acc.connectionStatus !== "CONNECTED") {
+                await this.prisma.tradingAccount.update({
+                  where: { id: primaryAccountId },
+                  data: { connectionStatus: "CONNECTED" },
+                });
+              }
+            }
+          }
+        } catch (err) {
+          this.log.warn(
+            `Pre-candle connect ${primaryAccountId}: ${
+              err instanceof Error ? err.message : err
+            }`,
+          );
+        }
+      }
+
       // Strategy TF candles → mode (TREND/SCALP/…) decides BUY/SELL
       const candles = await this.market.getCandles(
         brokerSymbol,
         timeframe,
         220,
+        primaryAccountId ? { accountId: primaryAccountId } : undefined,
       );
-      const candleSource = this.market.getCandleSource(brokerSymbol, timeframe);
-      if (candles.length < 60) {
+      let candleSource = this.market.getCandleSource(brokerSymbol, timeframe);
+      if (candles.length < 55) {
         lastStatus = {
           ...lastStatus,
           symbol: brokerSymbol,
@@ -320,7 +351,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       const isClassicScalping = mode === StrategyMode.SCALPING;
       const scalpAuto = isClassicScalping ? modeAutoExit(StrategyMode.SCALPING) : null;
       if (timeframe === "10s" && !isEmaTickScalp && !isClassicScalping) {
-        m1 = await this.market.getCandles(brokerSymbol, "1m", 60);
+        m1 = await this.market.getCandles(
+          brokerSymbol,
+          "1m",
+          60,
+          primaryAccountId ? { accountId: primaryAccountId } : undefined,
+        );
         m1Source = this.market.getCandleSource(brokerSymbol, "1m");
         if (m1.length < 60) {
           lastStatus = {
@@ -429,7 +465,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       }
 
       // 1m×5 timing + candle bias (same rules as TF filter)
-      const m1candles = m1 ?? (await this.market.getCandles(brokerSymbol, "1m", 30));
+      const m1candles =
+        m1 ??
+        (await this.market.getCandles(
+          brokerSymbol,
+          "1m",
+          30,
+          primaryAccountId ? { accountId: primaryAccountId } : undefined,
+        ));
       if (!m1Source) m1Source = this.market.getCandleSource(brokerSymbol, "1m");
       const micro = evaluateMicro1mFive(m1candles);
       // Strategy TF last 5 — mandatory: BUY≠bearish, SELL≠bullish
@@ -471,7 +514,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         (isEmaTickScalp || isClassicScalping) &&
         (candleSource === "sim" || candleSource === "unknown")
       ) {
-        const m1Fallback = await this.market.getCandles(brokerSymbol, "1m", 220);
+        const m1Fallback = await this.market.getCandles(
+          brokerSymbol,
+          "1m",
+          220,
+          primaryAccountId ? { accountId: primaryAccountId } : undefined,
+        );
         const m1FbSource = this.market.getCandleSource(brokerSymbol, "1m");
         if (
           (m1FbSource === "capital" || m1FbSource === "db") &&
@@ -1205,13 +1253,33 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           );
 
           const child = result.results?.[0] as
-            | { ok?: boolean; position?: { id: string }; message?: string }
+            | {
+                ok?: boolean;
+                position?: { id: string };
+                order?: { id: string; status?: string };
+                message?: string;
+              }
             | undefined;
 
-          if (child?.ok && child.position?.id) {
+          // Manual desk accepts fill even when position row lags — bot must too.
+          let positionId = child?.position?.id;
+          if (child?.ok && !positionId) {
+            const recent = await this.prisma.position.findFirst({
+              where: {
+                organizationId: strategy.organizationId,
+                accountId,
+                status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+                OR: [{ symbol: brokerSymbol }, { symbol }],
+              },
+              orderBy: { openedAt: "desc" },
+            });
+            positionId = recent?.id;
+          }
+
+          if (child?.ok && positionId) {
             const filledVol = Number(
               (await this.prisma.position.findFirst({
-                where: { id: child.position.id },
+                where: { id: positionId },
                 select: { volume: true },
               }))?.volume ?? entryLot,
             );
@@ -1235,7 +1303,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               planJson = undefined;
             }
             await this.prisma.position.update({
-              where: { id: child.position.id },
+              where: { id: positionId },
               data: {
                 strategyId: strategy.id,
                 source: "STRATEGY",
@@ -1265,7 +1333,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               await this.positions.modifySlTp(
                 strategy.organizationId,
                 actorId,
-                child.position.id,
+                positionId,
                 {
                   stopLoss,
                   takeProfit: takeProfit ?? null,
@@ -1283,7 +1351,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 await this.positions.modifySlTp(
                   strategy.organizationId,
                   actorId,
-                  child.position.id,
+                  positionId,
                   { stopLoss: trailSl },
                   correlationId,
                   { silent: true },
@@ -1326,7 +1394,29 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               takeProfit: takeProfit ?? null,
               skip: undefined,
               reason: undefined,
+              error: undefined,
             };
+          } else if (child?.ok) {
+            // Broker accepted but DB position lag — still count as fired (like desk toast)
+            _acted = true;
+            this.lastSignalAt.set(key, Date.now());
+            this.lastFingerprint.set(key, fingerprint);
+            lastStatus = {
+              ...lastStatus,
+              placed: true,
+              direction: signal,
+              entry,
+              skip: undefined,
+              reason: "broker_ok_position_pending",
+              error: undefined,
+            };
+            await this.notifications.create({
+              organizationId: strategy.organizationId,
+              userId: actorId === "system" ? null : actorId,
+              title: `Auto ${signal} (pending sync)`,
+              body: `${strategy.name} → ${brokerSymbol} ${signal} — Capital pieņēma, sync pozīciju…`,
+              severity: "SUCCESS",
+            });
           } else {
             const msg = child?.message ?? "order not accepted";
             this.log.warn(`Strategy order failed: ${msg}`);

@@ -76,8 +76,8 @@ export function deploymentHint(d: DeploymentState): string | null {
   }
   if (d.gate === "scalp_fast_long" || d.gate === "scalp_fast_short") {
     if (d.skip === "quality_wait" || d.signal === "HOLD") {
-      const bar = d.minScore && d.minScore > 0 ? d.minScore : 36;
-      return `SCALPING FAST gaida — score ${d.score ?? 0}/${bar}+ (B${d.buyScore ?? "?"} S${d.sellScore ?? "?"}).`;
+      const bar = d.minScore && d.minScore > 0 ? d.minScore : 28;
+      return `SCALPING FAST gaida — score ${d.score ?? 0}/${bar}+ (B${d.buyScore ?? "?"} S${d.sellScore ?? "?"}). Nav tas pats kas manuāli Capital app.`;
     }
     return `SCALPING FAST: momentum → ${d.gate === "scalp_fast_long" ? "BUY" : "SELL"} (ciešs trail exit).`;
   }

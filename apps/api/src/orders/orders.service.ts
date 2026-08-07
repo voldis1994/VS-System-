@@ -465,7 +465,12 @@ export class OrdersService implements OnModuleInit {
     });
 
     let position = null;
-    if (brokerResponse.positionId && brokerResponse.averageFillPrice) {
+    if (brokerResponse.positionId) {
+      const fillPx =
+        brokerResponse.averageFillPrice ??
+        input.entryPrice ??
+        undefined;
+      if (fillPx) {
       position = await this.prisma.position.create({
         data: {
           organizationId,
@@ -476,8 +481,8 @@ export class OrdersService implements OnModuleInit {
           direction: input.direction,
           volume: brokerResponse.filledVolume,
           initialVolume: brokerResponse.filledVolume,
-          averageEntry: brokerResponse.averageFillPrice,
-          currentPrice: brokerResponse.averageFillPrice,
+          averageEntry: fillPx,
+          currentPrice: fillPx,
           stopLoss: input.stopLoss,
           takeProfit: input.takeProfit,
           takeProfitsJson: (() => {
@@ -528,6 +533,7 @@ export class OrdersService implements OnModuleInit {
           direction: position.direction,
         },
       });
+      }
     }
 
     await this.brokers.persistState(accountId);

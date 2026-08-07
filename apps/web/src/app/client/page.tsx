@@ -255,7 +255,7 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "BUY un SELL · 10s momentum (EMA/MACD/stoch) · uzreiz ciešs trail · US100/GOLD/FX",
+    tip: "BUY un SELL · bots sūta Capital API (nevis app). Statusa rinda rāda score/skip — ja HOLD, vēl gaida setup.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",

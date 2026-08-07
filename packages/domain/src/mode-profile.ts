@@ -148,8 +148,8 @@ export function modeUses1mTiming(mode: StrategyMode | string): boolean {
 export function modeMinScore(mode: StrategyMode | string): number {
   switch (mode) {
     case StrategyMode.SCALPING:
-      // Fast entries on partial confluence — was 42 (too quiet in mixed 1m bars)
-      return 36;
+      // Capital 1m-as-10s is choppy — keep bar low so LIVE entries actually fire
+      return 28;
     case StrategyMode.EMA_TICK_SCALP:
       return 50;
     case StrategyMode.MEAN_REVERSION:

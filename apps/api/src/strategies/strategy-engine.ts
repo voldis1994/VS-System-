@@ -601,6 +601,11 @@ export function evaluateStrategyMode(
         if (i.price > barMid) b += 10;
         else if (i.price < barMid) s += 10;
       }
+      // Short impulse: price vs open of current bar
+      if (Number.isFinite(i.open) && i.open > 0) {
+        if (i.price > i.open) b += 12;
+        else if (i.price < i.open) s += 12;
+      }
       // Mild ADX preference — never a hard block
       if (i.adx >= 12) {
         if (b >= s) b += 6;
@@ -1175,12 +1180,12 @@ export function evaluateStrategyMode(
   buy = Math.max(0, Math.min(100, buy));
   sell = Math.max(0, Math.min(100, sell));
 
-  const edge = mode === StrategyMode.SCALPING ? 1 : 3;
+  const edge = mode === StrategyMode.SCALPING ? 0 : 3;
 
-  if (buy >= minScore && buy >= sell + edge) {
+  if (buy >= minScore && (edge === 0 ? buy > sell : buy >= sell + edge)) {
     return { signal: "BUY", score: buy, gate, bias: "bull", buyScore: buy, sellScore: sell };
   }
-  if (sell >= minScore && sell >= buy + edge) {
+  if (sell >= minScore && (edge === 0 ? sell > buy : sell >= buy + edge)) {
     return { signal: "SELL", score: sell, gate, bias: "bear", buyScore: buy, sellScore: sell };
   }
 
