@@ -39,7 +39,7 @@ export type DeploymentState = {
 
 export function deploymentHint(d: DeploymentState): string | null {
   if (d.candleSource1m === "sim" || d.candleSource === "sim" || d.skip === "sim_candles") {
-    return "Sveces ir SIM — entry bloķēts. Capital CONNECTED + Sync history.";
+    return "SIM sveces — orderi BLOĶĒTI. Desk → Accounts → Connect Capital, tad STOP/START.";
   }
   if (d.skip === "news_filter") {
     return `News filtra blackout${d.newsEvent ? ` — ${d.newsEvent}` : ""}${
@@ -103,9 +103,6 @@ export function deploymentHint(d: DeploymentState): string | null {
   if (d.gate === "mid_range") {
     return "Mid-range zona — HOLD (mazāk trokšņa).";
   }
-  if (d.skip === "sim_candles") {
-    return "SIM sveces — entry bloķēts. Capital history Sync.";
-  }
   if (d.skip === "micro_timing") {
     return `Gaida 1m×5 / TF bias (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
   }
@@ -121,9 +118,6 @@ export function deploymentHint(d: DeploymentState): string | null {
   }
   if (d.skip === "live_trading_off") {
     return "LIVE trading OFF — STOP tad START vēlreiz (auto ieslēdz) vai desk Accounts → LIVE ON.";
-  }
-  if (d.skip === "sim_candles") {
-    return "SIM sveces — Capital nav history. Desk → Accounts → Connect Capital, tad STOP/START.";
   }
   if (d.skip === "waiting_open_close") {
     if (d.signal === "BUY" || d.signal === "SELL") {
