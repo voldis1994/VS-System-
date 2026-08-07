@@ -3,7 +3,9 @@ import {
   formatInstrumentPrice,
   instrumentMoneyPnl,
   instrumentPipSize,
+  isFxLikeSymbol,
   minProtectiveDistance,
+  resolveScalpDistance,
   trailingArmThreshold,
 } from "./instrument";
 
@@ -22,6 +24,20 @@ describe("instrumentPipSize", () => {
   it("resolves plain pairs", () => {
     expect(instrumentPipSize("EURUSD")).toBe(0.0001);
     expect(instrumentPipSize("GBPJPY")).toBe(0.01);
+  });
+});
+
+describe("resolveScalpDistance", () => {
+  it("does not treat 0.35 as raw EURUSD price (would be thousands of pips)", () => {
+    const d = resolveScalpDistance("EURUSD", 1.1, 10);
+    expect(d).toBeLessThan(0.01);
+    expect(d).toBeGreaterThanOrEqual(minProtectiveDistance("EURUSD", 1.1));
+    expect(isFxLikeSymbol("EURUSD")).toBe(true);
+  });
+
+  it("floors GOLD to Capital min protective distance", () => {
+    const d = resolveScalpDistance("GOLD", 4200, 10);
+    expect(d).toBeGreaterThanOrEqual(minProtectiveDistance("GOLD", 4200));
   });
 });
 

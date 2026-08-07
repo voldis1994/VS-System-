@@ -2,7 +2,9 @@ import { StrategyMode } from "./enums";
 
 /**
  * Auto exit defaults for modes that hide manual TP/BE/Trail pickers.
- * For 10s SCALPING, numeric distances are **price offsets** (not pip counts).
+ *
+ * SCALPING distances are **pip counts** (converted per-instrument at runtime).
+ * Never treat them as raw FX price offsets (0.35 on EURUSD ≈ thousands of pips).
  */
 export type ModeAutoExitConfig = {
   takeProfitEnabled: boolean;
@@ -19,26 +21,29 @@ export type ModeAutoExitConfig = {
   stopDistancePips?: number;
   cooldownSeconds: number;
   exitVersion: "SCALP" | "AUTO";
-  /** Prefer price-offset interpretation for BE/trail/stop on 10s. */
+  /**
+   * Legacy: raw price offsets on 10s. Prefer false — use pip conversion via
+   * resolveScalpDistance so FX/indices/GOLD stay Capital-safe.
+   */
   priceOffsetMode: boolean;
 };
 
-/** Classic 10s SCALPING — real micro scalp, tight trail, no fixed TP. */
+/** Classic SCALPING FAST — pip-based tight trail, immediate arm, no fixed TP. */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
-  breakEvenActivationPips: 0.35,
-  breakEvenOffsetPips: 0.01,
+  breakEvenActivationPips: 8,
+  breakEvenOffsetPips: 1,
   trailingEnabled: true,
-  trailingDistancePips: 0.35,
-  trailingActivationPips: 0.01,
+  trailingDistancePips: 10,
+  trailingActivationPips: 1,
   trailArmImmediate: true,
   atrStopMult: 0.55,
   atrTpMult: 1.0,
-  stopDistancePips: 0.5,
+  stopDistancePips: 12,
   cooldownSeconds: 5,
   exitVersion: "SCALP",
-  priceOffsetMode: true,
+  priceOffsetMode: false,
 };
 
 /** EMA 1/3 tick — exits via EMA3 trail / cross / BE at 1R (runtime). */
@@ -55,7 +60,7 @@ export const EMA_TICK_AUTO_EXIT: ModeAutoExitConfig = {
   atrTpMult: 1.8,
   cooldownSeconds: 15,
   exitVersion: "AUTO",
-  priceOffsetMode: true,
+  priceOffsetMode: false,
 };
 
 export function modeAutoExit(

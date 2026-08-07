@@ -1,6 +1,6 @@
 "use client";
 
-import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers, modeMinScore } from "@nexus/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
   apiBaseFromConfig,
@@ -177,7 +177,7 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
       oneTradeOnly: true,
       closeOnlyNoFlip: false,
       autoAggressive: false,
-      minScore: 50,
+      minScore: modeMinScore(input.mode),
       atrStopMult: auto.atrStopMult,
       atrTpMult: auto.atrTpMult,
       takeProfitEnabled: auto.takeProfitEnabled,
@@ -205,7 +205,7 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
     oneTradeOnly: true,
     closeOnlyNoFlip: false,
     autoAggressive: false,
-    minScore: 50,
+    minScore: modeMinScore(input.mode),
     atrStopMult: Number(e.atrStopMult),
     atrTpMult: Number(e.atrTpMult),
     takeProfitEnabled: e.tpEnabled,

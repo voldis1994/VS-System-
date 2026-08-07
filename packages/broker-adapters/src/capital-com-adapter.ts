@@ -969,20 +969,7 @@ export class CapitalComAdapter implements BrokerAdapter {
             new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime(),
         );
       if (candidates[0]) return candidates[0];
-      // Last resort: newest same epic+direction opened in last 60s
-      const recent = open
-        .filter((p) => {
-          const epic = resolveCapitalEpic(p.symbol).toUpperCase();
-          if (epic !== wantEpic) return false;
-          if (String(p.direction).toUpperCase() !== wantDir) return false;
-          const age = Date.now() - new Date(p.openedAt).getTime();
-          return Number.isFinite(age) && age >= 0 && age < 60_000;
-        })
-        .sort(
-          (a, b) =>
-            new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime(),
-        );
-      if (recent[0]) return recent[0];
+      // Do not latch a different size / unrelated same-side position
     }
     return undefined;
   }

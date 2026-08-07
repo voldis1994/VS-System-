@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useAccounts, useStrategies } from "@/lib/hooks";
 import type { Strategy, TradingAccount } from "@/lib/types";
-import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers, modeMinScore } from "@nexus/domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -177,7 +177,7 @@ function defaultDraft(epic = ""): AccountDraft {
     mode: StrategyMode.SCALPING,
     marketEpic: epic,
     riskPercent: "0.5",
-    lotSize: "0.01",
+    lotSize: "0.001",
     sizeMode: "LOT",
     exitVersion: "SCALP",
     ...EXIT_PRESETS.SCALP,
@@ -238,23 +238,7 @@ function draftFromStrategy(s: Strategy, fallbackEpic: string): AccountDraft {
 }
 
 function modeMinScoreClient(mode: string): number {
-  switch (mode) {
-    case StrategyMode.SCALPING:
-    case StrategyMode.EMA_TICK_SCALP:
-      return 50;
-    case StrategyMode.MEAN_REVERSION:
-    case StrategyMode.RANGE:
-    case StrategyMode.REVERSAL:
-    case StrategyMode.GRID:
-    case StrategyMode.DCA:
-    case StrategyMode.MARKET_MAKING_SIM:
-      return 52;
-    case StrategyMode.NEWS:
-    case StrategyMode.ARBITRAGE_SIM:
-      return 60;
-    default:
-      return 55;
-  }
+  return modeMinScore(mode);
 }
 
 function buildConfiguration(d: AccountDraft) {

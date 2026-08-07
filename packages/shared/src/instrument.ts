@@ -78,7 +78,49 @@ export function formatInstrumentPrice(symbol: string, price: number | string): s
   if (/BTC|BITCOIN|ETH|ETHER/.test(s)) return n.toFixed(2);
   if (/JPY/.test(s)) return n.toFixed(3);
   if (/OIL|WTI|BRENT/.test(s)) return n.toFixed(2);
+  if (/US100|US500|US30|NASDAQ|NDX|SPX|GER40|DE40|UK100|DOW/.test(s)) {
+    return n.toFixed(1);
+  }
   return n.toFixed(5);
+}
+
+/** True for FX-like symbols (never treat 0.35 as raw price distance). */
+export function isFxLikeSymbol(symbol: string): boolean {
+  const s = String(symbol ?? "").toUpperCase();
+  if (
+    s.match(
+      /(EUR|GBP|AUD|NZD|USD|CAD|CHF|JPY|CNH)(EUR|GBP|AUD|NZD|USD|CAD|CHF|JPY|CNH)/,
+    )
+  ) {
+    return true;
+  }
+  return /^[A-Z]{6}$/.test(s);
+}
+
+/**
+ * Resolve SCALPING protective distance for any CFD.
+ * Configured values are **pip counts** (not raw price). Always floors to Capital min.
+ */
+export function resolveScalpDistance(
+  symbol: string,
+  entry: number,
+  configuredPips: number,
+): number {
+  const pip = instrumentPipSize(symbol);
+  const minDist = minProtectiveDistance(symbol, entry);
+  const n = Number(configuredPips);
+  const pips = Number.isFinite(n) && n > 0 ? n : 10;
+  // Legacy configs may still store tiny price offsets (<1) meant for indices —
+  // interpret those as pip counts when FX, else as price then clamp.
+  let raw: number;
+  if (isFxLikeSymbol(symbol)) {
+    raw = pip * (pips < 1 ? 10 : pips);
+  } else if (pips > 0 && pips < 1) {
+    raw = pips; // index/metal price offset intent
+  } else {
+    raw = pip * pips;
+  }
+  return Math.max(minDist, raw);
 }
 
 /**

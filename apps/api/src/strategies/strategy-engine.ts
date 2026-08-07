@@ -1,4 +1,4 @@
-import { StrategyMode } from "@nexus/domain";
+import { StrategyMode, modeMinScore as domainModeMinScore } from "@nexus/domain";
 
 /**
  * VS_PRO mode engine.
@@ -83,24 +83,7 @@ export type Indicators = {
 };
 
 export function modeMinScore(mode: StrategyMode): number {
-  switch (mode) {
-    case StrategyMode.SCALPING:
-      return 42; // partial confluence — real scalp fires more often
-    case StrategyMode.EMA_TICK_SCALP:
-      return 50;
-    case StrategyMode.MEAN_REVERSION:
-    case StrategyMode.RANGE:
-    case StrategyMode.REVERSAL:
-    case StrategyMode.GRID:
-    case StrategyMode.DCA:
-    case StrategyMode.MARKET_MAKING_SIM:
-      return 52;
-    case StrategyMode.NEWS:
-    case StrategyMode.ARBITRAGE_SIM:
-      return 60;
-    default:
-      return 55;
-  }
+  return domainModeMinScore(mode);
 }
 
 export function computeIndicators(candles: CandleLike[]): Indicators | null {

@@ -54,13 +54,14 @@ export const MODE_MARKET_PROFILES: Record<StrategyMode, ModeMarketProfile> = {
     readRole: "timing",
     uses1mTiming: false,
     truth:
-      "Real 10s micro scalp: partial EMA9/MACD/stoch confluence; live mid; immediate tight trail + BE; all CFD markets.",
+      "SCALPING FAST: Capital has no true 10s OHLC — uses 1m bars + live mid. Pip-based SL/trail (FX-safe). Immediate trail exit.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     preferredTimeframe: "10s",
     readRole: "timing",
     uses1mTiming: false,
-    truth: "Separate from SCALPING: fresh EMA1×EMA3 cross + divergence only; trail SL on EMA3; BE at 1R; exit opposite cross / through EMA3. Often waits.",
+    truth:
+      "EMA 1/3: fresh EMA1×EMA3 cross + divergence; trail EMA3; BE 1R. Often waits. Same Capital 1m-as-10s candle source.",
   },
 
   [StrategyMode.MEAN_REVERSION]: {
@@ -141,6 +142,28 @@ export function modeMarketProfile(
 
 export function modeUses1mTiming(mode: StrategyMode | string): boolean {
   return modeMarketProfile(mode).uses1mTiming;
+}
+
+/** Engine entry score bar — keep web client/desk in sync via this helper. */
+export function modeMinScore(mode: StrategyMode | string): number {
+  switch (mode) {
+    case StrategyMode.SCALPING:
+      return 42;
+    case StrategyMode.EMA_TICK_SCALP:
+      return 50;
+    case StrategyMode.MEAN_REVERSION:
+    case StrategyMode.RANGE:
+    case StrategyMode.REVERSAL:
+    case StrategyMode.GRID:
+    case StrategyMode.DCA:
+    case StrategyMode.MARKET_MAKING_SIM:
+      return 52;
+    case StrategyMode.NEWS:
+    case StrategyMode.ARBITRAGE_SIM:
+      return 60;
+    default:
+      return 55;
+  }
 }
 
 export function tfMinutes(tf: StrategyTimeframe | string): number {

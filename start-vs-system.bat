@@ -16,10 +16,15 @@ if exist "apps\api-desktop" (
 
 where git >nul 2>&1
 if not errorlevel 1 (
-  echo [0/6] git pull origin main...
-  git pull origin main
-  if errorlevel 1 (
-    echo WARNING: git pull neizdevas - turpinu ar esošo kodu
+  for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "VS_BRANCH=%%b"
+  if /I "%VS_BRANCH%"=="main" (
+    echo [0/6] git pull origin main...
+    git pull origin main
+    if errorlevel 1 (
+      echo WARNING: git pull neizdevas - turpinu ar esošo kodu
+    )
+  ) else (
+    echo [0/6] skip git pull — branch=%VS_BRANCH% ^(tikai main tiek pull^)
   )
 )
 
@@ -70,7 +75,7 @@ if not exist "apps\api\.env" (
   copy /Y ".env" "apps\api\.env" >nul
   echo Created apps\api\.env
 ) else (
-  copy /Y ".env" "apps\api\.env" >nul
+  echo [env] apps\api\.env jau ir — neatrasu ^(root .env netiek copy overwrite^)
 )
 
 echo.

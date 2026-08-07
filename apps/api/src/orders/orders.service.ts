@@ -1,4 +1,4 @@
-import { Injectable, HttpStatus } from "@nestjs/common";
+import { Injectable, HttpStatus, Logger, OnModuleInit } from "@nestjs/common";
 import {
   DomainEventType,
   ErrorCodes,
@@ -21,7 +21,10 @@ import { MarketDataService } from "../market-data/market-data.service";
 import { AppError } from "../common/errors/app-error";
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
+  private readonly log = new Logger(OrdersService.name);
+  private sentSweep?: NodeJS.Timeout;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly brokers: BrokerRuntimeService,
@@ -31,6 +34,37 @@ export class OrdersService {
     private readonly notifications: NotificationsService,
     private readonly market: MarketDataService,
   ) {}
+
+  onModuleInit() {
+    void this.expireStaleSentOrders();
+    this.sentSweep = setInterval(() => void this.expireStaleSentOrders(), 60_000);
+  }
+
+  /** Crash mid-place left orders in SENT forever — expire after 2 minutes. */
+  private async expireStaleSentOrders() {
+    try {
+      const cutoff = new Date(Date.now() - 2 * 60_000);
+      const res = await this.prisma.order.updateMany({
+        where: {
+          status: OrderStatus.SENT,
+          updatedAt: { lt: cutoff },
+        },
+        data: {
+          status: OrderStatus.REJECTED,
+          rejectionCode: "STALE_SENT",
+          rejectionMessage:
+            "Order stuck in SENT — broker response never recorded (process restart?)",
+        },
+      });
+      if (res.count > 0) {
+        this.log.warn(`Expired ${res.count} stale SENT order(s)`);
+      }
+    } catch (err) {
+      this.log.warn(
+        `SENT sweep failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
 
   async list(organizationId: string) {
     return this.prisma.order.findMany({

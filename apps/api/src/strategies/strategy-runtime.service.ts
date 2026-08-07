@@ -8,9 +8,18 @@ import {
   VolumeMode,
   modePreferredTimeframe,
   modeAutoExit,
+  modeMinScore,
 } from "@nexus/domain";
 import { resolveCapitalEpic, isCapitalSizeError, capitalSizeErrorHint } from "@nexus/broker-adapters";
-import { d, newId, instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, buildEqualMultiTpPlan } from "@nexus/shared";
+import {
+  d,
+  newId,
+  instrumentPipSize,
+  minProtectiveDistance,
+  formatInstrumentPrice,
+  buildEqualMultiTpPlan,
+  resolveScalpDistance,
+} from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
 import { OrdersService } from "../orders/orders.service";
@@ -27,7 +36,6 @@ import {
 import {
   computeIndicators,
   evaluateStrategyMode,
-  modeMinScore,
   applyEmaTickLivePrice,
 } from "./strategy-engine";
 
@@ -446,15 +454,21 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         tfBias: tfBias.bias,
         tfBull: tfBias.bullCount,
         tfBear: tfBias.bearCount,
-        candleDirectionFilter: true,
+        candleDirectionFilter: !(isEmaTickScalp || isClassicScalping),
+        tfNote:
+          timeframe === "10s"
+            ? "Capital has no true 10s OHLC — using 1m bars + live mid"
+            : undefined,
       };
 
-      if (
-        candleSource === "sim" ||
-        m1Source === "sim" ||
-        candleSource === "unknown" ||
-        m1Source === "unknown"
-      ) {
+      // Micro modes: only require strategy TF candles (don't block on 1m sim/unknown)
+      const badTf =
+        candleSource === "sim" || candleSource === "unknown";
+      const badM1 =
+        !isEmaTickScalp &&
+        !isClassicScalping &&
+        (m1Source === "sim" || m1Source === "unknown");
+      if (badTf || badM1) {
         lastStatus = {
           ...lastStatus,
           signal: scored.signal,
@@ -691,7 +705,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       });
 
       let _acted = false;
-      void _acted;
 
       for (const accountId of accountIds) {
         const fingerprint = `${strategy.id}:${accountId}:${brokerSymbol}:${signal}`;
@@ -867,13 +880,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           stopLoss = formatInstrumentPrice(brokerSymbol, clamped);
         } else if (config.stopDistancePips != null) {
           const v = Number(config.stopDistancePips);
-          if (timeframe === "10s") {
-            // For 10s scalping treat user-supplied values as direct price offsets
-            stopDist = v;
+          if (isClassicScalping) {
+            stopDist = resolveScalpDistance(brokerSymbol, entry, v);
+          } else if (timeframe === "10s" && scalpAuto?.priceOffsetMode) {
+            stopDist = Math.max(v, minDist);
           } else {
             stopDist = v > 0 && v < 1 ? v : pip * v;
+            stopDist = Math.max(stopDist, minDist);
           }
-          stopDist = Math.max(stopDist, minDist);
           stopLoss =
             signal === "BUY"
               ? formatInstrumentPrice(brokerSymbol, d(entry).minus(stopDist).toNumber())
@@ -991,18 +1005,18 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           beOffDist = pip;
           trailDist = 0;
         } else if (isClassicScalping || timeframe === "10s") {
-          // Price offsets — clamp trail to Capital min stop (very tight)
-          beActDist = Math.max(beActivationPips, pip * 0.1);
-          beOffDist = Math.max(beOffsetPips, pip);
-          trailDist = Math.max(
-            isClassicScalping
-              ? Math.min(Math.max(trailPips, pip), Math.max(minDist, 0.5))
-              : trailPips,
-            minDist,
-          );
           if (isClassicScalping) {
-            // Force tightest acceptable trail on GOLD/indices
-            trailDist = Math.max(minDist, Math.min(trailDist, Math.max(minDist, 0.5)));
+            beActDist = resolveScalpDistance(
+              brokerSymbol,
+              entry,
+              beActivationPips,
+            );
+            beOffDist = Math.max(pip * Math.max(beOffsetPips, 1), pip);
+            trailDist = resolveScalpDistance(brokerSymbol, entry, trailPips);
+          } else {
+            beActDist = Math.max(beActivationPips, pip * 0.1);
+            beOffDist = Math.max(beOffsetPips, pip);
+            trailDist = Math.max(trailPips, minDist);
           }
         } else {
           beActDist =
@@ -1255,6 +1269,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           });
           lastStatus = { ...lastStatus, placed: false, error: msg };
         }
+      }
+      // EMA: only burn a cross generation after a successful place
+      if (isEmaTickScalp && !_acted) {
+        const crossKey = `${strategy.id}:${brokerSymbol}`;
+        this.emaCrossConsumed.delete(crossKey);
       }
     }
 
