@@ -1,3 +1,3 @@
-main tip: capital RISK_CHECK auto-retry smaller lot
+main tip: fixed lot only — no auto Risk% / lot rewrite
 repo: https://github.com/voldis1994/VS-System_
-fix: RISK_CHECK → step lot down to instrument min; GOLD min 0.01; flip-close settle delay
+fix: bot always FIXED_LOT; removed auto lot clamp + Risk% UI; operator owns lot size

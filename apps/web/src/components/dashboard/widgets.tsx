@@ -280,9 +280,7 @@ export function StrategyConstellation() {
                 })()}
                 {s ? <Badge tone="accent">{s.mode}</Badge> : <Badge tone="warn">no strategy</Badge>}
                 {cfg.exitVersion ? <Badge tone="neutral">exit {cfg.exitVersion}</Badge> : null}
-                {cfg.useRiskPercent ? (
-                  <Badge tone="accent">risk {cfg.riskPercent ?? "?"}%</Badge>
-                ) : cfg.volume ? (
+                {cfg.volume ? (
                   <Badge tone="accent">{cfg.volume} lot</Badge>
                 ) : null}
                 {cfg.takeProfitEnabled !== false && s ? <Badge tone="profit">TP</Badge> : null}

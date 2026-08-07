@@ -250,7 +250,7 @@ function buildConfiguration(d: AccountDraft) {
     return {
       timeframe: modePreferredTimeframe(d.mode),
       riskPercent: Number(d.riskPercent) || 0.5,
-      useRiskPercent: d.sizeMode === "RISK",
+      useRiskPercent: false,
       volume,
       oneTradeOnly: true,
       closeOnlyNoFlip: false,
@@ -283,7 +283,7 @@ function buildConfiguration(d: AccountDraft) {
   return {
     timeframe: modePreferredTimeframe(d.mode),
     riskPercent: Number(d.riskPercent) || 0.5,
-    useRiskPercent: d.sizeMode === "RISK",
+    useRiskPercent: false,
     volume,
     oneTradeOnly: true,
     closeOnlyNoFlip: false,
@@ -479,10 +479,7 @@ export default function StrategiesPage() {
         ]
           .filter(Boolean)
           .join("+");
-        const size =
-          draft.sizeMode === "LOT"
-            ? `${draft.lotSize} lot`
-            : `risk ${draft.riskPercent}%`;
+        const size = `${draft.lotSize} lot`;
         toast.success(
           `${account.name}: ${draft.mode} · epic ${epic} · ${size} · exit ${draft.exitVersion} (${exits || "SL"}) ON`,
           { duration: 7000 },
@@ -602,11 +599,7 @@ export default function StrategiesPage() {
                 ) : (
                   <Badge tone="neutral">exit {draft.exitVersion}</Badge>
                 )}
-                <Badge tone="accent">
-                  {draft.sizeMode === "LOT"
-                    ? `${draft.lotSize} lot`
-                    : `risk ${draft.riskPercent}%`}
-                </Badge>
+                <Badge tone="accent">{draft.lotSize} lot</Badge>
                 {!modeHidesExitPickers(draft.mode) && draft.tpEnabled ? (
                   <Badge tone="profit">TP</Badge>
                 ) : null}
@@ -714,72 +707,49 @@ export default function StrategiesPage() {
                   </p>
                 </Field>
 
-                <Field label="Izmērs (Lot / Risk %)">
-                  <Select
-                    value={draft.sizeMode}
-                    onChange={(e) =>
-                      patchDraft(account.id, {
-                        sizeMode: e.target.value as "LOT" | "RISK",
-                      })
-                    }
-                  >
-                    <option value="LOT">Fixed lot size</option>
-                    <option value="RISK">Risk % no equity</option>
-                  </Select>
-                </Field>
-
-                {draft.sizeMode === "LOT" ? (
-                  <Field label="Lot size">
-                    <div className="flex gap-2">
-                      <Select
-                        value={
-                          LOT_PRESETS.includes(
-                            draft.lotSize as (typeof LOT_PRESETS)[number],
-                          )
-                            ? draft.lotSize
-                            : "custom"
-                        }
-                        onChange={(e) => {
-                          if (e.target.value !== "custom") {
-                            patchDraft(account.id, { lotSize: e.target.value });
-                          }
-                        }}
-                        className="font-mono"
-                      >
-                        {LOT_PRESETS.map((v) => (
-                          <option key={v} value={v}>
-                            {v} lot
-                          </option>
-                        ))}
-                        <option value="custom">Custom…</option>
-                      </Select>
-                      <Input
-                        value={draft.lotSize}
-                        onChange={(e) =>
-                          patchDraft(account.id, { lotSize: e.target.value })
-                        }
-                        placeholder="0.01"
-                        className="font-mono"
-                      />
-                    </div>
-                    <p className="mt-1 text-[11px] text-white/35">
-                      Mazam kontam: US100 Capital bieži atļauj 0.001. FX/GOLD tipiski no 0.01.
-                    </p>
-                  </Field>
-                ) : (
-                  <Field label="Risk % / trade">
-                    <Input
-                      value={draft.riskPercent}
-                      onChange={(e) =>
-                        patchDraft(account.id, { riskPercent: e.target.value })
+                <Field label="Lot size (FIXED)">
+                  <div className="flex gap-2">
+                    <Select
+                      value={
+                        LOT_PRESETS.includes(
+                          draft.lotSize as (typeof LOT_PRESETS)[number],
+                        )
+                          ? draft.lotSize
+                          : "custom"
                       }
+                      onChange={(e) => {
+                        if (e.target.value !== "custom") {
+                          patchDraft(account.id, {
+                            lotSize: e.target.value,
+                            sizeMode: "LOT",
+                          });
+                        }
+                      }}
+                      className="font-mono"
+                    >
+                      {LOT_PRESETS.map((v) => (
+                        <option key={v} value={v}>
+                          {v} lot
+                        </option>
+                      ))}
+                      <option value="custom">Custom…</option>
+                    </Select>
+                    <Input
+                      value={draft.lotSize}
+                      onChange={(e) =>
+                        patchDraft(account.id, {
+                          lotSize: e.target.value,
+                          sizeMode: "LOT",
+                        })
+                      }
+                      placeholder="0.01"
                       className="font-mono"
                     />
-                    <p className="mt-1 text-[11px] text-white/35">
-                      Uz maza equity risk% bieži dod 0 lot — tad labāk Fixed lot.
-                    </p>
-                  </Field>
-                )}
+                  </div>
+                  <p className="mt-1 text-[11px] text-white/35">
+                    Tikai fiksēts lot — Risk % sizing ir izslēgts. Mazam kontam: US100 bieži 0.001; GOLD no 0.01.
+                  </p>
+                </Field>
               </div>
 
               {!modeHidesExitPickers(draft.mode) ? (

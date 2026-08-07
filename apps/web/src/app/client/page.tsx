@@ -205,7 +205,6 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
   if (auto) {
     return {
       timeframe: modePreferredTimeframe(input.mode),
-      riskPercent: 0.5,
       useRiskPercent: false,
       volume: input.lotSize,
       oneTradeOnly: true,
@@ -233,7 +232,6 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
   }
   return {
     timeframe: modePreferredTimeframe(input.mode),
-    riskPercent: 0.5,
     useRiskPercent: false,
     volume: input.lotSize,
     oneTradeOnly: true,
@@ -445,11 +443,7 @@ export default function ClientPortalPage() {
         const cfg = session.strategy.configuration ?? {};
         const sym = syms[0] ?? epic;
         if (typeof cfg.volume === "string") {
-          if (lotLooksTooBigForEquity(cfg.volume, eq, sym)) {
-            setLotSize(suggestLotForEquity(eq, sym));
-          } else {
-            setLotSize(cfg.volume);
-          }
+          setLotSize(cfg.volume);
         } else if (Number.isFinite(eq) && eq > 0) {
           setLotSize(suggestLotForEquity(eq, sym));
         }
@@ -521,18 +515,16 @@ export default function ClientPortalPage() {
       let symbol = /^(UST100|USTECH100|TECH100|NAS100|NASDAQ100|NDX|USX|US100CASH)$/i.test(epic)
         ? "US100"
         : epic;
+      const volume = lotSize;
       const eq = Number(account?.equity ?? account?.balance ?? 0);
-      let volume = lotSize;
       if (
         action !== "stop" &&
         Number.isFinite(eq) &&
         eq > 0 &&
         lotLooksTooBigForEquity(volume, eq, symbol)
       ) {
-        volume = suggestLotForEquity(eq, symbol);
-        setLotSize(volume);
         setStatusMsg(
-          `Lot ${lotSize} par lielu priekš $${eq.toFixed(0)} — automātiski ${volume}`,
+          `Brīdinājums: lot ${volume} izskatās liels priekš $${eq.toFixed(0)} — atstāju Tavu FIXED lot. Ieteikums: ${suggestLotForEquity(eq, symbol)}.`,
         );
       }
       await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {

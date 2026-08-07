@@ -1176,48 +1176,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           payload: { accountId, symbol: brokerSymbol, direction: signal },
         });
 
-        // Prefer fixed min lot for auto — risk% often zeros on tiny LIVE equity
-        const useRisk =
-          Boolean(config.useRiskPercent) && Boolean(config.riskPercent);
+        // Always FIXED lot for bot strategies — never Risk % sizing.
+        // Do not auto-rewrite saved lot from equity heuristics (operator owns LOT).
         const equityNum = Number(account.equity ?? account.balance ?? 0);
-        let orderVolume = String(config.volume ?? "0.01");
+        const orderVolume = String(config.volume ?? "0.01");
         if (
-          !useRisk &&
           Number.isFinite(equityNum) &&
           equityNum > 0 &&
           lotLooksTooBigForEquity(orderVolume, equityNum, brokerSymbol)
         ) {
-          const safe = suggestLotForEquity(equityNum, brokerSymbol);
           this.log.warn(
-            `Lot ${orderVolume} too big for equity ${equityNum} on ${brokerSymbol} — clamping to ${safe}`,
+            `Lot ${orderVolume} looks large for equity ${equityNum} on ${brokerSymbol} — keeping FIXED lot (no auto Risk%/clamp). Suggest ${suggestLotForEquity(equityNum, brokerSymbol)}`,
           );
-          orderVolume = safe;
-          // Persist so next ticks / client session pick up safe lot
-          try {
-            const prev =
-              strategy.configurationJson &&
-              typeof strategy.configurationJson === "object"
-                ? (strategy.configurationJson as Record<string, unknown>)
-                : {};
-            await this.prisma.strategy.update({
-              where: { id: strategy.id },
-              data: {
-                configurationJson: {
-                  ...prev,
-                  volume: safe,
-                  useRiskPercent: false,
-                } as Prisma.InputJsonValue,
-              },
-            });
-            config.volume = safe;
-          } catch {
-            /* ignore persist */
-          }
           lastStatus = {
             ...lastStatus,
-            lotClamped: true,
-            volume: safe,
-            reason: `lot_clamped_for_equity_${equityNum.toFixed(0)}`,
+            volume: orderVolume,
+            reason: `lot_large_for_equity_${equityNum.toFixed(0)}_kept_fixed`,
           };
         }
         try {
@@ -1231,9 +1205,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               type: OrderType.MARKET,
               direction:
                 signal === "BUY" ? OrderDirection.BUY : OrderDirection.SELL,
-              volumeMode: useRisk ? VolumeMode.RISK_PERCENT : VolumeMode.FIXED_LOT,
+              volumeMode: VolumeMode.FIXED_LOT,
               volume: orderVolume,
-              riskPercent: config.riskPercent ?? 0.5,
               entryPrice: formatInstrumentPrice(brokerSymbol, entry),
               stopLoss,
               takeProfit,
@@ -1427,41 +1400,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               this.lastSignalAt.set(key, Date.now());
             }
             const marginFail = isMarginOrFundsError(msg);
-            if (marginFail) {
-              const safe = suggestLotForEquity(
-                Number(account.equity ?? 0),
-                brokerSymbol,
-              );
-              try {
-                const prev =
-                  strategy.configurationJson &&
-                  typeof strategy.configurationJson === "object"
-                    ? (strategy.configurationJson as Record<string, unknown>)
-                    : {};
-                await this.prisma.strategy.update({
-                  where: { id: strategy.id },
-                  data: {
-                    configurationJson: {
-                      ...prev,
-                      volume: safe,
-                      useRiskPercent: false,
-                    } as Prisma.InputJsonValue,
-                  },
-                });
-                config.volume = safe;
-              } catch {
-                /* ignore */
-              }
-            }
+            const suggested = suggestLotForEquity(
+              Number(account.equity ?? 0),
+              brokerSymbol,
+            );
             await this.notifications.create({
               organizationId: strategy.organizationId,
               userId: actorId === "system" ? null : actorId,
               title: marginFail
-                ? "Lot pārāk liels (margin)"
+                ? "Capital noraidīja lot (margin)"
                 : "Strategy order failed",
               body: `${strategy.name} ${brokerSymbol}: ${
                 marginFail
-                  ? `Capital RISK_CHECK / margin — equity par mazu šim lot. Pārslēdzu uz ${suggestLotForEquity(Number(account.equity ?? 0), brokerSymbol)}. GOLD min bieži 0.01; aizver citas pozīcijas Capital app.`
+                  ? `Capital RISK_CHECK — free margin par mazu priekš FIXED lot ${orderVolume}. Nemainīju Tavu lot. Iestatī manuāli mazāku (ieteikums ${suggested}; GOLD min bieži 0.01) vai aizver citas pozīcijas Capital app.`
                   : isCapitalSizeError(msg)
                     ? capitalSizeErrorHint(
                         brokerSymbol,
@@ -1486,41 +1437,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             this.lastSignalAt.set(key, Date.now());
           }
           const marginFail = isMarginOrFundsError(msg);
-          if (marginFail) {
-            const safe = suggestLotForEquity(
-              Number(account.equity ?? 0),
-              brokerSymbol,
-            );
-            try {
-              const prev =
-                strategy.configurationJson &&
-                typeof strategy.configurationJson === "object"
-                  ? (strategy.configurationJson as Record<string, unknown>)
-                  : {};
-              await this.prisma.strategy.update({
-                where: { id: strategy.id },
-                data: {
-                  configurationJson: {
-                    ...prev,
-                    volume: safe,
-                    useRiskPercent: false,
-                  } as Prisma.InputJsonValue,
-                },
-              });
-              config.volume = safe;
-            } catch {
-              /* ignore */
-            }
-          }
+          const suggested = suggestLotForEquity(
+            Number(account.equity ?? 0),
+            brokerSymbol,
+          );
           await this.notifications.create({
             organizationId: strategy.organizationId,
             userId: actorId === "system" ? null : actorId,
             title: marginFail
-              ? "Lot pārāk liels (margin)"
+              ? "Capital noraidīja lot (margin)"
               : "Strategy order error",
             body: `${strategy.name} ${brokerSymbol}: ${
               marginFail
-                ? `Capital RISK_CHECK / margin — equity par mazu. GOLD min bieži 0.01 (ne 0.001). Izmanto ${suggestLotForEquity(Number(account.equity ?? 0), brokerSymbol)}.`
+                ? `Capital RISK_CHECK — free margin par mazu priekš FIXED lot ${orderVolume}. Nemainīju Tavu lot. Iestatī manuāli ${suggested} (GOLD min bieži 0.01).`
                 : isCapitalSizeError(msg)
                   ? capitalSizeErrorHint(
                       brokerSymbol,

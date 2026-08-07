@@ -704,8 +704,8 @@ export class StrategiesService {
         name: body.name ?? before.name,
         mode: (body.mode as never) ?? before.mode,
         configurationJson: (body.configuration
-          ? { ...prevConfig, ...body.configuration }
-          : prevConfig) as Prisma.InputJsonValue,
+          ? { ...prevConfig, ...body.configuration, useRiskPercent: false }
+          : { ...prevConfig, useRiskPercent: false }) as Prisma.InputJsonValue,
         assignedAccountIds: (body.assignedAccountIds ??
           before.assignedAccountIds) as Prisma.InputJsonValue,
         assignedSymbols: (body.assignedSymbols ??
@@ -789,6 +789,7 @@ export class StrategiesService {
     const auto = modeAutoExit(input.mode);
     const configuration = {
       ...input.configuration,
+      useRiskPercent: false,
       ...(auto
         ? {
             takeProfitEnabled: auto.takeProfitEnabled,
