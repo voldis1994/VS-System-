@@ -5,7 +5,7 @@ cd /d "%~dp0"
 title VS System — START
 echo ========================================
 echo   VS SYSTEM — pilna palaide
-echo   API + Web + DB + Remote tunnel
+echo   API + Web + DB  (stabils LAN /client)
 echo ========================================
 echo.
 
