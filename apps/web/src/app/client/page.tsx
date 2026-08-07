@@ -12,6 +12,29 @@ import {
   type ClientServerConfig,
 } from "./server-config";
 
+/** Tiny accounts cannot open US100 at 0.1 — Capital rejects on margin. */
+function suggestLotForEquity(equity: number, epic: string): string {
+  const eq = Number.isFinite(equity) ? equity : 0;
+  const index = /US100|UST100|USX|US500|US30|NAS|GOLD|XAU/i.test(epic);
+  if (index) {
+    if (eq < 40) return "0.001";
+    if (eq < 120) return "0.01";
+    if (eq < 300) return "0.02";
+    if (eq < 800) return "0.05";
+    return "0.1";
+  }
+  if (eq < 50) return "0.01";
+  if (eq < 200) return "0.02";
+  if (eq < 500) return "0.05";
+  return "0.1";
+}
+
+function lotLooksTooBigForEquity(lot: string, equity: number, epic: string): boolean {
+  const size = Number(lot);
+  if (!Number.isFinite(size) || size <= 0) return true;
+  return size > Number(suggestLotForEquity(equity, epic)) + 1e-9;
+}
+
 type PortalAccount = {
   id: string;
   name: string;
@@ -406,15 +429,27 @@ export default function ClientPortalPage() {
       setAccount(session.account);
       setStrategy(session.strategy);
       setOpenPositions(session.openPositions);
+      const eq = Number(session.account?.equity ?? session.account?.balance ?? 0);
       if (session.strategy) {
         setMode(session.strategy.mode);
         const syms = (session.strategy.assignedSymbols as string[]) ?? [];
         if (syms[0]) setEpic(syms[0]);
         const cfg = session.strategy.configuration ?? {};
-        if (typeof cfg.volume === "string") setLotSize(cfg.volume);
+        const sym = syms[0] ?? epic;
+        if (typeof cfg.volume === "string") {
+          if (lotLooksTooBigForEquity(cfg.volume, eq, sym)) {
+            setLotSize(suggestLotForEquity(eq, sym));
+          } else {
+            setLotSize(cfg.volume);
+          }
+        } else if (Number.isFinite(eq) && eq > 0) {
+          setLotSize(suggestLotForEquity(eq, sym));
+        }
         if (cfg.exitVersion === "SWING" || cfg.exitVersion === "RUNNER" || cfg.exitVersion === "SCALP") {
           setExit(cfg.exitVersion);
         }
+      } else if (Number.isFinite(eq) && eq > 0) {
+        setLotSize(suggestLotForEquity(eq, epic));
       }
       try {
         const m = await portalApi<{ markets: CapitalMarket[] }>(
@@ -475,9 +510,23 @@ export default function ClientPortalPage() {
     setStatusMsg(null);
     try {
       // Normalize Capital US Tech aliases so history/orders hit US100
-      const symbol = /^(UST100|USTECH100|TECH100|NAS100|NASDAQ100|NDX)$/i.test(epic)
+      let symbol = /^(UST100|USTECH100|TECH100|NAS100|NASDAQ100|NDX|USX|US100CASH)$/i.test(epic)
         ? "US100"
         : epic;
+      const eq = Number(account?.equity ?? account?.balance ?? 0);
+      let volume = lotSize;
+      if (
+        action !== "stop" &&
+        Number.isFinite(eq) &&
+        eq > 0 &&
+        lotLooksTooBigForEquity(volume, eq, symbol)
+      ) {
+        volume = suggestLotForEquity(eq, symbol);
+        setLotSize(volume);
+        setStatusMsg(
+          `Lot ${lotSize} par lielu priekš $${eq.toFixed(0)} — automātiski ${volume}`,
+        );
+      }
       await portalApi(apiBaseFromConfig(server), "/client-portal/strategy", {
         method: "POST",
         token,
@@ -485,11 +534,17 @@ export default function ClientPortalPage() {
           mode,
           assignedSymbols: [symbol],
           action,
-          configuration: buildConfig({ lotSize, exit, mode }),
+          configuration: buildConfig({ lotSize: volume, exit, mode }),
         }),
       });
       if (symbol !== epic) setEpic(symbol);
-      setStatusMsg(action === "stop" ? "Apturēts" : action === "save" ? "Saglabāts" : "Palaists");
+      setStatusMsg((prev) =>
+        action === "stop"
+          ? "Apturēts"
+          : action === "save"
+            ? prev ?? "Saglabāts"
+            : prev ?? "Palaists",
+      );
       await loadSession(token);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Neizdevās");
@@ -694,6 +749,9 @@ export default function ClientPortalPage() {
                     ? `candles:${strategy.deploymentStateJson.candleSource}`
                     : null,
                   strategy.deploymentStateJson.placed ? "ORDER SENT" : null,
+                  strategy.deploymentStateJson.error
+                    ? `err:${strategy.deploymentStateJson.error}`
+                    : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}
@@ -803,8 +861,22 @@ export default function ClientPortalPage() {
             ))}
           </div>
           <p className="mt-2 text-[11px] leading-snug text-[#8aa3b8]">
-            US100 Capital bieži atļauj 0.001 contracts (kā app).
+            US100 pie mazas equity: izmanto <span className="text-[#7af6ff]">0.001</span>.
+            Lot 0.1 ar ~$20 Capital gandrīz vienmēr noraida (margin).
           </p>
+          {account &&
+          lotLooksTooBigForEquity(
+            lotSize,
+            Number(account.equity ?? account.balance ?? 0),
+            epic,
+          ) ? (
+            <p className="mt-2 border border-[#ff2d55]/40 bg-[#1a080c] px-2 py-2 text-[12px] text-[#ff8fa3]">
+              Lot {lotSize} ir par lielu priekš{" "}
+              {Number(account.equity).toFixed(0)} {account.baseCurrency} — treidi
+              netiks atvērti. Izvēlies{" "}
+              {suggestLotForEquity(Number(account.equity), epic)}.
+            </p>
+          ) : null}
         </section>
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">

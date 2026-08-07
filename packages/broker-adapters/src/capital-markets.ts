@@ -33,6 +33,9 @@ export const CAPITAL_EPIC_ALIASES: Record<string, string> = {
   UST100: "US100",
   USTECH100: "US100",
   TECH100: "US100",
+  /** Occasional short / UI label */
+  USX: "US100",
+  US100CASH: "US100",
   NDX: "US100",
   US30: "US30",
   DJI: "US30",

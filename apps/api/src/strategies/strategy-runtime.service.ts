@@ -19,6 +19,9 @@ import {
   formatInstrumentPrice,
   buildEqualMultiTpPlan,
   resolveScalpDistance,
+  suggestLotForEquity,
+  lotLooksTooBigForEquity,
+  isMarginOrFundsError,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -1126,6 +1129,47 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         // Prefer fixed min lot for auto — risk% often zeros on tiny LIVE equity
         const useRisk =
           Boolean(config.useRiskPercent) && Boolean(config.riskPercent);
+        const equityNum = Number(account.equity ?? account.balance ?? 0);
+        let orderVolume = String(config.volume ?? "0.01");
+        if (
+          !useRisk &&
+          Number.isFinite(equityNum) &&
+          equityNum > 0 &&
+          lotLooksTooBigForEquity(orderVolume, equityNum, brokerSymbol)
+        ) {
+          const safe = suggestLotForEquity(equityNum, brokerSymbol);
+          this.log.warn(
+            `Lot ${orderVolume} too big for equity ${equityNum} on ${brokerSymbol} — clamping to ${safe}`,
+          );
+          orderVolume = safe;
+          // Persist so next ticks / client session pick up safe lot
+          try {
+            const prev =
+              strategy.configurationJson &&
+              typeof strategy.configurationJson === "object"
+                ? (strategy.configurationJson as Record<string, unknown>)
+                : {};
+            await this.prisma.strategy.update({
+              where: { id: strategy.id },
+              data: {
+                configurationJson: {
+                  ...prev,
+                  volume: safe,
+                  useRiskPercent: false,
+                } as Prisma.InputJsonValue,
+              },
+            });
+            config.volume = safe;
+          } catch {
+            /* ignore persist */
+          }
+          lastStatus = {
+            ...lastStatus,
+            lotClamped: true,
+            volume: safe,
+            reason: `lot_clamped_for_equity_${equityNum.toFixed(0)}`,
+          };
+        }
         try {
           const result = await this.orders.place(
             strategy.organizationId,
@@ -1138,7 +1182,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               direction:
                 signal === "BUY" ? OrderDirection.BUY : OrderDirection.SELL,
               volumeMode: useRisk ? VolumeMode.RISK_PERCENT : VolumeMode.FIXED_LOT,
-              volume: config.volume ?? "0.01",
+              volume: orderVolume,
               riskPercent: config.riskPercent ?? 0.5,
               entryPrice: formatInstrumentPrice(brokerSymbol, entry),
               stopLoss,
@@ -1290,21 +1334,57 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               this.sizeRejectUntil.set(key, Date.now() + 10 * 60_000);
               this.lastSignalAt.set(key, Date.now());
             }
+            const marginFail = isMarginOrFundsError(msg);
+            if (marginFail) {
+              const safe = suggestLotForEquity(
+                Number(account.equity ?? 0),
+                brokerSymbol,
+              );
+              try {
+                const prev =
+                  strategy.configurationJson &&
+                  typeof strategy.configurationJson === "object"
+                    ? (strategy.configurationJson as Record<string, unknown>)
+                    : {};
+                await this.prisma.strategy.update({
+                  where: { id: strategy.id },
+                  data: {
+                    configurationJson: {
+                      ...prev,
+                      volume: safe,
+                      useRiskPercent: false,
+                    } as Prisma.InputJsonValue,
+                  },
+                });
+                config.volume = safe;
+              } catch {
+                /* ignore */
+              }
+            }
             await this.notifications.create({
               organizationId: strategy.organizationId,
               userId: actorId === "system" ? null : actorId,
-              title: "Strategy order failed",
+              title: marginFail
+                ? "Lot pārāk liels (margin)"
+                : "Strategy order failed",
               body: `${strategy.name} ${brokerSymbol}: ${
-                isCapitalSizeError(msg)
-                  ? capitalSizeErrorHint(
-                      brokerSymbol,
-                      String(config.volume ?? "0.01"),
-                    )
-                  : msg
+                marginFail
+                  ? `Capital noraidīja — equity par mazu šim lot. Pārslēdzu uz ${suggestLotForEquity(Number(account.equity ?? 0), brokerSymbol)}. SAVE/START ar 0.001.`
+                  : isCapitalSizeError(msg)
+                    ? capitalSizeErrorHint(
+                        brokerSymbol,
+                        String(config.volume ?? "0.01"),
+                      )
+                    : msg
               }`,
               severity: "WARNING",
             });
-            lastStatus = { ...lastStatus, placed: false, error: msg };
+            lastStatus = {
+              ...lastStatus,
+              placed: false,
+              error: msg,
+              skip: marginFail ? "insufficient_margin" : lastStatus.skip,
+            };
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "order error";
@@ -1313,21 +1393,57 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             this.sizeRejectUntil.set(key, Date.now() + 10 * 60_000);
             this.lastSignalAt.set(key, Date.now());
           }
+          const marginFail = isMarginOrFundsError(msg);
+          if (marginFail) {
+            const safe = suggestLotForEquity(
+              Number(account.equity ?? 0),
+              brokerSymbol,
+            );
+            try {
+              const prev =
+                strategy.configurationJson &&
+                typeof strategy.configurationJson === "object"
+                  ? (strategy.configurationJson as Record<string, unknown>)
+                  : {};
+              await this.prisma.strategy.update({
+                where: { id: strategy.id },
+                data: {
+                  configurationJson: {
+                    ...prev,
+                    volume: safe,
+                    useRiskPercent: false,
+                  } as Prisma.InputJsonValue,
+                },
+              });
+              config.volume = safe;
+            } catch {
+              /* ignore */
+            }
+          }
           await this.notifications.create({
             organizationId: strategy.organizationId,
             userId: actorId === "system" ? null : actorId,
-            title: "Strategy order error",
+            title: marginFail
+              ? "Lot pārāk liels (margin)"
+              : "Strategy order error",
             body: `${strategy.name} ${brokerSymbol}: ${
-              isCapitalSizeError(msg)
-                ? capitalSizeErrorHint(
-                    brokerSymbol,
-                    String(config.volume ?? "0.01"),
-                  )
-                : msg
+              marginFail
+                ? `Capital noraidīja — equity par mazu. Izmanto lot 0.001.`
+                : isCapitalSizeError(msg)
+                  ? capitalSizeErrorHint(
+                      brokerSymbol,
+                      String(config.volume ?? "0.01"),
+                    )
+                  : msg
             }`,
             severity: "CRITICAL",
           });
-          lastStatus = { ...lastStatus, placed: false, error: msg };
+          lastStatus = {
+            ...lastStatus,
+            placed: false,
+            error: msg,
+            skip: marginFail ? "insufficient_margin" : undefined,
+          };
         }
       }
       // EMA: only burn a cross generation after a successful place

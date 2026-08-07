@@ -38,6 +38,9 @@ export type DeploymentState = {
 };
 
 export function deploymentHint(d: DeploymentState): string | null {
+  if (d.skip === "insufficient_margin" || /insufficient|margin|funds/i.test(String(d.error ?? ""))) {
+    return "Capital noraida — lot pārāk liels priekš equity. Izvēlies 0.001, SAVE → START.";
+  }
   if (d.candleSource1m === "sim" || d.candleSource === "sim" || d.skip === "sim_candles") {
     return "SIM sveces — orderi BLOĶĒTI. Desk → Accounts → Connect Capital, tad STOP/START.";
   }

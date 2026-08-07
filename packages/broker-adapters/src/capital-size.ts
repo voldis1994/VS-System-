@@ -25,7 +25,7 @@ export function capitalDealRulesFallback(epic: string): CapitalDealRules {
   const s = String(epic ?? "").toUpperCase();
   // Equity indices — Capital retail often allows 0.001 contracts (US Tech 100)
   if (
-    /US100|UST100|USTECH|US500|US30|NDX|SPX|DJI|GER40|DE40|UK100|FTSE|FRA40|EU50|ESP35|JP225|AUS200|HK50|NASDAQ|DOW/.test(
+    /US100|UST100|USTECH|USX|US500|US30|NDX|SPX|DJI|GER40|DE40|UK100|FTSE|FRA40|EU50|ESP35|JP225|AUS200|HK50|NASDAQ|DOW/.test(
       s,
     )
   ) {
