@@ -27,6 +27,6 @@ describe("mode-auto-exit", () => {
   it("TREND keeps manual exits", () => {
     expect(modeAutoExit(StrategyMode.TREND)).toBeNull();
     expect(modeHidesExitPickers(StrategyMode.TREND)).toBe(false);
-    expect(SCALPING_AUTO_EXIT.cooldownSeconds).toBe(10);
+    expect(SCALPING_AUTO_EXIT.cooldownSeconds).toBe(5);
   });
 });

@@ -655,9 +655,9 @@ export default function StrategiesPage() {
                   </Select>
                   <p className="mt-1 text-[11px] text-white/35">
                     {draft.mode === StrategyMode.EMA_TICK_SCALP
-                      ? "EMA 1/3 TICK ≠ SCALPING · svaigs krustojums · exit caur EMA3 · trail · BE 1R"
+                      ? "EMA 1/3 — gaida svaigu cross (bieži kluss). Ikdienai labāk SCALPING."
                       : draft.mode === StrategyMode.SCALPING
-                        ? "SCALPING 10s AUTO — ciešs trail uzreiz pēc entry, bez TP picker"
+                        ? "SCALPING FAST 10s — momentum entry, uzreiz ciešs trail exit, visi tirgi"
                         : `TF = ${modePreferredTimeframe(draft.mode)} (kā jālasa tirgus šim režīmam)`}
                   </p>
                 </Field>
@@ -666,7 +666,7 @@ export default function StrategiesPage() {
                   {modeHidesExitPickers(draft.mode) ? (
                     <div className="rounded-md border border-accent/25 bg-accent/5 px-3 py-2 text-[12px] text-accent-soft/90">
                       {draft.mode === StrategyMode.SCALPING
-                        ? "AUTO: ciešs trailing + BE (TP off). Mode/tirgu maini brīvi → SAVE/START."
+                        ? "AUTO: ciešs trailing + BE uzreiz (TP off). Ātrs scalp exit."
                         : "AUTO: EMA3 trail / cross exit / BE 1R — manuāls exit nav."}
                     </div>
                   ) : (

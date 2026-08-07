@@ -53,13 +53,14 @@ export const MODE_MARKET_PROFILES: Record<StrategyMode, ModeMarketProfile> = {
     preferredTimeframe: "10s",
     readRole: "timing",
     uses1mTiming: false,
-    truth: "Native 10s micro EMA/MACD/stoch; not a 15m swing model.",
+    truth:
+      "Real 10s micro scalp: partial EMA9/MACD/stoch confluence; live mid; immediate tight trail + BE; all CFD markets.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     preferredTimeframe: "10s",
     readRole: "timing",
     uses1mTiming: false,
-    truth: "Separate from SCALPING: fresh EMA1×EMA3 cross + divergence only; trail SL on EMA3; BE at 1R; exit opposite cross / through EMA3.",
+    truth: "Separate from SCALPING: fresh EMA1×EMA3 cross + divergence only; trail SL on EMA3; BE at 1R; exit opposite cross / through EMA3. Often waits.",
   },
 
   [StrategyMode.MEAN_REVERSION]: {

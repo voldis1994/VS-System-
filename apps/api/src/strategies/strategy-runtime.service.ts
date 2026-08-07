@@ -234,15 +234,15 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const trailingEnabled = Boolean(config.trailingEnabled);
     const mode = strategy.mode as StrategyMode;
     // EMA tick: min 15s between entries so price oscillating around EMA3 cannot chop
-    // SCALPING 10s: faster re-entry (auto exit config)
+    // SCALPING 10s: fast re-entry after tight trail exit
     const autoExit = modeAutoExit(mode);
     const cooldownMs =
       mode === StrategyMode.EMA_TICK_SCALP
         ? Math.max((config.cooldownSeconds ?? 15) * 1000, 15_000)
         : mode === StrategyMode.SCALPING
           ? Math.max(
-              (config.cooldownSeconds ?? autoExit?.cooldownSeconds ?? 10) * 1000,
-              8_000,
+              (config.cooldownSeconds ?? autoExit?.cooldownSeconds ?? 5) * 1000,
+              5_000,
             )
           : (config.cooldownSeconds ?? 30) * 1000;
     // Per-mode default score bar (10/10 spec); user override only if explicitly lower quality intent
@@ -301,15 +301,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // For classic SCALPING on 10s, score on 1m to lighten CPU.
-      // EMA_TICK_SCALP must stay on native 10s EMA1/3 + live tick price.
+      // SCALPING + EMA use native 10s. Other 10s modes (if any) may score on 1m.
       let m1: any | undefined;
       let m1Source: string | undefined;
       let ind = computeIndicators(candles);
       const isEmaTickScalp = mode === StrategyMode.EMA_TICK_SCALP;
       const isClassicScalping = mode === StrategyMode.SCALPING;
       const scalpAuto = isClassicScalping ? modeAutoExit(StrategyMode.SCALPING) : null;
-      if (timeframe === "10s" && !isEmaTickScalp) {
+      if (timeframe === "10s" && !isEmaTickScalp && !isClassicScalping) {
         m1 = await this.market.getCandles(brokerSymbol, "1m", 60);
         m1Source = this.market.getCandleSource(brokerSymbol, "1m");
         if (m1.length < 60) {
@@ -333,7 +332,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           };
           continue;
         }
-        // Prefer minute indicators for scoring/bias to lighten 10s load.
         ind = m1Ind as any;
       } else {
         if (!ind || ind.atr <= 0) {
@@ -358,13 +356,17 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // Tick-reactive: live mid as forming EMA1/price; keep candle ema1Prev/ema3Prev (no tick-churn)
-      if (isEmaTickScalp) {
+      // Tick-reactive live mid for micro scalp modes
+      if (isEmaTickScalp || isClassicScalping) {
         const live = this.market.getTick(brokerSymbol);
         if (live) {
           const mid = (Number(live.bid) + Number(live.ask)) / 2;
           if (Number.isFinite(mid) && mid > 0) {
-            ind = applyEmaTickLivePrice(ind, candles, mid);
+            if (isEmaTickScalp) {
+              ind = applyEmaTickLivePrice(ind, candles, mid);
+            } else {
+              ind = { ...ind, price: mid };
+            }
           }
         }
       }
@@ -558,9 +560,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // OBLIGATORY candle filter — skipped for EMA tick scalp (no candle-close wait)
+      // Candle filter — skipped for micro scalp (SCALPING + EMA): no candle-close wait
       let signal: "BUY" | "SELL" = scored.signal;
-      if (!isEmaTickScalp) {
+      if (!isEmaTickScalp && !isClassicScalping) {
         const microBias =
           micro.signal === "BUY"
             ? ("bull" as const)
@@ -621,7 +623,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           signal,
           gate: scored.gate,
           candleDirectionFilter: false,
-          reason: "ema_tick_scalp_no_candle_wait",
+          reason: isClassicScalping
+            ? "scalping_fast_no_candle_wait"
+            : "ema_tick_scalp_no_candle_wait",
           buyScore: scored.buyScore,
           sellScore: scored.sellScore,
         };

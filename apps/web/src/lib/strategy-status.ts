@@ -69,7 +69,13 @@ export function deploymentHint(d: DeploymentState): string | null {
     d.gate === "ema13_wait_cross" ||
     d.gate === "ema13_wait_edge"
   ) {
-    return "EMA 1/3: gaida svaigu EMA1×EMA3 krustojumu (tagad jau vienā pusē — bez jauna cross neieies).";
+    return "EMA 1/3: gaida svaigu EMA1×EMA3 krustojumu (tagad jau vienā pusē — bez jauna cross neieies). Labāk SCALPING FAST.";
+  }
+  if (d.gate === "scalp_fast_long" || d.gate === "scalp_fast_short") {
+    return `SCALPING FAST: momentum → ${d.gate === "scalp_fast_long" ? "BUY" : "SELL"} (ciešs trail exit).`;
+  }
+  if (d.gate === "scalp_quiet") {
+    return "SCALPING FAST: pagaidām nav momentum — gaida EMA9/MACD virzienu.";
   }
   if (d.gate === "ema13_cross_consumed") {
     return "EMA 1/3: šis krustojums jau izmantots — gaida nākamo svaigo cross.";

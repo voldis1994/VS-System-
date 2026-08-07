@@ -40,12 +40,12 @@ type CapitalMarket = {
 type ExitVersion = "SCALP" | "SWING" | "RUNNER";
 
 const MODES = [
+  StrategyMode.SCALPING,
+  StrategyMode.EMA_TICK_SCALP,
   StrategyMode.TREND,
   StrategyMode.MOMENTUM,
   StrategyMode.PULLBACK,
   StrategyMode.BREAKOUT,
-  StrategyMode.SCALPING,
-  StrategyMode.EMA_TICK_SCALP,
   StrategyMode.MEAN_REVERSION,
   StrategyMode.REVERSAL,
   StrategyMode.RANGE,
@@ -227,13 +227,13 @@ const shell =
   "min-h-[100dvh] bg-[#02040a] text-[#e8f7ff] [background-image:radial-gradient(900px_480px_at_50%_-12%,rgba(0,240,255,.18),transparent_55%),radial-gradient(700px_420px_at_90%_100%,rgba(255,43,214,.08),transparent_50%),linear-gradient(180deg,#050a14_0%,#02040a_100%)]";
 
 const MODE_META: Record<string, { label: string; tip: string }> = {
+  [StrategyMode.SCALPING]: {
+    label: "SCALPING FAST",
+    tip: "Reāls 10s scalp · EMA/MACD/stoch momentum · uzreiz ciešs trail exit · der US100/GOLD/FX",
+  },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
-    tip: "Svaigs EMA1×EMA3 cross · exit caur EMA3 · trail EMA3 · BE 1R — exit opcijas automātiskas",
-  },
-  [StrategyMode.SCALPING]: {
-    label: "SCALPING",
-    tip: "Ātrais 10s · auto ciešs trail uzreiz pēc entry · bez TP picker (mode/tirgu vari mainīt jebkurā brīdī)",
+    tip: "Gaida svaigu EMA1×EMA3 cross — bieži kluss. Labāk SCALPING FAST ikdienas tirdzniecībai",
   },
   [StrategyMode.TREND]: {
     label: "TREND",
@@ -280,10 +280,10 @@ export default function ClientPortalPage() {
   const [strategy, setStrategy] = useState<PortalStrategy | null>(null);
   const [openPositions, setOpenPositions] = useState(0);
 
-  const [mode, setMode] = useState<string>(StrategyMode.EMA_TICK_SCALP);
-  const [lotSize, setLotSize] = useState("0.01");
+  const [mode, setMode] = useState<string>(StrategyMode.SCALPING);
+  const [lotSize, setLotSize] = useState("0.001");
   const [exit, setExit] = useState<ExitVersion>("SCALP");
-  const [epic, setEpic] = useState("GOLD");
+  const [epic, setEpic] = useState("US100");
   const [markets, setMarkets] = useState<CapitalMarket[]>([]);
   const [marketQ, setMarketQ] = useState("");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -665,31 +665,31 @@ export default function ClientPortalPage() {
           <div className="mb-2 grid grid-cols-2 gap-1.5">
             <button
               type="button"
+              onClick={() => setMode(StrategyMode.SCALPING)}
+              className={`border px-2 py-2.5 text-left ${
+                mode === StrategyMode.SCALPING
+                  ? "border-[#00f0ff] bg-[#00f0ff]/15 text-[#7af6ff] shadow-[0_0_18px_rgba(0,240,255,0.25)]"
+                  : "border-[#1a2a3a] text-[#8aa3b8]"
+              }`}
+            >
+              <span className="block font-[family-name:var(--font-display)] text-[11px] tracking-wide">
+                SCALPING FAST
+              </span>
+              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">10s · ātrs exit</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setMode(StrategyMode.EMA_TICK_SCALP)}
               className={`border px-2 py-2.5 text-left ${
                 mode === StrategyMode.EMA_TICK_SCALP
-                  ? "border-[#00f0ff] bg-[#00f0ff]/15 text-[#7af6ff] shadow-[0_0_18px_rgba(0,240,255,0.25)]"
+                  ? "border-[#00f0ff] bg-[#00f0ff]/15 text-[#7af6ff]"
                   : "border-[#1a2a3a] text-[#8aa3b8]"
               }`}
             >
               <span className="block font-[family-name:var(--font-display)] text-[11px] tracking-wide">
                 EMA 1/3 TICK
               </span>
-              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">10s neon scalp</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode(StrategyMode.SCALPING)}
-              className={`border px-2 py-2.5 text-left ${
-                mode === StrategyMode.SCALPING
-                  ? "border-[#00f0ff] bg-[#00f0ff]/15 text-[#7af6ff]"
-                  : "border-[#1a2a3a] text-[#8aa3b8]"
-              }`}
-            >
-              <span className="block font-[family-name:var(--font-display)] text-[11px] tracking-wide">
-                SCALPING
-              </span>
-              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">classic 10s</span>
+              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">gaida cross</span>
             </button>
           </div>
           <select
@@ -737,10 +737,10 @@ export default function ClientPortalPage() {
             <div className="space-y-1.5 text-[11px] leading-snug text-[#8aa3b8]">
               {mode === StrategyMode.SCALPING ? (
                 <>
-                  <p className="text-[#7af6ff]">AUTO · SCALPING 10s</p>
+                  <p className="text-[#7af6ff]">AUTO · SCALPING FAST</p>
                   <p>
-                    Bez TP picker. Pēc entry uzreiz ciešs trailing (≈ min stop) + BE.
-                    Mode un tirgu vari mainīt jebkurā brīdī → SAVE / START.
+                    Bez TP. Pēc entry uzreiz ciešs trailing + BE. Ātrs exit —
+                    der US100, GOLD, FX. Mode/tirgu maini → SAVE / START.
                   </p>
                 </>
               ) : (

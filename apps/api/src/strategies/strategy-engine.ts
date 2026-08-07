@@ -85,6 +85,7 @@ export type Indicators = {
 export function modeMinScore(mode: StrategyMode): number {
   switch (mode) {
     case StrategyMode.SCALPING:
+      return 42; // partial confluence — real scalp fires more often
     case StrategyMode.EMA_TICK_SCALP:
       return 50;
     case StrategyMode.MEAN_REVERSION:
@@ -354,8 +355,11 @@ export function evaluateStrategyMode(
   }
 
   const atrRatio = i.atrSlow > 0 ? i.atr / i.atrSlow : 1;
-  // EMA tick scalp is micro-structure — skip ATR dead/spike and RSI exhaust soft-closes
-  if (mode !== StrategyMode.EMA_TICK_SCALP) {
+  // Micro scalp modes skip ATR dead/spike — they live on thin 10s noise
+  if (
+    mode !== StrategyMode.EMA_TICK_SCALP &&
+    mode !== StrategyMode.SCALPING
+  ) {
     if (atrRatio < 0.45) {
       return { signal: "HOLD", score: 0, gate: "atr_dead", bias: "flat", buyScore: 0, sellScore: 0 };
     }
@@ -385,6 +389,7 @@ export function evaluateStrategyMode(
     StrategyMode.ARBITRAGE_SIM,
     StrategyMode.MARKET_MAKING_SIM,
     StrategyMode.EMA_TICK_SCALP,
+    StrategyMode.SCALPING,
   ]);
   // GRID mid hold skipped only when near grid edge — checked in case
 
@@ -408,8 +413,11 @@ export function evaluateStrategyMode(
     i.price >= i.bbUpper - 0.15 * (i.bbUpper - i.bbLower);
   const spreadOk = i.atr >= i.price * 0.0004 || i.atr >= 0.5;
 
-  // Soft exhaust close
-  if (mode !== StrategyMode.EMA_TICK_SCALP) {
+  // Soft exhaust close — not for micro scalp (trail handles exits)
+  if (
+    mode !== StrategyMode.EMA_TICK_SCALP &&
+    mode !== StrategyMode.SCALPING
+  ) {
     if (i.rsi > 78 && bearStack) {
       return { signal: "CLOSE", score: 70, gate: "exhaust_long", bias: "bear", buyScore: 0, sellScore: 70 };
     }
@@ -583,41 +591,37 @@ export function evaluateStrategyMode(
       break;
     }
     case StrategyMode.SCALPING: {
-      pass(
-        (bullStack || i.ema9Slope > 0) &&
-          i.ema9 > i.ema21 &&
-          i.macdHist > 0 &&
-          i.macdHist >= i.macdHistPrev &&
-          i.stochK > i.stochD &&
-          i.stochK >= i.stochKPrev &&
-          i.plusDi > i.minusDi &&
-          i.rsi >= 48 &&
-          i.rsi <= 70 &&
-          i.price >= i.ema21 &&
-          i.adx > 18 &&
-          i.atr >= i.atrSlow * 0.55,
-        55,
-        "buy",
-        "scalp_long",
-      );
-      pass(
-        (bearStack || i.ema9Slope < 0) &&
-          i.ema9 < i.ema21 &&
-          i.macdHist < 0 &&
-          i.macdHist <= i.macdHistPrev &&
-          i.stochK < i.stochD &&
-          i.stochK <= i.stochKPrev &&
-          i.minusDi > i.plusDi &&
-          i.rsi >= 30 &&
-          i.rsi <= 52 &&
-          i.price <= i.ema21 &&
-          i.adx > 18 &&
-          i.atr >= i.atrSlow * 0.55,
-        55,
-        "sell",
-        "scalp_short",
-      );
-      if (i.adx <= 18) gate = "scalp_chop";
+      // Real 10s scalp — partial confluence (points), not full AND.
+      // Trades GOLD / US100 / FX when micro momentum aligns; exit = tight trail.
+      applyMidHold = false;
+      let b = 0;
+      let s = 0;
+      if (i.ema9 > i.ema21) b += 18;
+      else if (i.ema9 < i.ema21) s += 18;
+      if (i.ema9Slope > 0) b += 14;
+      else if (i.ema9Slope < 0) s += 14;
+      if (i.price >= i.ema9) b += 12;
+      else s += 12;
+      if (i.macdHist > 0) b += 14;
+      else if (i.macdHist < 0) s += 14;
+      if (i.macdHist > i.macdHistPrev) b += 8;
+      else if (i.macdHist < i.macdHistPrev) s += 8;
+      if (i.stochK > i.stochD) b += 10;
+      else if (i.stochK < i.stochD) s += 10;
+      if (i.plusDi > i.minusDi) b += 10;
+      else if (i.minusDi > i.plusDi) s += 10;
+      if (i.rsi >= 42 && i.rsi <= 75) b += 8;
+      if (i.rsi >= 25 && i.rsi <= 58) s += 8;
+      // Mild ADX preference — never a hard block
+      if (i.adx >= 12) {
+        if (b >= s) b += 6;
+        else s += 6;
+      }
+      buy = Math.min(100, b);
+      sell = Math.min(100, s);
+      if (buy === 0 && sell === 0) gate = "scalp_quiet";
+      else if (buy >= sell) gate = "scalp_fast_long";
+      else gate = "scalp_fast_short";
       break;
     }
     case StrategyMode.EMA_TICK_SCALP: {
@@ -1182,10 +1186,12 @@ export function evaluateStrategyMode(
   buy = Math.max(0, Math.min(100, buy));
   sell = Math.max(0, Math.min(100, sell));
 
-  if (buy >= minScore && buy >= sell + 3) {
+  const edge = mode === StrategyMode.SCALPING ? 2 : 3;
+
+  if (buy >= minScore && buy >= sell + edge) {
     return { signal: "BUY", score: buy, gate, bias: "bull", buyScore: buy, sellScore: sell };
   }
-  if (sell >= minScore && sell >= buy + 3) {
+  if (sell >= minScore && sell >= buy + edge) {
     return { signal: "SELL", score: sell, gate, bias: "bear", buyScore: buy, sellScore: sell };
   }
 

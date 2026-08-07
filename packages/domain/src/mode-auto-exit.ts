@@ -23,20 +23,20 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** Classic 10s SCALPING — fast entry, very tight trail, no fixed TP picker. */
+/** Classic 10s SCALPING — real micro scalp, tight trail, no fixed TP. */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
-  breakEvenActivationPips: 0.5,
+  breakEvenActivationPips: 0.35,
   breakEvenOffsetPips: 0.01,
   trailingEnabled: true,
-  trailingDistancePips: 0.5,
+  trailingDistancePips: 0.35,
   trailingActivationPips: 0.01,
   trailArmImmediate: true,
-  atrStopMult: 0.8,
-  atrTpMult: 1.2,
-  stopDistancePips: 0.6,
-  cooldownSeconds: 10,
+  atrStopMult: 0.55,
+  atrTpMult: 1.0,
+  stopDistancePips: 0.5,
+  cooldownSeconds: 5,
   exitVersion: "SCALP",
   priceOffsetMode: true,
 };
