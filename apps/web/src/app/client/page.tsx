@@ -140,6 +140,16 @@ async function portalApi<T>(
   }
   if (!res.ok) {
     const raw = String(data.message || data.error || `HTTP ${res.status}`);
+    if (/botPosition|api-desktop|bot-runtime/i.test(raw)) {
+      throw new Error(
+        "PC API nav VS System (api-desktop/botPosition). Aizver veco procesu, mapē jābūt apps\\api, palaid start-vs-system.bat (git pull main).",
+      );
+    }
+    if (/Unique constraint|P2002/i.test(raw)) {
+      throw new Error(
+        "DB konflikts — STOP, tad SAVE/START. Ja atkārtojas: restartē start-vs-system.bat.",
+      );
+    }
     if (/EMA_TICK_SCALP|invalid.*enum|StrategyMode/i.test(raw)) {
       throw new Error(
         "EMA režīms nav DB — uz PC palaid start-vs-system.bat (migrate) un restartē",
@@ -148,7 +158,9 @@ async function portalApi<T>(
     if (/Insufficient permissions|PERMISSION/i.test(raw)) {
       throw new Error("Nav tiesību — izraksties un ievadi PIN no jauna");
     }
-    throw new Error(raw);
+    // Don't dump multi-line Prisma stacks onto the phone
+    const oneLine = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0] ?? raw;
+    throw new Error(oneLine.length > 220 ? `${oneLine.slice(0, 220)}…` : oneLine);
   }
   return data as T;
 }

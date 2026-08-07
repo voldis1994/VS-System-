@@ -5,6 +5,7 @@ import {
   HttpException,
   HttpStatus,
 } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { Request, Response } from "express";
 import { ErrorCodes } from "@nexus/domain";
 import { toUtcIso } from "@nexus/shared";
@@ -36,8 +37,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
           code = ErrorCodes.VALIDATION_FAILED;
         }
       }
+    } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      if (exception.code === "P2002") {
+        status = HttpStatus.CONFLICT;
+        code = ErrorCodes.VALIDATION_FAILED;
+        const target = Array.isArray(exception.meta?.target)
+          ? (exception.meta?.target as string[]).join(", ")
+          : String(exception.meta?.target ?? "unique");
+        message = `DB unique conflict (${target}). STOP, tad SAVE/START. Ja kļūdā rādās api-desktop/botPosition — PC darbojas NEPAREIZS API (nav VS System main).`;
+      } else {
+        message = `Database error ${exception.code}`;
+      }
     } else if (exception instanceof Error) {
-      message = exception.message;
+      message = sanitizePublicError(exception.message);
     }
 
     response.status(status).json({
@@ -46,6 +58,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
       details,
       correlationId: request.correlationId ?? "unknown",
       timestamp: toUtcIso(),
+      service: "vs-system-api",
     });
   }
+}
+
+/** Keep mobile UI readable — strip long Prisma/Node stacks. */
+function sanitizePublicError(raw: string): string {
+  const s = String(raw ?? "");
+  if (/botPosition|api-desktop|bot-runtime/i.test(s)) {
+    return (
+      "PC darbojas vecs/nepareizs API (api-desktop/botPosition). " +
+      "Aizver to, mapē jābūt apps\\api (ne api-desktop). Palaid start-vs-system.bat no git main."
+    );
+  }
+  if (/PrismaClientKnownRequestError|Invalid\s+`prisma\./i.test(s)) {
+    const short = s.split("\n")[0]?.slice(0, 180) ?? "Database error";
+    return short;
+  }
+  if (s.length > 400) return `${s.slice(0, 400)}…`;
+  return s;
 }

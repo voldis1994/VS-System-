@@ -7,6 +7,13 @@ echo   VS System - Windows start
 echo ========================================
 echo.
 
+if exist "apps\api-desktop" (
+  echo WARNING: atrasta mape apps\api-desktop
+  echo   Tas NAV oficielais VS System API. Pareiza mape: apps\api
+  echo   Ja START rada botPosition kludu - aizver api-desktop procesu.
+  echo.
+)
+
 where git >nul 2>&1
 if not errorlevel 1 (
   echo [0/6] git pull origin main...

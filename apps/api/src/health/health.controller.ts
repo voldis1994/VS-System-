@@ -15,6 +15,8 @@ export class HealthController {
     }
     return {
       status: db === "up" ? "ok" : "degraded",
+      service: "vs-system-api",
+      engine: "VS_PRO_V10",
       api: "up",
       db,
       redis: "optional",

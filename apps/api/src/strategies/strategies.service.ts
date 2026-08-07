@@ -121,6 +121,11 @@ export class StrategiesService {
     correlationId: string,
   ) {
     const strategy = await this.require(organizationId, id);
+    // Idempotent START — already running is OK (client double-tap / reconnect)
+    if (strategy.status === StrategyStatus.RUNNING) {
+      this.runtime.resetSignals(id);
+      return strategy;
+    }
     if (
       strategy.status !== StrategyStatus.VALID &&
       strategy.status !== StrategyStatus.STOPPED &&
