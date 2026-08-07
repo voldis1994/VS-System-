@@ -1,0 +1,4 @@
+main tip: 3622e6e
+repo: https://github.com/voldis1994/VS-System-
+updated: 2026-08-07
+includes: FORCE-UPDATE-VS-SYSTEM.bat, bot order fixes, micro-lot, stable LAN URL
