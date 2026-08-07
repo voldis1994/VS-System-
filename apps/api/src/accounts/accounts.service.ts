@@ -102,6 +102,18 @@ export class AccountsService {
     const input = CreateAccountSchema.parse(raw);
     const balance = input.startingBalance;
 
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { id: true },
+    });
+    if (!org) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_FAILED,
+        "Vecā sesija pēc DB reset. Logout → login owner@nexus.pro / NexusOwner123! → Verify PIN → pievieno kontu.",
+        HttpStatus.CONFLICT,
+      );
+    }
+
     const account = await this.prisma.tradingAccount.create({
       data: {
         organizationId,

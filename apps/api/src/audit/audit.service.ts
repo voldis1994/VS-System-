@@ -20,28 +20,65 @@ export class AuditService {
   }) {
     const uuidRe =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    const actorId =
+    let actorId =
       input.actorId && uuidRe.test(input.actorId) ? input.actorId : null;
-    return this.prisma.auditLog.create({
-      data: {
-        organizationId: input.organizationId,
-        actorId,
-        action: input.action,
-        resourceType: input.resourceType,
-        resourceId: input.resourceId ?? null,
-        beforeJson:
-          input.before === undefined
-            ? undefined
-            : (input.before as Prisma.InputJsonValue),
-        afterJson:
-          input.after === undefined
-            ? undefined
-            : (input.after as Prisma.InputJsonValue),
-        sourceIp: input.sourceIp ?? null,
-        userAgent: input.userAgent ?? null,
-        correlationId: input.correlationId,
-      },
-    });
+    if (actorId) {
+      const exists = await this.prisma.user.findUnique({
+        where: { id: actorId },
+        select: { id: true },
+      });
+      if (!exists) actorId = null;
+    }
+    try {
+      return await this.prisma.auditLog.create({
+        data: {
+          organizationId: input.organizationId,
+          actorId,
+          action: input.action,
+          resourceType: input.resourceType,
+          resourceId: input.resourceId ?? null,
+          beforeJson:
+            input.before === undefined
+              ? undefined
+              : (input.before as Prisma.InputJsonValue),
+          afterJson:
+            input.after === undefined
+              ? undefined
+              : (input.after as Prisma.InputJsonValue),
+          sourceIp: input.sourceIp ?? null,
+          userAgent: input.userAgent ?? null,
+          correlationId: input.correlationId,
+        },
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === "P2003" &&
+        actorId
+      ) {
+        return this.prisma.auditLog.create({
+          data: {
+            organizationId: input.organizationId,
+            actorId: null,
+            action: input.action,
+            resourceType: input.resourceType,
+            resourceId: input.resourceId ?? null,
+            beforeJson:
+              input.before === undefined
+                ? undefined
+                : (input.before as Prisma.InputJsonValue),
+            afterJson:
+              input.after === undefined
+                ? undefined
+                : (input.after as Prisma.InputJsonValue),
+            sourceIp: input.sourceIp ?? null,
+            userAgent: input.userAgent ?? null,
+            correlationId: input.correlationId,
+          },
+        });
+      }
+      throw e;
+    }
   }
 
   async list(organizationId: string, take = 100, skip = 0) {

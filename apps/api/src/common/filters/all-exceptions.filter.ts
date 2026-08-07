@@ -45,6 +45,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
           ? (exception.meta?.target as string[]).join(", ")
           : String(exception.meta?.target ?? "unique");
         message = `DB unique conflict (${target}). STOP, tad SAVE/START. Ja kļūdā rādās api-desktop/botPosition — PC darbojas NEPAREIZS API (nav VS System main).`;
+      } else if (exception.code === "P2003") {
+        status = HttpStatus.CONFLICT;
+        code = ErrorCodes.VALIDATION_FAILED;
+        message =
+          "Database error P2003 — vecā sesija / DB reset. Desk: Logout → login owner@nexus.pro / NexusOwner123! → Verify PIN 123456 → mēģini Accounts vēlreiz.";
       } else {
         message = `Database error ${exception.code}`;
       }

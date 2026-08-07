@@ -15,17 +15,47 @@ export class NotificationsService {
     channel?: string;
     meta?: Record<string, unknown>;
   }) {
-    return this.prisma.notification.create({
-      data: {
-        organizationId: input.organizationId,
-        userId: input.userId ?? null,
-        title: input.title,
-        body: input.body,
-        severity: input.severity ?? "INFO",
-        channel: input.channel ?? "IN_APP",
-        metaJson: (input.meta ?? {}) as Prisma.InputJsonValue,
-      },
-    });
+    // After DB reseed, JWT may still carry a stale userId → P2003 on FK.
+    let userId: string | null = input.userId ?? null;
+    if (userId) {
+      const exists = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      });
+      if (!exists) userId = null;
+    }
+    try {
+      return await this.prisma.notification.create({
+        data: {
+          organizationId: input.organizationId,
+          userId,
+          title: input.title,
+          body: input.body,
+          severity: input.severity ?? "INFO",
+          channel: input.channel ?? "IN_APP",
+          metaJson: (input.meta ?? {}) as Prisma.InputJsonValue,
+        },
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === "P2003" &&
+        userId
+      ) {
+        return this.prisma.notification.create({
+          data: {
+            organizationId: input.organizationId,
+            userId: null,
+            title: input.title,
+            body: input.body,
+            severity: input.severity ?? "INFO",
+            channel: input.channel ?? "IN_APP",
+            metaJson: (input.meta ?? {}) as Prisma.InputJsonValue,
+          },
+        });
+      }
+      throw e;
+    }
   }
 
   async list(organizationId: string, userId: string) {
