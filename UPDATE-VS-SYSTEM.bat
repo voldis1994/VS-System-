@@ -2,18 +2,14 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-if /I "%~1"=="--worker" goto :worker
-
-call "%~dp0scripts\matrix-boot.bat" "%~f0"
-exit /b %ERRORLEVEL%
-
-:worker
 color 0A
-chcp 65001 >nul 2>&1
-title VS System
+call "%~dp0scripts\matrix-look.bat"
 
+title VS System — UPDATE
+echo ========================================
 echo   VS SYSTEM — atjauninajums no GitHub
 echo   Velk jaunako main (merge) so mapa
+echo ========================================
 echo.
 echo Mapes cels: %CD%
 echo.
@@ -23,6 +19,7 @@ if errorlevel 1 (
   echo ERROR: Git nav atrasts.
   echo   Instalē: https://git-scm.com/download/win
   echo   Tad palaid so failu no VS-System- mapes (ne ZIP kopijas).
+  pause
   exit /b 1
 )
 
@@ -32,6 +29,7 @@ if not exist ".git" (
   echo   Piemers:
   echo     git clone https://github.com/voldis1994/VS-System-.git
   echo   Pec tam vienmer dublklikski UPDATE-VS-SYSTEM.bat — NAV jaunas mapes.
+  pause
   exit /b 1
 )
 
@@ -47,6 +45,7 @@ if /I not "%VS_BRANCH%"=="main" (
   git checkout main
   if errorlevel 1 (
     echo ERROR: nevar checkout main — aizver editorus / STOP-VS-SYSTEM.bat
+    pause
     exit /b 1
   )
 ) else (
@@ -57,12 +56,14 @@ echo [3/4] git fetch + PIESPIEDU reset origin/main...
 git fetch origin main
 if errorlevel 1 (
   echo ERROR: git fetch neizdevas — parbaudi internetu / GitHub pieeju
+  pause
   exit /b 1
 )
 
 git reset --hard origin/main
 if errorlevel 1 (
   echo ERROR: reset neizdevas — aizver STOP-VS-SYSTEM.bat / editorus
+  pause
   exit /b 1
 )
 
@@ -94,6 +95,7 @@ if not errorlevel 1 (
 )
 
 echo.
+echo ========================================
 echo   GATAVS
 if /I "%VS_BEFORE%"=="%VS_AFTER%" (
   echo   Jau bija jaunakais: %VS_AFTER%
@@ -107,5 +109,7 @@ echo.
 echo   Tagad: START-VS-SYSTEM.bat
 echo   Apturet: STOP-VS-SYSTEM.bat
 echo   Spiedigs: FORCE-UPDATE-VS-SYSTEM.bat
+echo ========================================
 echo.
+pause
 exit /b 0
