@@ -2,9 +2,6 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-color 0A
-call "%~dp0scripts\matrix-look.bat"
-
 title VS System — START
 echo ========================================
 echo   VS SYSTEM — pilna palaide
