@@ -2,15 +2,18 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-call "%~dp0scripts\matrix-boot.bat" "START"
-color 0A
-title VS System — START
+if /I "%~1"=="--worker" goto :worker
 
-echo.
-echo   ==========================================================
-echo     VS SYSTEM — pilna palaide
-echo     API + Web + DB  (stabils LAN /client)
-echo   ==========================================================
+call "%~dp0scripts\matrix-boot.bat" "%~f0" StayOpen
+exit /b %ERRORLEVEL%
+
+:worker
+color 0A
+chcp 65001 >nul 2>&1
+title VS System
+
+echo   VS SYSTEM — pilna palaide
+echo   API + Web + DB  (stabils LAN /client)
 echo.
 
 if exist "VERSION.txt" (
@@ -55,7 +58,6 @@ if not errorlevel 1 (
 where node >nul 2>&1
 if errorlevel 1 (
   echo ERROR: Node.js nav atrasts — https://nodejs.org
-  pause
   exit /b 1
 )
 
@@ -65,7 +67,6 @@ if errorlevel 1 (
   call npm install -g pnpm
   if errorlevel 1 (
     echo ERROR: pnpm instalacija neizdevas
-    pause
     exit /b 1
   )
 )
@@ -73,14 +74,12 @@ if errorlevel 1 (
 where docker >nul 2>&1
 if errorlevel 1 (
   echo ERROR: Docker nav atrasts — palaid Docker Desktop
-  pause
   exit /b 1
 )
 
 docker info >nul 2>&1
 if errorlevel 1 (
   echo ERROR: Docker Engine nestrada — pagaidi lidz Engine running
-  pause
   exit /b 1
 )
 
@@ -90,7 +89,6 @@ if not exist ".env" (
     echo Created .env
   ) else (
     echo ERROR: .env.example nav atrasts
-    pause
     exit /b 1
   )
 )
@@ -105,7 +103,6 @@ echo [1/7] pnpm install...
 call pnpm install
 if errorlevel 1 (
   echo ERROR: pnpm install neizdevas
-  pause
   exit /b 1
 )
 
@@ -125,7 +122,6 @@ echo [3/7] Postgres + Redis...
 docker compose up -d postgres redis
 if errorlevel 1 (
   echo ERROR: docker compose neizdevas
-  pause
   exit /b 1
 )
 echo Waiting for Postgres...
@@ -136,13 +132,11 @@ echo [4/7] Prisma generate + migrate...
 call pnpm db:generate
 if errorlevel 1 (
   echo ERROR: prisma generate neizdevas
-  pause
   exit /b 1
 )
 call pnpm --filter @nexus/api exec prisma migrate deploy
 if errorlevel 1 (
   echo ERROR: migrate neizdevas
-  pause
   exit /b 1
 )
 
@@ -196,8 +190,7 @@ timeout /t 2 /nobreak >nul
 start "" http://localhost:3000/dashboard
 
 echo.
-echo   ==========================================================
-echo     VS SYSTEM SKRIEN
+echo   VS SYSTEM SKRIEN
 echo.
 echo   DESK (tev uz PC) — VIENMER tapat:
 echo     http://localhost:3000/dashboard
@@ -218,11 +211,8 @@ echo.
 echo   Apturet:  STOP-VS-SYSTEM.bat
 echo   Update:   UPDATE-VS-SYSTEM.bat
 echo   Logus NEAIZVER (API / WEB)
-echo   ==========================================================
-pause
 exit /b 0
 
 :build_fail
 echo ERROR: package build neizdevas
-pause
 exit /b 1

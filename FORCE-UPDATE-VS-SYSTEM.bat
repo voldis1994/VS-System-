@@ -2,15 +2,18 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-call "%~dp0scripts\matrix-boot.bat" "FORCE UPDATE"
-color 0A
-title VS System — FORCE UPDATE
+if /I "%~1"=="--worker" goto :worker
 
-echo.
-echo   ==========================================================
-echo     VS SYSTEM — SPIEDIGS atjauninajums
-echo     git reset --hard origin/main
-echo   ==========================================================
+call "%~dp0scripts\matrix-boot.bat" "%~f0"
+exit /b %ERRORLEVEL%
+
+:worker
+color 0A
+chcp 65001 >nul 2>&1
+title VS System
+
+echo   VS SYSTEM — SPIEDIGS atjauninajums
+echo   git reset --hard origin/main
 echo.
 echo Mapes cels: %CD%
 echo.
@@ -21,7 +24,6 @@ echo.
 where git >nul 2>&1
 if errorlevel 1 (
   echo ERROR: Git nav atrasts — https://git-scm.com/download/win
-  pause
   exit /b 1
 )
 
@@ -32,7 +34,6 @@ if not exist ".git" (
   echo     cd Desktop
   echo     git clone https://github.com/voldis1994/VS-System-.git
   echo   Tad strādā no VS-System- mapes ar so UPDATE.
-  pause
   exit /b 1
 )
 
@@ -43,7 +44,6 @@ echo [2/5] checkout main...
 git checkout main
 if errorlevel 1 (
   echo ERROR: checkout main neizdevas — aizver editorus / STOP
-  pause
   exit /b 1
 )
 
@@ -51,7 +51,6 @@ echo [3/5] fetch origin main...
 git fetch origin main
 if errorlevel 1 (
   echo ERROR: fetch neizdevas — internets / GitHub
-  pause
   exit /b 1
 )
 
@@ -59,7 +58,6 @@ echo [4/5] reset --hard origin/main  ^(piespiedu^)...
 git reset --hard origin/main
 if errorlevel 1 (
   echo ERROR: reset neizdevas
-  pause
   exit /b 1
 )
 git clean -fd -e tools -e node_modules -e .env -e "apps\api\.env" -e client-url.txt -e remote-client-url.txt >nul 2>&1
@@ -100,7 +98,6 @@ if not errorlevel 1 (
 )
 
 echo.
-echo   ==========================================================
 echo   UPDATE GATAVS — commit %VS_AFTER%
 echo.
 echo   1^) START-VS-SYSTEM.bat
@@ -109,6 +106,4 @@ echo   3^) SAVE → START
 echo.
 echo   Ja commit joprojam vecs — tu esi nepareizaja mapē
 echo   ^(nevis git clone VS-System-^).
-echo   ==========================================================
-pause
 exit /b 0
