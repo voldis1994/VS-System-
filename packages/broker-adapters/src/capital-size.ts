@@ -46,27 +46,65 @@ export function capitalDealRulesFallback(epic: string): CapitalDealRules {
   return { minSize: 0.01, maxSize: 500, step: 0.01 };
 }
 
-export function parseCapitalDealRules(market: {
-  dealingRules?: {
-    minDealSize?: { value?: number };
-    maxDealSize?: { value?: number };
-    dealSizeStep?: { value?: number };
-    minStepDistance?: { value?: number };
-  };
-  instrument?: { lotSize?: number };
-}): CapitalDealRules | null {
+export function parseCapitalDealRules(
+  market: {
+    dealingRules?: {
+      minDealSize?: { value?: number };
+      maxDealSize?: { value?: number };
+      dealSizeStep?: { value?: number };
+      minStepDistance?: { value?: number };
+    };
+    instrument?: { lotSize?: number };
+  },
+  epic?: string,
+): CapitalDealRules | null {
   const min = Number(market.dealingRules?.minDealSize?.value);
   const max = Number(market.dealingRules?.maxDealSize?.value);
-  const step = Number(
-    market.dealingRules?.dealSizeStep?.value ??
-      market.instrument?.lotSize ??
-      NaN,
-  );
+  const stepRaw = Number(market.dealingRules?.dealSizeStep?.value);
+  const lotSize = Number(market.instrument?.lotSize);
   if (!Number.isFinite(min) || min <= 0) return null;
-  return {
+
+  // Capital instrument.lotSize is often CONTRACT size (1), NOT deal step.
+  // Using lotSize=1 as step turns 0.12 → 1 and triggers RISK_CHECK on tiny CFD.
+  let step = stepRaw;
+  if (!Number.isFinite(step) || step <= 0) {
+    if (
+      Number.isFinite(lotSize) &&
+      lotSize > 0 &&
+      lotSize <= min + 1e-12
+    ) {
+      step = lotSize;
+    } else {
+      step = min;
+    }
+  }
+  // Step must never exceed min for retail CFDs (0.01 min with step 1 is garbage)
+  if (step > min + 1e-12) step = min;
+
+  const rules: CapitalDealRules = {
     minSize: min,
     maxSize: Number.isFinite(max) && max > min ? max : 500,
-    step: Number.isFinite(step) && step > 0 ? step : min,
+    step,
+  };
+  return epic ? sanitizeCapitalDealRules(epic, rules) : rules;
+}
+
+/** Prefer fallback when broker dealingRules are absurd vs known retail mins. */
+export function sanitizeCapitalDealRules(
+  epic: string,
+  rules: CapitalDealRules,
+): CapitalDealRules {
+  const fb = capitalDealRulesFallback(epic);
+  // e.g. GOLD fallback min 0.01 — reject min/step of 1 from bad lotSize parse
+  if (rules.minSize > fb.minSize * 10 + 1e-12 || rules.step > fb.step * 10 + 1e-12) {
+    return fb;
+  }
+  let step = rules.step > 0 ? rules.step : rules.minSize;
+  if (step > rules.minSize + 1e-12) step = rules.minSize;
+  return {
+    minSize: rules.minSize,
+    maxSize: rules.maxSize > rules.minSize ? rules.maxSize : fb.maxSize,
+    step,
   };
 }
 
@@ -164,12 +202,20 @@ export function capitalSizeErrorHint(epic: string, attempted?: string): string {
   );
 }
 
-export function capitalRiskCheckHint(epic: string, attempted?: string): string {
-  return (
-    `Capital RISK_CHECK uz ${epic}` +
-    (attempted ? ` lot ${attempted}` : "") +
-    `. Ja APP to pašu lot atver — VS CFD bind ir cits konts (Accounts → Bind).`
-  );
+export function capitalRiskCheckHint(
+  epic: string,
+  attempted?: string,
+  extras?: { requested?: string; accountId?: string; equity?: string },
+): string {
+  const bits = [`Capital RISK_CHECK uz ${epic}`];
+  if (attempted) bits.push(`sent lot ${attempted}`);
+  if (extras?.requested && extras.requested !== attempted) {
+    bits.push(`(requested ${extras.requested})`);
+  }
+  if (extras?.accountId) bits.push(`CFD ${extras.accountId}`);
+  if (extras?.equity) bits.push(`equity $${extras.equity}`);
+  bits.push("Accounts → Connect/Bind tam pašam CFD, kur APP treido");
+  return `${bits.join(" · ")}.`;
 }
 
 /**

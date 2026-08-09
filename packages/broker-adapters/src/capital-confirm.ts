@@ -120,10 +120,7 @@ export function formatCapitalConfirmRejection(c: CapitalConfirm): string {
       (c.rawHint ? `broker payload: ${c.rawHint}` : null) ??
       "no reason from broker (check market open, lot/min size, CFD sub-account)";
     if (/RISK_CHECK/i.test(String(why))) {
-      return (
-        `Capital rejected RISK_CHECK — free margin / lot pārāk liels ` +
-        `(vai citas atvērtās pozīcijas). Samazini lot līdz instrumenta min.`
-      );
+      return `Capital rejected RISK_CHECK${c.reason ? `: ${c.reason}` : ""}`;
     }
     return `Capital rejected: ${why}`;
   }

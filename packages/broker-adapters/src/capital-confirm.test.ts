@@ -34,7 +34,7 @@ describe("capital-confirm", () => {
       dealStatus: "REJECTED",
       reason: "RISK_CHECK",
     });
-    expect(formatCapitalConfirmRejection(c)).toMatch(/RISK_CHECK|margin|lot/i);
+    expect(formatCapitalConfirmRejection(c)).toMatch(/RISK_CHECK/);
   });
 
   it("formats REJECTED without reason using raw hint", () => {

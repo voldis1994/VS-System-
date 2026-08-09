@@ -14,12 +14,12 @@ import {
   capitalDealRulesFallback,
   capitalRiskCheckHint,
   capitalSizeErrorHint,
-  dealSizeRetryLadder,
   isCapitalRiskCheckError,
   isCapitalSizeError,
   normalizeCapitalDealSize,
   parseCapitalDealRules,
   pickBestCapitalSubAccount,
+  sanitizeCapitalDealRules,
   volumePrecisionForStep,
   type CapitalDealRules,
 } from "./capital-size";
@@ -698,8 +698,9 @@ export class CapitalComAdapter implements BrokerAdapter {
         };
         instrument?: { lotSize?: number };
       }>("GET", `/api/v1/markets/${encodeURIComponent(epic)}`);
-      const parsed = parseCapitalDealRules(res);
-      if (parsed) rules = parsed;
+      const parsed = parseCapitalDealRules(res, epic);
+      if (parsed) rules = sanitizeCapitalDealRules(epic, parsed);
+      else rules = capitalDealRulesFallback(epic);
     } catch {
       // keep fallback
     }
@@ -1023,34 +1024,34 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
-    // RISK_CHECK = Capital margin/exposure gate — step lot down to instrument min.
+    // RISK_CHECK: do NOT shrink operator lot. Re-pin richest CFD once, retry SAME size.
     if (
       !accepted &&
       isCapitalRiskCheckError(String(confirm.reason ?? ""))
     ) {
-      const ladder = dealSizeRetryLadder(usedSize, rules).slice(1);
-      for (const trySize of ladder) {
-        try {
-          await new Promise((r) => setTimeout(r, 350));
-          const attempt = await postMarket(trySize);
+      try {
+        const subs = await this.listCapitalAccounts();
+        const richest = pickBestCapitalSubAccount(subs);
+        const richestAvail = Number(
+          richest?.available ?? richest?.balance ?? 0,
+        );
+        const curId = this.targetExternalAccountId || this.externalAccountId;
+        if (
+          richest?.accountId &&
+          richest.accountId !== curId &&
+          richestAvail > 0
+        ) {
+          await this.bindCapitalAccount(richest.accountId);
+          await new Promise((r) => setTimeout(r, 400));
+          const attempt = await postMarket(usedSize);
           res = attempt.res;
           confirm = attempt.confirm;
           dealId = confirm.dealId;
           fillLevel = confirm.level;
           accepted = isCapitalConfirmAccepted(confirm);
-          if (accepted) {
-            usedSize = trySize;
-            sized.size = trySize;
-            sized.sizeStr = trySize.toFixed(prec);
-            sized.note = `RISK_CHECK → lot ${trySize}`;
-            break;
-          }
-          if (!isCapitalRiskCheckError(String(confirm.reason ?? ""))) {
-            break;
-          }
-        } catch {
-          break;
         }
+      } catch {
+        // keep original reject
       }
     }
 
@@ -1109,7 +1110,11 @@ export class CapitalComAdapter implements BrokerAdapter {
         : isCapitalSizeError(reasonStr)
           ? capitalSizeErrorHint(epic, String(request.volume))
           : isCapitalRiskCheckError(reasonStr)
-            ? capitalRiskCheckHint(epic, sized.sizeStr)
+            ? capitalRiskCheckHint(epic, sized.sizeStr, {
+                requested: String(request.volume),
+                accountId:
+                  this.externalAccountId || this.targetExternalAccountId,
+              })
             : formatCapitalConfirmRejection(confirm),
     };
     this.processed.set(request.clientRequestId, response);

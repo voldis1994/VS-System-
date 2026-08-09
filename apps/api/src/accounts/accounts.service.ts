@@ -232,8 +232,7 @@ export class AccountsService {
           const currentAvail = Number(state.freeMargin ?? state.equity ?? 0);
           if (
             richest?.accountId &&
-            richestAvail > 50 &&
-            richestAvail > currentAvail * 2 + 10 &&
+            richestAvail > currentAvail + 5 &&
             richest.accountId !== boundExternal
           ) {
             await adapter.bindCapitalAccount(richest.accountId);

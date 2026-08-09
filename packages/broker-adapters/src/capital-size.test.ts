@@ -9,6 +9,7 @@ import {
   normalizeCapitalDealSize,
   parseCapitalDealRules,
   pickBestCapitalSubAccount,
+  sanitizeCapitalDealRules,
   volumePrecisionForStep,
 } from "./capital-size";
 
@@ -61,7 +62,38 @@ describe("capital-size", () => {
     expect(ladder[0]).toBe(0.1);
     expect(ladder[ladder.length - 1]).toBe(0.01);
     expect(ladder.length).toBeGreaterThan(1);
-    expect(capitalRiskCheckHint("GOLD", "0.1")).toMatch(/RISK_CHECK|Bind|CFD/i);
+    expect(capitalRiskCheckHint("GOLD", "0.12")).toMatch(/sent lot 0\.12/);
+    expect(capitalRiskCheckHint("GOLD", "0.12")).toMatch(/Bind|Connect/i);
+  });
+
+  it("does not treat instrument.lotSize=1 as GOLD step (contract size)", () => {
+    // Capital often returns lotSize=1 (ounces/contract) with minDealSize=0.01
+    // and NO dealSizeStep — old code used step=1 → 0.12 became 1 → RISK_CHECK.
+    const parsed = parseCapitalDealRules(
+      {
+        dealingRules: {
+          minDealSize: { value: 0.01 },
+          maxDealSize: { value: 100 },
+        },
+        instrument: { lotSize: 1 },
+      },
+      "GOLD",
+    );
+    expect(parsed?.step).toBe(0.01);
+    expect(parsed?.minSize).toBe(0.01);
+    const n = normalizeCapitalDealSize(0.12, parsed!);
+    expect(n.size).toBe(0.12);
+    expect(n.adjusted).toBe(false);
+  });
+
+  it("sanitizes absurd GOLD step/min from bad broker payload", () => {
+    const cleaned = sanitizeCapitalDealRules("GOLD", {
+      minSize: 1,
+      maxSize: 100,
+      step: 1,
+    });
+    expect(cleaned.minSize).toBe(0.01);
+    expect(cleaned.step).toBe(0.01);
   });
 
   it("picks richest CFD sub-account, not preferred micro", () => {

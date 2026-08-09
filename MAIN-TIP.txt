@@ -1,3 +1,3 @@
-main tip: no lot lectures — operator owns size; auto-bind richest CFD
+main tip: GOLD 0.12 was sent as lot 1 — ignore instrument.lotSize as step
 repo: https://github.com/voldis1994/VS-System-
-fix: removed lot-too-big nags; Connect picks biggest Capital CFD when APP works but VS rejects
+fix: Capital lotSize=1 is contract size not step; keep operator lot; rebind richest CFD on RISK_CHECK
