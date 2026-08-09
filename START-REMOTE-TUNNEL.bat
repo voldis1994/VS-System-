@@ -2,17 +2,13 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-if /I "%~1"=="--worker" goto :worker
-
-call "%~dp0scripts\matrix-boot.bat" "%~f0" StayOpen
-exit /b %ERRORLEVEL%
-
-:worker
 color 0A
-chcp 65001 >nul 2>&1
-title VS System
+call "%~dp0scripts\matrix-look.bat"
 
+title VS System — REMOTE TUNNEL
+echo ========================================
 echo   VS SYSTEM — remote tunnel (opcijas)
+echo ========================================
 echo.
 echo   Parasti NAV vajadzigs.
 echo   Stabilais links klientiem (viena Wi-Fi):
@@ -28,10 +24,12 @@ echo.
 echo   Ja vajag VIENU pastāvīgu remote URL — vajag
 echo   Cloudflare named tunnel (sava subdomena) — nav free quick.
 echo.
+pause
 
 where node >nul 2>&1
 if errorlevel 1 (
   echo ERROR: Node.js nav atrasts
+  pause
   exit /b 1
 )
 
@@ -40,6 +38,7 @@ echo Parbaudu vai Web skrien uz :3000...
 netstat -ano | findstr ":3000 " | findstr LISTENING >nul
 if errorlevel 1 (
   echo ERROR: ports 3000 nav atverts — vispirms START-VS-SYSTEM.bat
+  pause
   exit /b 1
 )
 
@@ -48,4 +47,5 @@ echo Startēju tunnel... logu NEAIZVER.
 echo URL parādīsies šeit + remote-client-url.txt
 echo.
 node scripts\start-tunnel.mjs
+pause
 exit /b 0
