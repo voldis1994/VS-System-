@@ -2,10 +2,14 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+call "%~dp0scripts\matrix-boot.bat" "STOP"
+color 0A
 title VS System — STOP
-echo ========================================
-echo   VS SYSTEM — apturešana
-echo ========================================
+
+echo.
+echo   ==========================================================
+echo     VS SYSTEM — apturešana
+echo   ==========================================================
 echo.
 
 echo [1/3] Apturu API/Web (porti 3000 / 4000)...

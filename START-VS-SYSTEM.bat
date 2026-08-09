@@ -2,11 +2,15 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+call "%~dp0scripts\matrix-boot.bat" "START"
+color 0A
 title VS System — START
-echo ========================================
-echo   VS SYSTEM — pilna palaide
-echo   API + Web + DB  (stabils LAN /client)
-echo ========================================
+
+echo.
+echo   ==========================================================
+echo     VS SYSTEM — pilna palaide
+echo     API + Web + DB  (stabils LAN /client)
+echo   ==========================================================
 echo.
 
 if exist "VERSION.txt" (
@@ -154,9 +158,9 @@ for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":4000 " ^| findstr LISTENING
 timeout /t 2 /nobreak >nul
 
 if not exist "apps\api\.env" copy /Y .env apps\api\.env >nul
-start "VS System API" cmd /k "cd /d "%~dp0" && pnpm dev:api"
+start "VS System API" cmd /k "cd /d "%~dp0" && color 0A && title VS System API && pnpm dev:api"
 timeout /t 4 /nobreak >nul
-start "VS System WEB" cmd /k "cd /d "%~dp0" && pnpm dev:web"
+start "VS System WEB" cmd /k "cd /d "%~dp0" && color 0A && title VS System WEB && pnpm dev:web"
 timeout /t 10 /nobreak >nul
 
 echo.
@@ -192,8 +196,8 @@ timeout /t 2 /nobreak >nul
 start "" http://localhost:3000/dashboard
 
 echo.
-echo ========================================
-echo   VS SYSTEM SKRIEN
+echo   ==========================================================
+echo     VS SYSTEM SKRIEN
 echo.
 echo   DESK (tev uz PC) — VIENMER tapat:
 echo     http://localhost:3000/dashboard
@@ -214,7 +218,7 @@ echo.
 echo   Apturet:  STOP-VS-SYSTEM.bat
 echo   Update:   UPDATE-VS-SYSTEM.bat
 echo   Logus NEAIZVER (API / WEB)
-echo ========================================
+echo   ==========================================================
 pause
 exit /b 0
 

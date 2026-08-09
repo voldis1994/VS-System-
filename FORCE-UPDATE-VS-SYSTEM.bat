@@ -2,11 +2,15 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+call "%~dp0scripts\matrix-boot.bat" "FORCE UPDATE"
+color 0A
 title VS System — FORCE UPDATE
-echo ========================================
-echo   VS SYSTEM — SPIEDIGS atjauninajums
-echo   git reset --hard origin/main
-echo ========================================
+
+echo.
+echo   ==========================================================
+echo     VS SYSTEM — SPIEDIGS atjauninajums
+echo     git reset --hard origin/main
+echo   ==========================================================
 echo.
 echo Mapes cels: %CD%
 echo.
@@ -96,7 +100,7 @@ if not errorlevel 1 (
 )
 
 echo.
-echo ========================================
+echo   ==========================================================
 echo   UPDATE GATAVS — commit %VS_AFTER%
 echo.
 echo   1^) START-VS-SYSTEM.bat
@@ -105,6 +109,6 @@ echo   3^) SAVE → START
 echo.
 echo   Ja commit joprojam vecs — tu esi nepareizaja mapē
 echo   ^(nevis git clone VS-System-^).
-echo ========================================
+echo   ==========================================================
 pause
 exit /b 0

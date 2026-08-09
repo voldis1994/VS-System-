@@ -2,10 +2,14 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+call "%~dp0scripts\matrix-boot.bat" "REMOTE TUNNEL"
+color 0A
 title VS System — REMOTE TUNNEL
-echo ========================================
-echo   VS SYSTEM — remote tunnel (opcijas)
-echo ========================================
+
+echo.
+echo   ==========================================================
+echo     VS SYSTEM — remote tunnel (opcijas)
+echo   ==========================================================
 echo.
 echo   Parasti NAV vajadzigs.
 echo   Stabilais links klientiem (viena Wi-Fi):

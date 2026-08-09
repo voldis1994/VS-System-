@@ -2,11 +2,15 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+call "%~dp0scripts\matrix-boot.bat" "UPDATE"
+color 0A
 title VS System — UPDATE
-echo ========================================
-echo   VS SYSTEM — atjauninajums no GitHub
-echo   Velk jaunako main (merge) so mapa
-echo ========================================
+
+echo.
+echo   ==========================================================
+echo     VS SYSTEM — atjauninajums no GitHub
+echo     Velk jaunako main (merge) so mapa
+echo   ==========================================================
 echo.
 echo Mapes cels: %CD%
 echo.
@@ -92,7 +96,7 @@ if not errorlevel 1 (
 )
 
 echo.
-echo ========================================
+echo   ==========================================================
 echo   GATAVS
 if /I "%VS_BEFORE%"=="%VS_AFTER%" (
   echo   Jau bija jaunakais: %VS_AFTER%
@@ -106,7 +110,7 @@ echo.
 echo   Tagad: START-VS-SYSTEM.bat
 echo   Apturet: STOP-VS-SYSTEM.bat
 echo   Spiedigs: FORCE-UPDATE-VS-SYSTEM.bat
-echo ========================================
+echo   ==========================================================
 echo.
 pause
 exit /b 0
