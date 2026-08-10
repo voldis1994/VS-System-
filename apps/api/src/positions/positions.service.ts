@@ -807,10 +807,14 @@ export class PositionsService {
 
   /**
    * Operator rule — SCALPING:
-   * Floating PnL ≥ £0.05 → SL starts following price. Nothing else required.
+   * Floating PnL ≥ £0.05 → SL must FOLLOW price on Capital chart.
    *
-   * Prefer Capital native trailingStop (broker moves chart SL).
-   * If native rejects → software stopLevel at mark ± Capital-min every tick.
+   * CRITICAL: software stopLevel at mark−0.50 barely moves on tiny £0.05
+   * profits (GOLD min-stop ~0.50). A static protective SL then looks "stuck"
+   * (e.g. +£0.06 profit vs −£0.09 SL label). Capital NATIVE trailingStop is
+   * what actually walks the SL line with price — arm it first at £0.05.
+   * Software tighten only when candidate clearly improves; never skip native
+   * just because a fixed SL already exists.
    */
   private async chaseScalpTrailFromMoneyHit(input: {
     position: {
@@ -867,8 +871,122 @@ export class PositionsService {
       },
     });
 
-    // True BE only when Capital allows lock at/above entry (may be later than £0.05).
-    // Does not delay trail — trail arms below regardless.
+    // 1) ALWAYS arm Capital native trailing at £0.05 — this is what makes
+    //    the existing SL line walk with price on the chart.
+    if (!this.nativeTrailArmed.has(position.id)) {
+      try {
+        await this.modifySlTp(
+          position.organizationId,
+          "system",
+          position.id,
+          {
+            trailingStop: true,
+            stopDistance: String(brokerDist),
+          },
+          correlationId,
+          { silent: true },
+        );
+        this.nativeTrailArmed.add(position.id);
+        await this.notifications.create({
+          organizationId: position.organizationId,
+          userId: null,
+          title: "£0.05 — TRAIL FOLLOWS",
+          body: `${position.symbol} +£${moneyPnl.toFixed(2)} → Capital trailingStop ${brokerDist} (SL walks with price)`,
+          severity: "SUCCESS",
+        });
+      } catch (err) {
+        console.warn(
+          `£0.05 native trail ${position.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    // 2) Sync broker stopLevel into DB (Capital moves it under native trail)
+    if (this.nativeTrailArmed.has(position.id)) {
+      const adapter = this.brokers.get(position.accountId);
+      if (adapter && position.brokerPositionId) {
+        try {
+          const live = await adapter.getOpenPositions({ force: true });
+          const match = live.find(
+            (x) => x.brokerPositionId === position.brokerPositionId,
+          );
+          if (match?.stopLoss != null && String(match.stopLoss).length > 0) {
+            const liveSl = String(match.stopLoss);
+            brokerStopLoss.set(position.id, liveSl);
+            await this.prisma.position.update({
+              where: { id: position.id },
+              data: { stopLoss: liveSl, currentPrice: mark },
+            });
+          }
+        } catch {
+          // keep native armed
+        }
+      }
+      // Do NOT push fixed stopLevel while native is on — that clears trailingStop
+      // and freezes the SL line again.
+    } else {
+      // 3) Native rejected — software chase when it actually tightens
+      const existing =
+        brokerStopLoss.get(position.id) ??
+        (position.stopLoss != null && String(position.stopLoss).length > 0
+          ? String(position.stopLoss)
+          : null);
+      const candidate = capitalSafeTrailingStop({
+        symbol: position.symbol,
+        direction: dir,
+        mark,
+        distance: brokerDist,
+        existingSl: existing,
+      });
+      const improves =
+        !existing ||
+        (dir === "BUY"
+          ? d(candidate).gt(d(existing))
+          : d(candidate).lt(d(existing)));
+      if (
+        improves &&
+        Math.abs(mark - Number(candidate)) + 1e-9 >= minD
+      ) {
+        try {
+          await this.modifySlTp(
+            position.organizationId,
+            "system",
+            position.id,
+            { stopLoss: candidate },
+            correlationId,
+            { silent: !firstArm },
+          );
+          brokerStopLoss.set(position.id, candidate);
+          await this.prisma.position.update({
+            where: { id: position.id },
+            data: {
+              stopLoss: candidate,
+              currentPrice: mark,
+              trailingEnabled: true,
+              trailingActivatedAt: new Date(),
+            },
+          });
+          if (firstArm) {
+            await this.notifications.create({
+              organizationId: position.organizationId,
+              userId: null,
+              title: "£0.05 — SL FOLLOWS",
+              body: `${position.symbol} ${dir} SL → ${candidate} (PnL £${moneyPnl.toFixed(2)})`,
+              severity: "SUCCESS",
+            });
+          }
+        } catch (err) {
+          console.warn(
+            `£0.05 software trail ${position.id}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
+
+    // 4) True BE (≥ entry) only when Capital allows — after trail is on.
+    //    BE fixed stop clears native; re-arm native next tick if BE lands.
     if (!position.breakEvenActivatedAt) {
       const offset = position.breakEvenOffset
         ? String(position.breakEvenOffset)
@@ -889,125 +1007,9 @@ export class PositionsService {
             correlationId,
             { silent: false, mark },
           );
-          // Fixed BE stop clears Capital native trail — allow re-arm below
           this.nativeTrailArmed.delete(position.id);
         } catch {
-          // trail still arms
-        }
-      }
-    }
-
-    // Prefer software stopLevel chase FIRST so Capital chart shows a hard SL line.
-    // Native trailingStop alone often leaves the chart looking "naked" (no dashed SL).
-    const existing =
-      brokerStopLoss.get(position.id) ??
-      (position.stopLoss != null && String(position.stopLoss).length > 0
-        ? String(position.stopLoss)
-        : null);
-    const candidate = capitalSafeTrailingStop({
-      symbol: position.symbol,
-      direction: dir,
-      mark,
-      distance: brokerDist,
-      existingSl: existing,
-    });
-    let softwareOk = false;
-    if (
-      (!existing || !d(candidate).eq(d(existing))) &&
-      Math.abs(mark - Number(candidate)) + 1e-9 >= minD
-    ) {
-      try {
-        await this.modifySlTp(
-          position.organizationId,
-          "system",
-          position.id,
-          { stopLoss: candidate },
-          correlationId,
-          { silent: !firstArm },
-        );
-        softwareOk = true;
-        brokerStopLoss.set(position.id, candidate);
-        await this.prisma.position.update({
-          where: { id: position.id },
-          data: {
-            stopLoss: candidate,
-            currentPrice: mark,
-            trailingEnabled: true,
-            trailingActivatedAt: new Date(),
-          },
-        });
-        // Fixed SL clears native — allow re-arm only if software fails later
-        this.nativeTrailArmed.delete(position.id);
-        if (firstArm) {
-          await this.notifications.create({
-            organizationId: position.organizationId,
-            userId: null,
-            title: "£0.05 — SL FOLLOWS",
-            body: `${position.symbol} ${dir} SL → ${candidate} (PnL £${moneyPnl.toFixed(2)})`,
-            severity: "SUCCESS",
-          });
-        }
-      } catch (err) {
-        console.warn(
-          `£0.05 software trail ${position.id}:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    } else if (existing) {
-      softwareOk = true; // already have a legal SL on chart
-    }
-
-    // If software stopLevel failed/missing — Capital native trailing as fallback
-    if (!softwareOk && !this.nativeTrailArmed.has(position.id)) {
-      try {
-        await this.modifySlTp(
-          position.organizationId,
-          "system",
-          position.id,
-          {
-            trailingStop: true,
-            stopDistance: String(brokerDist),
-          },
-          correlationId,
-          { silent: true },
-        );
-        this.nativeTrailArmed.add(position.id);
-        if (firstArm) {
-          await this.notifications.create({
-            organizationId: position.organizationId,
-            userId: null,
-            title: "£0.05 — TRAIL ON",
-            body: `${position.symbol} +£${moneyPnl.toFixed(2)} → Capital trailingStop ${brokerDist}`,
-            severity: "SUCCESS",
-          });
-        }
-      } catch (err) {
-        console.warn(
-          `£0.05 native trail ${position.id}:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
-
-    // Sync live broker SL into DB when native is managing the chart
-    if (this.nativeTrailArmed.has(position.id)) {
-      const adapter = this.brokers.get(position.accountId);
-      if (adapter && position.brokerPositionId) {
-        try {
-          const live = await adapter.getOpenPositions({ force: true });
-          const match = live.find(
-            (x) => x.brokerPositionId === position.brokerPositionId,
-          );
-          if (match?.stopLoss != null && String(match.stopLoss).length > 0) {
-            const liveSl = String(match.stopLoss);
-            brokerStopLoss.set(position.id, liveSl);
-            await this.prisma.position.update({
-              where: { id: position.id },
-              data: { stopLoss: liveSl, currentPrice: mark },
-            });
-          }
-        } catch {
-          // keep going
+          // trail still on
         }
       }
     }
