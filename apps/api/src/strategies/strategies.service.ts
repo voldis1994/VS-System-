@@ -147,9 +147,10 @@ export class StrategiesService {
         : {};
     const configurationJson = {
       ...prevConfig,
-      oneTradeOnly: prevConfig.oneTradeOnly !== false,
+      oneTradeOnly: false,
       closeOnlyNoFlip: prevConfig.closeOnlyNoFlip === true,
       useRiskPercent: false,
+      cooldownSeconds: 0,
     };
     delete (configurationJson as Record<string, unknown>).riskPercent;
 
@@ -161,7 +162,7 @@ export class StrategiesService {
         deploymentStateJson: {
           startedAt: new Date().toISOString(),
           engine: "VS_PRO_V10",
-          oneTradeOnly: true,
+          oneTradeOnly: configurationJson.oneTradeOnly === true,
         },
         updatedById: actorId,
       },
@@ -311,7 +312,7 @@ export class StrategiesService {
           typeof cfg.trailingActivationPips === "number"
             ? cfg.trailingActivationPips
             : undefined,
-        oneTradeOnly: cfg.oneTradeOnly !== false,
+        oneTradeOnly: cfg.oneTradeOnly === true,
         closeOnlyNoFlip: cfg.closeOnlyNoFlip === true,
       },
     });
@@ -537,11 +538,7 @@ export class StrategiesService {
         typeof body.trailingActivationPips === "number"
           ? body.trailingActivationPips
           : 15,
-      oneTradeOnly: true,
-      closeOnlyNoFlip: false,
-      volume: body.volume ?? "0.1",
-      startingEquity,
-    };
+      oneTradeOnly: false,
 
     const results = [];
     for (const mode of modes) {
@@ -819,7 +816,7 @@ export class StrategiesService {
             timeframe: modePreferredTimeframe(input.mode),
           }
         : {}),
-      oneTradeOnly: cfgIn.oneTradeOnly !== false,
+      oneTradeOnly: cfgIn.oneTradeOnly === true,
       // Flip BUY↔SELL allowed unless explicitly disabled
       closeOnlyNoFlip: cfgIn.closeOnlyNoFlip === true,
       autoAggressive: cfgIn.autoAggressive === true,

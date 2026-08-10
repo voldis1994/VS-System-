@@ -41,7 +41,7 @@ export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   atrStopMult: 0.55,
   atrTpMult: 1.0,
   stopDistancePips: 12,
-  cooldownSeconds: 5,
+  cooldownSeconds: 0,
   exitVersion: "SCALP",
   priceOffsetMode: false,
 };
@@ -58,7 +58,7 @@ export const EMA_TICK_AUTO_EXIT: ModeAutoExitConfig = {
   trailArmImmediate: false,
   atrStopMult: 1.0,
   atrTpMult: 1.8,
-  cooldownSeconds: 15,
+  cooldownSeconds: 0,
   exitVersion: "AUTO",
   priceOffsetMode: false,
 };

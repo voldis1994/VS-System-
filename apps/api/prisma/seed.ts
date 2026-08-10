@@ -93,7 +93,7 @@ async function main() {
           maxDrawdownPercent: 20,
           maxOpenTrades: 50,
         },
-        protectionRulesJson: { equityProtection: true },
+        protectionRulesJson: { riskEngineEnabled: false, equityProtection: false },
       },
     });
   }

@@ -699,11 +699,12 @@ export class AuthService {
           maxCorrelation: 70,
         },
         protectionRulesJson: {
-          equityProtection: true,
+          riskEngineEnabled: false,
+          equityProtection: false,
           newsFilter: false,
-          spreadFilter: true,
-          autoStopTrading: true,
-          autoReduceRisk: true,
+          spreadFilter: false,
+          autoStopTrading: false,
+          autoReduceRisk: false,
         },
       },
     });

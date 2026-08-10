@@ -252,7 +252,7 @@ function buildConfiguration(d: AccountDraft) {
       riskPercent: Number(d.riskPercent) || 0.5,
       useRiskPercent: false,
       volume,
-      oneTradeOnly: true,
+      oneTradeOnly: false,
       closeOnlyNoFlip: false,
       autoAggressive: false,
       sessionFilter: d.mode === StrategyMode.SESSION,
@@ -277,7 +277,7 @@ function buildConfiguration(d: AccountDraft) {
       priceOffsetMode: auto.priceOffsetMode,
       exitVersion: auto.exitVersion,
       minAdx: 14,
-      cooldownSeconds: auto.cooldownSeconds,
+      cooldownSeconds: 0,
     };
   }
   return {
@@ -285,7 +285,7 @@ function buildConfiguration(d: AccountDraft) {
     riskPercent: Number(d.riskPercent) || 0.5,
     useRiskPercent: false,
     volume,
-    oneTradeOnly: true,
+    oneTradeOnly: false,
     closeOnlyNoFlip: false,
     autoAggressive: false,
     sessionFilter: d.mode === StrategyMode.SESSION,
@@ -325,7 +325,7 @@ function buildConfiguration(d: AccountDraft) {
         : 15,
     exitVersion: d.exitVersion,
     minAdx: 14,
-    cooldownSeconds: 30,
+    cooldownSeconds: 0,
   };
 }
 

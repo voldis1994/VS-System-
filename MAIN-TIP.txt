@@ -1,3 +1,3 @@
-main tip: GOLD 0.12 was sent as lot 1 — ignore instrument.lotSize as step
+main tip: ALL VS risk management OFF — operator owns lot/entries
 repo: https://github.com/voldis1994/VS-System-
-fix: Capital lotSize=1 is contract size not step; keep operator lot; rebind richest CFD on RISK_CHECK
+fix: risk engine default OFF; no cooldown floors; no 10min size pause; oneTradeOnly default OFF

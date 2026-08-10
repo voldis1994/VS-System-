@@ -176,7 +176,7 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
       timeframe: modePreferredTimeframe(input.mode),
       useRiskPercent: false,
       volume: input.lotSize,
-      oneTradeOnly: true,
+      oneTradeOnly: false,
       closeOnlyNoFlip: false,
       autoAggressive: false,
       minScore: modeMinScore(input.mode),
@@ -196,14 +196,14 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
       stopDistancePips: auto.stopDistancePips,
       exitVersion: auto.exitVersion,
       newsFilterEnabled: false,
-      cooldownSeconds: auto.cooldownSeconds,
+      cooldownSeconds: 0,
     };
   }
   return {
     timeframe: modePreferredTimeframe(input.mode),
     useRiskPercent: false,
     volume: input.lotSize,
-    oneTradeOnly: true,
+    oneTradeOnly: false,
     closeOnlyNoFlip: false,
     autoAggressive: false,
     minScore: modeMinScore(input.mode),
@@ -220,7 +220,7 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
     trailingActivationPips: Number(e.trailActPips),
     exitVersion: input.exit,
     newsFilterEnabled: false,
-    cooldownSeconds: 30,
+    cooldownSeconds: 0,
   };
 }
 

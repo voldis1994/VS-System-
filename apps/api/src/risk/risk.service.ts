@@ -106,21 +106,10 @@ export class RiskService {
     return { enabled };
   }
 
-  async isRiskEngineEnabled(organizationId: string): Promise<boolean> {
-    const profiles = await this.prisma.riskProfile.findMany({
-      where: { organizationId },
-      orderBy: { priority: "asc" },
-    });
-    for (const p of profiles) {
-      const rules =
-        p.protectionRulesJson && typeof p.protectionRulesJson === "object"
-          ? (p.protectionRulesJson as Record<string, unknown>)
-          : {};
-      if (typeof rules.riskEngineEnabled === "boolean") {
-        return rules.riskEngineEnabled;
-      }
-    }
-    return true; // default ON
+  async isRiskEngineEnabled(_organizationId: string): Promise<boolean> {
+    // Hard OFF — operator owns risk (daily/DD/max-open never block orders).
+    // Toggle UI still writes DB for future re-enable, but engine ignores it.
+    return false;
   }
 
   async createProfile(
@@ -309,21 +298,7 @@ export class RiskService {
         severity: "CRITICAL",
       });
 
-      if (result.reasons.includes("RISK_DAILY_LIMIT_EXCEEDED")) {
-        await this.prisma.tradingAccount.update({
-          where: { id: input.accountId },
-          data: { status: "LOCKED" },
-        });
-        await this.events.publish({
-          eventType: DomainEventType.AccountLocked,
-          aggregateId: input.accountId,
-          organizationId: input.organizationId,
-          actorId: input.actorId,
-          correlationId: input.correlationId,
-          payload: { reason: "RISK_DAILY_LIMIT_EXCEEDED" },
-        });
-      }
-
+      // Never auto-LOCK accounts from risk limits — operator owns the desk.
       throw new AppError(
         result.reasons[0] ?? ErrorCodes.RISK_HARD_LIMIT_BREACHED,
         "Risk hard limit breached",
@@ -332,13 +307,9 @@ export class RiskService {
       );
     }
 
+    // Soft warnings never block — operator confirms by placing the order
     if (result.warnings.length > 0 && !input.confirmSoftWarnings) {
-      throw new AppError(
-        ErrorCodes.RISK_SOFT_WARNING,
-        "Soft risk warning — confirm to proceed",
-        HttpStatus.CONFLICT,
-        result as unknown as Record<string, unknown>,
-      );
+      return { ...result, limits, softWarningBypassed: true };
     }
 
     return { ...result, limits };

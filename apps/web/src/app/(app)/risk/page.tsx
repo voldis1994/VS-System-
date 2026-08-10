@@ -43,7 +43,7 @@ export default function RiskPage() {
     queryFn: () => api<{ enabled: boolean }>("/risk/settings", { token: token! }),
     enabled: !!token,
   });
-  const riskOn = settings?.enabled !== false;
+  const riskOn = settings?.enabled === true;
 
   const selected = (profiles ?? []).find((p) => p.id === selectedId) ?? profiles?.[0];
 

@@ -52,8 +52,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   private readonly emaSideByKey = new Map<string, "above" | "below">();
   /** EMA_TICK_SCALP: which cross generation already taken (anti-chop on same window) */
   private readonly emaCrossConsumed = new Map<string, string>();
-  /** After Capital size reject — pause retries so alerts don't spam */
-  private readonly sizeRejectUntil = new Map<string, number>();
   private ticking = false;
 
   constructor(
@@ -80,9 +78,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
     for (const key of [...this.emaCrossConsumed.keys()]) {
       if (key.startsWith(`${strategyId}:`)) this.emaCrossConsumed.delete(key);
-    }
-    for (const key of [...this.sizeRejectUntil.keys()]) {
-      if (key.startsWith(`${strategyId}:`)) this.sizeRejectUntil.delete(key);
     }
   }
 
@@ -242,18 +237,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const breakEvenEnabled = Boolean(config.breakEvenEnabled);
     const trailingEnabled = Boolean(config.trailingEnabled);
     const mode = strategy.mode as StrategyMode;
-    // EMA tick: min 15s between entries so price oscillating around EMA3 cannot chop
-    // SCALPING 10s: fast re-entry after tight trail exit
+    // Risk/delay gates OFF — ignore saved oneTradeOnly / cooldown
     const autoExit = modeAutoExit(mode);
-    const cooldownMs =
-      mode === StrategyMode.EMA_TICK_SCALP
-        ? Math.max((config.cooldownSeconds ?? 15) * 1000, 15_000)
-        : mode === StrategyMode.SCALPING
-          ? Math.max(
-              (config.cooldownSeconds ?? autoExit?.cooldownSeconds ?? 5) * 1000,
-              5_000,
-            )
-          : (config.cooldownSeconds ?? 30) * 1000;
+    const cooldownMs = 0;
+    void config.cooldownSeconds;
     // Per-mode default score bar; SCALPING always uses domain bar (ignore stale high saved minScore)
     let minScore = config.minScore ?? modeMinScore(mode);
     if (config.minScore == null || mode === StrategyMode.SCALPING) {
@@ -261,7 +248,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
     const sessionFilter =
       config.sessionFilter === true || mode === StrategyMode.SESSION;
-    const oneTradeOnly = config.oneTradeOnly !== false; // default ON
+    const oneTradeOnly = false;
     // Allow BUY↔SELL flip by default (close opposite then open new)
     const closeOnlyNoFlip = config.closeOnlyNoFlip === true;
     // Default OFF — aggressive EMA fallback was deadly on micro accounts
@@ -845,22 +832,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           };
           continue;
         }
-        const sizeBlockedUntil = this.sizeRejectUntil.get(key) ?? 0;
-        if (sizeBlockedUntil > Date.now()) {
-          lastStatus = {
-            ...lastStatus,
-            symbol: brokerSymbol,
-            signal,
-            skip: "capital_size_invalid",
-            cooldownSec: Math.ceil((sizeBlockedUntil - Date.now()) / 1000),
-            error: capitalSizeErrorHint(
-              brokerSymbol,
-              String(config.volume ?? "0.01"),
-            ),
-            accountId,
-          };
-          continue;
-        }
         if (this.lastFingerprint.get(key) === fingerprint) {
           const openSame = await this.prisma.position.count({
             where: {
@@ -932,8 +903,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             };
             continue;
           }
-          // Capital free-margin update after close lags — avoid instant RISK_CHECK on flip open
-          await new Promise((r) => setTimeout(r, 900));
+          // Close opposite then open flip immediately — no artificial margin wait
         }
 
         const sameSide = openOnSymbol.filter((p) => p.direction === signal);
@@ -1380,10 +1350,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           } else {
             const msg = child?.message ?? "order not accepted";
             this.log.warn(`Strategy order failed: ${msg}`);
-            if (isCapitalSizeError(msg) || /CAPITAL_SIZE_INVALID/i.test(msg)) {
-              this.sizeRejectUntil.set(key, Date.now() + 10 * 60_000);
-              this.lastSignalAt.set(key, Date.now());
-            }
             const marginFail = isMarginOrFundsError(msg);
             await this.notifications.create({
               organizationId: strategy.organizationId,
@@ -1411,10 +1377,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         } catch (err) {
           const msg = err instanceof Error ? err.message : "order error";
           this.log.error(`Strategy place threw: ${msg}`);
-          if (isCapitalSizeError(msg) || /CAPITAL_SIZE_INVALID/i.test(msg)) {
-            this.sizeRejectUntil.set(key, Date.now() + 10 * 60_000);
-            this.lastSignalAt.set(key, Date.now());
-          }
           const marginFail = isMarginOrFundsError(msg);
           await this.notifications.create({
             organizationId: strategy.organizationId,

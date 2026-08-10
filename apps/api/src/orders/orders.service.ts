@@ -299,15 +299,7 @@ export class OrdersService implements OnModuleInit {
       : d(0);
 
     // Realistic CFD risk proxy: |entry-stop| * volume (avoid broken tickValue inflation)
-    let proposedRisk = stopDistance.mul(volume);
-    const equityNum = d(brokerState.equity);
-    if (equityNum.gt(0) && input.confirmSoftWarnings) {
-      // Cap reported risk for strategy/auto path so tiny LIVE accounts can trade min size
-      const maxAllowed = equityNum.mul(0.01); // 1% of equity
-      if (proposedRisk.gt(maxAllowed)) {
-        proposedRisk = maxAllowed;
-      }
-    }
+    const proposedRisk = stopDistance.mul(volume);
 
     await this.risk.evaluateOrderRisk({
       organizationId,
@@ -320,7 +312,8 @@ export class OrdersService implements OnModuleInit {
       floatingPnl: brokerState.floatingPnl,
       openTrades,
       proposedRiskAmount: proposedRisk.toFixed(8),
-      confirmSoftWarnings: input.confirmSoftWarnings,
+      // Never soft-block strategy/manual path — risk engine default OFF
+      confirmSoftWarnings: true,
     });
 
     const draft = await this.prisma.order.create({

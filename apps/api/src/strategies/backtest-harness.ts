@@ -170,7 +170,7 @@ export function runStrategyBacktest(input: {
   const multiTpCount = Math.max(2, Math.min(10, Math.floor(Number(cfg.multiTpCount ?? 3))));
   const breakEvenEnabled = Boolean(cfg.breakEvenEnabled);
   const trailingEnabled = Boolean(cfg.trailingEnabled);
-  const oneTradeOnly = cfg.oneTradeOnly !== false;
+  const oneTradeOnly = cfg.oneTradeOnly === true;
   const closeOnlyNoFlip = cfg.closeOnlyNoFlip === true;
   const lotSize = Math.max(0.01, Number(cfg.volume ?? 0.1) || 0.1);
 
