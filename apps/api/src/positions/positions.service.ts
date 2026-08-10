@@ -836,20 +836,16 @@ export class PositionsService {
   }
 
   /**
-   * Operator rule — SCALPING:
-   * Floating PnL ≥ £0.05 (or SL stuck) → trail must protect the trade.
+   * MT5-style tick trail (operator idea):
    *
-   * Capital chart SL has failed three ways:
-   *  A) native trailingStop alone didn't walk
-   *  B) stopLevel + trailingStop:false ACK'd but left old level
-   *  C) software chase starved behind login lock
+   *   if (floatingPnL >= 0.05) {
+   *     newSL = BUY ? mark - trailDist : mark + trailDist;
+   *     if (improves) PositionModify(ticket, newSL, tp);
+   *   }
    *
-   * New order (this tick):
-   *  1) Arm Capital native trailingStop+stopDistance (PRIMARY)
-   *  2) If SL still lagging → PUT stopDistance only (relative static)
-   *  3) If still lagging → PUT stopLevel only (no trailingStop:false)
-   *  4) Soft app exit on scalp-distance retrace from peak (PnL protection
-   *     even when chart SL is frozen)
+   * Runs every protection tick (~1s). trailDist is floored to Capital
+   * min-stop (~0.50 GOLD) — broker rejects tighter. Soft exit only if
+   * Capital keeps refusing while price retraces from peak.
    */
   private async chaseScalpTrailFromMoneyHit(input: {
     position: {
@@ -884,8 +880,9 @@ export class PositionsService {
     let mark = input.mark;
     const minD = capitalMinStopDistance(position.symbol);
     const pip = Math.max(instrumentPipSize(position.symbol), 1e-6);
-    const trailDist = resolveScalpTrailDistance(position.symbol, entry, 3);
-    const baseDist = capitalSafeTrailDistance(position.symbol, entry, trailDist);
+    // Same idea as MQL trail distance — Capital forces ≥ min-stop
+    const softPips = resolveScalpTrailDistance(position.symbol, entry, 3);
+    const trailDist = capitalSafeTrailDistance(position.symbol, entry, softPips);
     const firstArm = !position.trailingActivatedAt;
 
     await this.prisma.position.update({
@@ -907,6 +904,7 @@ export class PositionsService {
       },
     });
 
+    // Live broker mark + SL (Capital chart is truth)
     let liveSl =
       brokerStopLoss.get(position.id) ??
       (position.stopLoss != null && String(position.stopLoss).length > 0
@@ -924,215 +922,132 @@ export class PositionsService {
           brokerStopLoss.set(position.id, liveSl);
         }
         const liveMark = Number(match?.currentPrice);
-        if (Number.isFinite(liveMark) && liveMark > 0) {
-          mark = liveMark;
-        }
+        if (Number.isFinite(liveMark) && liveMark > 0) mark = liveMark;
       } catch {
-        // use caller mark / cached SL
+        // keep caller mark
       }
     }
 
     const favNow = dir === "BUY" ? mark - entry : entry - mark;
-    const prevPeak = this.peakFavorable.get(position.id) ?? 0;
-    const peak = Math.max(prevPeak, favNow, 0);
+    const peak = Math.max(this.peakFavorable.get(position.id) ?? 0, favNow, 0);
     this.peakFavorable.set(position.id, peak);
 
-    const liveSlN = liveSl != null ? Number(liveSl) : NaN;
-    const gap = Number.isFinite(liveSlN)
-      ? dir === "BUY"
-        ? mark - liveSlN
-        : liveSlN - mark
-      : Infinity;
-    const lagging = !Number.isFinite(liveSlN) || gap > minD + pip;
+    // ── MQL equivalent ──────────────────────────────────────────
+    // newSL = open-side of mark by trailDist; only tighten (never loosen)
+    const newSl = capitalSafeTrailingStop({
+      symbol: position.symbol,
+      direction: dir,
+      mark,
+      distance: trailDist,
+      existingSl: liveSl,
+    });
+    const curSl = liveSl != null ? Number(liveSl) : 0;
+    const improves =
+      liveSl == null ||
+      curSl === 0 ||
+      !Number.isFinite(curSl) ||
+      (dir === "BUY" ? Number(newSl) > curSl : Number(newSl) < curSl);
 
-    const distances = [
-      baseDist,
-      Math.max(baseDist, minD * 1.25),
-      Math.max(baseDist, minD * 1.5),
-      Math.max(baseDist, minD * 2),
-    ];
-    const uniqDist = [...new Set(distances.map((x) => Number(x.toFixed(8))))];
-
-    let lastErr: string | null = null;
-    let pushed = false;
-    let stillLagging = lagging;
-
-    const stampConfirmed = async (
-      confirmed: string,
-      title: string,
-      silent: boolean,
-    ) => {
-      brokerStopLoss.set(position.id, confirmed);
-      liveSl = confirmed;
-      await this.prisma.position.update({
-        where: { id: position.id },
-        data: {
-          stopLoss: confirmed,
-          currentPrice: mark,
-          trailingEnabled: true,
-          trailingActivatedAt: new Date(),
-        },
-      });
-      if (!silent) {
-        await this.notifications.create({
-          organizationId: position.organizationId,
-          userId: null,
-          title,
-          body: `${position.symbol} ${dir} SL → ${confirmed} (mark ${mark.toFixed(2)}, PnL £${moneyPnl.toFixed(2)})`,
-          severity: "SUCCESS",
-        });
-      }
-    };
-
-    // 1) Native Capital trail FIRST
-    if (!this.nativeTrailArmed.has(position.id)) {
+    let stillLagging = true;
+    if (improves) {
       try {
+        // stopLevel only — never send trailingStop:false (Capital silent no-op)
         const after = await this.modifySlTp(
           position.organizationId,
           "system",
           position.id,
-          {
-            trailingStop: true,
-            stopDistance: String(baseDist),
-          },
+          { stopLoss: newSl },
           correlationId,
-          { silent: true },
+          { silent: !firstArm },
         );
-        this.nativeTrailArmed.add(position.id);
-        const afterSl =
-          after?.stopLoss != null ? String(after.stopLoss) : "";
-        if (afterSl) {
-          await stampConfirmed(
-            afterSl,
-            firstArm ? "£0.05 — native TRAIL ON" : "native TRAIL refresh",
-            !firstArm,
-          );
-          const n = Number(afterSl);
-          const g = dir === "BUY" ? mark - n : n - mark;
-          if (Number.isFinite(g) && g <= minD + pip * 2) {
-            this.chaseFailNotifyAt.delete(position.id);
-            pushed = true;
-            stillLagging = false;
-          }
-        } else {
-          pushed = true;
+        const confirmed =
+          after?.stopLoss != null && String(after.stopLoss).length > 0
+            ? String(after.stopLoss)
+            : newSl;
+        brokerStopLoss.set(position.id, confirmed);
+        liveSl = confirmed;
+        await this.prisma.position.update({
+          where: { id: position.id },
+          data: {
+            stopLoss: confirmed,
+            currentPrice: mark,
+            trailingEnabled: true,
+            trailingActivatedAt: new Date(),
+          },
+        });
+        this.chaseFailNotifyAt.delete(position.id);
+        const g =
+          dir === "BUY"
+            ? mark - Number(confirmed)
+            : Number(confirmed) - mark;
+        stillLagging = !Number.isFinite(g) || g > minD + pip;
+        if (firstArm) {
+          await this.notifications.create({
+            organizationId: position.organizationId,
+            userId: null,
+            title: "TRAIL ON (+£0.05)",
+            body: `${position.symbol} ${dir} SL → ${confirmed} follows mark (dist ${trailDist})`,
+            severity: "SUCCESS",
+          });
         }
       } catch (err) {
-        lastErr = err instanceof Error ? err.message : String(err);
-        console.warn(`native trail arm ${position.id}:`, lastErr);
-      }
-    }
-
-    if (liveSl != null) {
-      const n = Number(liveSl);
-      const g = dir === "BUY" ? mark - n : n - mark;
-      stillLagging = !Number.isFinite(n) || g > minD + pip;
-    }
-
-    // 2) Relative stopDistance if still lagging
-    if (stillLagging) {
-      for (const dist of uniqDist) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`tick trail ${position.id}:`, msg);
+        // Fallback: relative stopDistance (Capital alternative to stopLevel)
         try {
           const after = await this.modifySlTp(
             position.organizationId,
             "system",
             position.id,
-            { stopDistance: String(dist) },
+            { stopDistance: String(trailDist) },
             correlationId,
             { silent: true },
           );
-          const afterSl =
-            after?.stopLoss != null ? String(after.stopLoss) : "";
-          if (afterSl) {
-            const n = Number(afterSl);
-            const improves =
-              !Number.isFinite(liveSlN) ||
-              (dir === "BUY" ? n > liveSlN : n < liveSlN);
-            const g = dir === "BUY" ? mark - n : n - mark;
-            const tight = Number.isFinite(g) && g <= dist * 1.6 + pip;
-            if (improves || tight) {
-              await stampConfirmed(afterSl, "SL via stopDistance", !firstArm);
-              pushed = true;
-              stillLagging = !(Number.isFinite(g) && g <= minD + pip);
-              break;
-            }
+          const confirmed =
+            after?.stopLoss != null && String(after.stopLoss).length > 0
+              ? String(after.stopLoss)
+              : null;
+          if (confirmed) {
+            brokerStopLoss.set(position.id, confirmed);
+            liveSl = confirmed;
+            await this.prisma.position.update({
+              where: { id: position.id },
+              data: { stopLoss: confirmed, currentPrice: mark },
+            });
+            const g =
+              dir === "BUY"
+                ? mark - Number(confirmed)
+                : Number(confirmed) - mark;
+            stillLagging = !Number.isFinite(g) || g > minD + pip;
+            this.chaseFailNotifyAt.delete(position.id);
+          } else {
+            stillLagging = true;
           }
-        } catch (err) {
-          lastErr = err instanceof Error ? err.message : String(err);
-          console.warn(
-            `stopDistance chase ${position.id} dist=${dist}:`,
-            lastErr,
-          );
+        } catch (err2) {
+          stillLagging = true;
+          const msg2 = err2 instanceof Error ? err2.message : String(err2);
+          const now = Date.now();
+          const last = this.chaseFailNotifyAt.get(position.id) ?? 0;
+          if (now - last >= PositionsService.CHASE_FAIL_NOTIFY_MS) {
+            this.chaseFailNotifyAt.set(position.id, now);
+            await this.notifications.create({
+              organizationId: position.organizationId,
+              userId: null,
+              title: "TRAIL TICK FAILED",
+              body: `${position.symbol}: ${msg} | fallback: ${msg2}`,
+              severity: "CRITICAL",
+            });
+          }
         }
       }
+    } else if (liveSl != null) {
+      const g =
+        dir === "BUY" ? mark - Number(liveSl) : Number(liveSl) - mark;
+      stillLagging = !Number.isFinite(g) || g > minD + pip;
     }
 
-    // 3) Absolute stopLevel only (NO trailingStop:false)
-    if (stillLagging) {
-      for (const dist of uniqDist) {
-        const candidate = capitalSafeTrailingStop({
-          symbol: position.symbol,
-          direction: dir,
-          mark,
-          distance: dist,
-          existingSl: liveSl,
-        });
-        const candN = Number(candidate);
-        if (!Number.isFinite(candN)) continue;
-        const curSl = liveSl != null ? Number(liveSl) : NaN;
-        const improves =
-          !Number.isFinite(curSl) ||
-          (dir === "BUY"
-            ? d(candidate).gt(d(curSl))
-            : d(candidate).lt(d(curSl)));
-        const legalGap = Math.abs(mark - candN) + 1e-9 >= minD - 1e-9;
-        if (!improves || !legalGap) continue;
-        try {
-          const after = await this.modifySlTp(
-            position.organizationId,
-            "system",
-            position.id,
-            { stopLoss: candidate },
-            correlationId,
-            { silent: !firstArm },
-          );
-          const afterSl =
-            after?.stopLoss != null ? String(after.stopLoss) : "";
-          const confirmed = afterSl.length > 0 ? afterSl : candidate;
-          await stampConfirmed(confirmed, "SL CHASE (stopLevel)", !firstArm);
-          pushed = true;
-          stillLagging = false;
-          break;
-        } catch (err) {
-          lastErr = err instanceof Error ? err.message : String(err);
-          console.warn(
-            `stopLevel chase ${position.id} dist=${dist}:`,
-            lastErr,
-          );
-        }
-      }
-    }
-
-    if (pushed && !stillLagging) {
-      this.chaseFailNotifyAt.delete(position.id);
-    } else if (lastErr && stillLagging) {
-      const now = Date.now();
-      const lastNotify = this.chaseFailNotifyAt.get(position.id) ?? 0;
-      if (now - lastNotify >= PositionsService.CHASE_FAIL_NOTIFY_MS) {
-        this.chaseFailNotifyAt.set(position.id, now);
-        await this.notifications.create({
-          organizationId: position.organizationId,
-          userId: null,
-          title: "SL CHASE FAILED — soft trail armed",
-          body: `${position.symbol}: ${lastErr}. App will market-close on ${trailDist} retrace from peak.`,
-          severity: "CRITICAL",
-        });
-      }
-    }
-
-    // 4) Soft app trail exit — ONLY when Capital chart SL is still lagging.
-    // If broker trail is tight, do not market-close on a 3-pip wiggle.
-    const softDist = Math.max(trailDist, pip * 3);
+    // Soft exit only if Capital SL will not follow (chart frozen)
+    const softDist = Math.max(softPips, pip * 3);
     const retrace = peak - favNow;
     if (
       stillLagging &&
@@ -1146,7 +1061,7 @@ export class PositionsService {
           organizationId: position.organizationId,
           userId: null,
           title: "SOFT TRAIL EXIT",
-          body: `${position.symbol} ${dir}: peak +${peak.toFixed(3)} retraced ${retrace.toFixed(3)} ≥ ${softDist.toFixed(3)} — closing (Capital SL lagging=${stillLagging})`,
+          body: `${position.symbol}: Capital SL frozen — close on ${retrace.toFixed(3)} retrace`,
           severity: "WARNING",
         });
         await this.close(
@@ -1157,22 +1072,12 @@ export class PositionsService {
           correlationId,
         );
         this.peakFavorable.delete(position.id);
-        this.nativeTrailArmed.delete(position.id);
         this.chaseFailNotifyAt.delete(position.id);
       } catch (closeErr) {
         console.warn(
           `soft trail exit ${position.id}:`,
           closeErr instanceof Error ? closeErr.message : closeErr,
         );
-        await this.notifications.create({
-          organizationId: position.organizationId,
-          userId: null,
-          title: "SOFT TRAIL EXIT FAILED",
-          body: `${position.symbol}: ${
-            closeErr instanceof Error ? closeErr.message : String(closeErr)
-          }`,
-          severity: "CRITICAL",
-        });
       } finally {
         this.softExitBusy.delete(position.id);
       }
