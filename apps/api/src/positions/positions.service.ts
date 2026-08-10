@@ -849,40 +849,58 @@ export class PositionsService {
           }
         }
 
+        // Money BE threshold (£0.05) — used for BE + to unlock Capital-safe trail
+        // even before true BE SL is legal (GOLD needs ~0.50 price move).
+        let moneyMode = false;
+        let moneyTrigger = Number(position.breakEvenActivation ?? 0.05);
+        if (position.strategyId) {
+          const st = await this.prisma.strategy.findFirst({
+            where: { id: position.strategyId },
+            select: { mode: true, configurationJson: true },
+          });
+          const cfg = (st?.configurationJson ?? {}) as {
+            breakEvenMoneyMode?: boolean;
+            breakEvenActivationMoney?: number;
+            exitVersion?: string;
+          };
+          const auto = st?.mode
+            ? modeAutoExit(st.mode as StrategyMode)
+            : null;
+          moneyMode =
+            cfg.breakEvenMoneyMode === true ||
+            (typeof auto?.breakEvenActivationMoney === "number" &&
+              auto.breakEvenActivationMoney > 0) ||
+            st?.mode === StrategyMode.SCALPING ||
+            cfg.exitVersion === "SCALP";
+          if (
+            typeof auto?.breakEvenActivationMoney === "number" &&
+            auto.breakEvenActivationMoney > 0
+          ) {
+            moneyTrigger = auto.breakEvenActivationMoney;
+          } else if (
+            typeof cfg.breakEvenActivationMoney === "number" &&
+            cfg.breakEvenActivationMoney > 0
+          ) {
+            moneyTrigger = cfg.breakEvenActivationMoney;
+          }
+        }
+        const moneyHit =
+          moneyMode &&
+          Number.isFinite(moneyPnl) &&
+          Number.isFinite(moneyTrigger) &&
+          moneyPnl >= moneyTrigger;
+
         if (
           position.breakEvenEnabled &&
           !position.breakEvenActivatedAt &&
           position.breakEvenActivation != null
         ) {
           const activation = Number(position.breakEvenActivation);
-          let hit = false;
-          if (Number.isFinite(activation)) {
-            // SCALPING money BE: activation is £/account currency (e.g. 0.05)
-            let moneyMode = false;
-            if (position.strategyId) {
-              const st = await this.prisma.strategy.findFirst({
-                where: { id: position.strategyId },
-                select: { mode: true, configurationJson: true },
-              });
-              const cfg = (st?.configurationJson ?? {}) as {
-                breakEvenMoneyMode?: boolean;
-                breakEvenActivationMoney?: number;
-                exitVersion?: string;
-              };
-              const auto = st?.mode
-                ? modeAutoExit(st.mode as StrategyMode)
-                : null;
-              moneyMode =
-                cfg.breakEvenMoneyMode === true ||
-                (typeof auto?.breakEvenActivationMoney === "number" &&
-                  auto.breakEvenActivationMoney > 0) ||
-                st?.mode === StrategyMode.SCALPING ||
-                cfg.exitVersion === "SCALP";
-            }
-            hit = moneyMode
+          const hit = Number.isFinite(activation)
+            ? moneyMode
               ? moneyPnl >= activation
-              : favorable >= activation;
-          }
+              : favorable >= activation
+            : false;
           if (hit) {
             await this.activateBreakEven(
               position.organizationId,
@@ -951,15 +969,19 @@ export class PositionsService {
             ) {
               armThreshold = 0;
             }
-            // SCALPING: trail only AFTER BE locks; then chase immediately (3 pips)
+            // SCALPING: start Capital-safe trail after £ money trigger OR true BE.
+            // True BE on GOLD needs ~0.50 price move — don't block trail until then.
             if (
               strategy?.mode === StrategyMode.SCALPING &&
               auto?.breakEvenEnabled !== false
             ) {
-              if (!fresh.breakEvenActivatedAt && !fresh.trailingActivatedAt) {
+              if (
+                !fresh.breakEvenActivatedAt &&
+                !fresh.trailingActivatedAt &&
+                !moneyHit
+              ) {
                 continue;
               }
-              // After BE — start trail right away (distance floored for Capital)
               armThreshold = 0;
             }
           }
