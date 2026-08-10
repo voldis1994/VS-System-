@@ -58,9 +58,9 @@ describe("resolveScalpTrailDistance", () => {
     expect(trail).toBeCloseTo(0.03, 8);
   });
 
-  it("US100 3-pip trail is 3 index points", () => {
+  it("US100 3-pip trail is 0.3 (pip=0.1)", () => {
     const trail = resolveScalpTrailDistance("US100", 20000, 3);
-    expect(trail).toBeCloseTo(3, 8);
+    expect(trail).toBeCloseTo(0.3, 8);
   });
 });
 
