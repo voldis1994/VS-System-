@@ -12,7 +12,7 @@ describe("mode-auto-exit", () => {
     const e = modeAutoExit(StrategyMode.SCALPING)!;
     expect(e.trailingEnabled).toBe(true);
     expect(e.takeProfitEnabled).toBe(false);
-    expect(e.trailArmImmediate).toBe(false);
+    expect(e.trailArmImmediate).toBe(true);
     expect(e.breakEvenActivationMoney).toBe(0.05);
     expect(e.trailingDistancePips).toBe(3);
     expect(e.priceOffsetMode).toBe(false);
