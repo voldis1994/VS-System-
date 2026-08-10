@@ -6,6 +6,10 @@ import {
   ErrorCodes,
   ModifySlTpSchema,
   PartialCloseSchema,
+  modeAutoExit,
+  StrategyMode,
+  isTenSecondScalpingMode,
+  decideScalpSoftTrailArm,
 } from "@nexus/domain";
 import {
   d,
@@ -32,7 +36,6 @@ import {
   scalpSoftExitHit,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
-import { modeAutoExit, StrategyMode } from "@nexus/domain";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -912,6 +915,17 @@ export class PositionsService {
     void brokerStopDistance;
 
     const firstArm = !position.trailingActivatedAt;
+    // Hard gate: never stamp soft-trail armed without £0.05 (trailArmImmediate cannot bypass)
+    if (
+      firstArm &&
+      !(
+        Number.isFinite(moneyPnl) &&
+        moneyPnl >= PositionsService.SCALP_MONEY_ARM
+      )
+    ) {
+      return;
+    }
+
     const prevPeak = this.peakFavorable.get(position.id);
     const peak = updateScalpSoftPeakPrice(dir, prevPeak, mark);
     const oldPeak = prevPeak;
@@ -1208,14 +1222,16 @@ export class PositionsService {
           });
         }
 
-        // Heal SCALPING flags — place() sends trailingEnabled:false (native delay);
-        // post-fill update can miss, leaving BE/trail dead forever.
+        // Heal 10s SCALPING flags only (soft trail distance). Other TFs untouched.
         if (position.strategyId) {
           const stHeal = await this.prisma.strategy.findFirst({
             where: { id: position.strategyId },
-            select: { mode: true },
+            select: { mode: true, configurationJson: true },
           });
-          if (stHeal?.mode === StrategyMode.SCALPING) {
+          const healCfg = (stHeal?.configurationJson ?? {}) as {
+            timeframe?: string;
+          };
+          if (isTenSecondScalpingMode(stHeal?.mode, healCfg)) {
             const autoHeal = modeAutoExit(StrategyMode.SCALPING)!;
             const needTrail =
               !position.trailingEnabled || position.trailingDistance == null;
@@ -1247,6 +1263,7 @@ export class PositionsService {
                     ? {
                         trailingEnabled: true,
                         trailingDistance: trailDist.toFixed(8),
+                        // NEVER stamp trailingActivatedAt here — £0.05 only
                       }
                     : {}),
                 },
@@ -1270,34 +1287,39 @@ export class PositionsService {
 
         // ═══════════════════════════════════════════════════════════
         // 10s SCALPING ONLY: software 0.3-pip soft trail after £0.05.
-        // Manual / other modes / other TFs never enter this path.
+        // Explicit timeframe check — other SCALPING TFs do not enter.
+        // trailArmImmediate cannot arm this path.
         // ═══════════════════════════════════════════════════════════
         {
-          let isClassicScalping = false;
+          let mode: string | null = null;
+          let timeframe: string | undefined;
           if (position.strategyId) {
             const stTrail = await this.prisma.strategy.findFirst({
               where: { id: position.strategyId },
-              select: { mode: true },
+              select: { mode: true, configurationJson: true },
             });
-            isClassicScalping = stTrail?.mode === StrategyMode.SCALPING;
+            mode = stTrail?.mode ?? null;
+            timeframe = (stTrail?.configurationJson as { timeframe?: string } | null)
+              ?.timeframe;
           }
-          if (isClassicScalping) {
-            const profitHit =
-              Number.isFinite(moneyPnl) &&
-              moneyPnl >= PositionsService.SCALP_MONEY_ARM;
-            const alreadyArmed = position.trailingActivatedAt != null;
-            if (profitHit || alreadyArmed) {
-              await this.chaseScalpTrailFromMoneyHit({
-                position,
-                mark,
-                entry,
-                dir,
-                moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
-                correlationId,
-                brokerStopLoss,
-              });
-              continue; // do not run Capital SL chase for SCALPING
-            }
+          const decision = decideScalpSoftTrailArm({
+            mode,
+            timeframe,
+            moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
+            softTrailActivatedAt: position.trailingActivatedAt,
+            moneyArm: PositionsService.SCALP_MONEY_ARM,
+          });
+          if (decision.run) {
+            await this.chaseScalpTrailFromMoneyHit({
+              position,
+              mark,
+              entry,
+              dir,
+              moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
+              correlationId,
+              brokerStopLoss,
+            });
+            continue; // do not run Capital SL chase for 10s SCALPING
           }
         }
 
@@ -1513,16 +1535,19 @@ export class PositionsService {
         let fresh = await this.get(position.organizationId, position.id);
         if (fresh.status === "CLOSED") continue;
 
-        // Force SCALPING trail on even if flags were lost
+        // Force 10s SCALPING trail flags (enabled/distance only — never ActivatedAt)
         if (
           (!fresh.trailingEnabled || fresh.trailingDistance == null) &&
           fresh.strategyId
         ) {
           const stForce = await this.prisma.strategy.findFirst({
             where: { id: fresh.strategyId },
-            select: { mode: true },
+            select: { mode: true, configurationJson: true },
           });
-          if (stForce?.mode === StrategyMode.SCALPING) {
+          const forceCfg = (stForce?.configurationJson ?? {}) as {
+            timeframe?: string;
+          };
+          if (isTenSecondScalpingMode(stForce?.mode, forceCfg)) {
             const autoF = modeAutoExit(StrategyMode.SCALPING)!;
             const td = scalpSoftTrailDistancePrice(
               position.symbol,
@@ -1538,8 +1563,7 @@ export class PositionsService {
           }
         }
 
-        // SCALPING / trail-enabled: when price is in PLUS, SL MUST chase.
-        // Arm immediately on any favorable tick (not after BE, not after 0.50 move).
+        // 10s SCALPING: enable flags in profit, but do NOT activate soft trail here
         if (
           !fresh.trailingEnabled &&
           inProfit &&
@@ -1547,9 +1571,10 @@ export class PositionsService {
         ) {
           const stP = await this.prisma.strategy.findFirst({
             where: { id: fresh.strategyId },
-            select: { mode: true },
+            select: { mode: true, configurationJson: true },
           });
-          if (stP?.mode === StrategyMode.SCALPING) {
+          const pCfg = (stP?.configurationJson ?? {}) as { timeframe?: string };
+          if (isTenSecondScalpingMode(stP?.mode, pCfg)) {
             const autoP = modeAutoExit(StrategyMode.SCALPING)!;
             const td = scalpSoftTrailDistancePrice(
               position.symbol,
@@ -1569,7 +1594,6 @@ export class PositionsService {
           let distance = String(fresh.trailingDistance);
           // Arm from user pips — never multiply floored broker distance (that made 1-pip start need ~8–18+ pips)
           let armThreshold = Number(distance);
-          let isScalping = false;
           if (fresh.strategyId) {
             const strategy = await this.prisma.strategy.findFirst({
               where: { id: fresh.strategyId },
@@ -1586,10 +1610,8 @@ export class PositionsService {
             const auto = strategy?.mode
               ? modeAutoExit(strategy.mode as StrategyMode)
               : null;
-            isScalping = strategy?.mode === StrategyMode.SCALPING;
-            // 10s SCALPING exit is software soft trail (chaseScalpTrailFromMoneyHit).
-            // Never Capital-chase SL with min-stop floor for this mode.
-            if (isScalping) continue;
+            // 10s SCALPING exit is software soft trail only — skip Capital chase
+            if (isTenSecondScalpingMode(strategy?.mode, cfg)) continue;
             const priceOffset = cfg.priceOffsetMode === true;
             const trailPips = Number(
               cfg.trailingDistancePips ?? auto?.trailingDistancePips ?? 3,
@@ -1617,13 +1639,8 @@ export class PositionsService {
               armThreshold = 0;
             } else if (
               auto?.trailArmImmediate === true &&
-              cfg.trailArmImmediate !== false &&
-              !isScalping
+              cfg.trailArmImmediate !== false
             ) {
-              armThreshold = 0;
-            }
-            // SCALPING: arm as soon as price is in plus (favorable > 0 / money > 0)
-            if (isScalping) {
               armThreshold = 0;
             }
           }
