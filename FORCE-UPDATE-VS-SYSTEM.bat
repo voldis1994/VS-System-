@@ -104,6 +104,7 @@ echo   2^) Telefonā: Safari refresh / clear cache uz /client
 echo   3^) SAVE → START
 echo.
 echo   Konti / DB: UPDATE NEAIZKAR Docker volume.
+echo   Ja konti pazud: palaid RECOVER-ACCOUNTS.bat
 echo   Backup: BACKUP-DB.bat   Veca DB: FIND-OLD-DB.bat
 echo.
 echo   Ja commit joprojam vecs — tu esi nepareizaja mapē

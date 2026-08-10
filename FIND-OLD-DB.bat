@@ -36,7 +36,10 @@ if errorlevel 1 (
 )
 
 echo.
-echo Ja konti pazuda pec git clone jaunaja mape:
+echo VIENKARSI: palaid RECOVER-ACCOUNTS.bat
+echo   ^(automātiski atrod veco volume un ieliek atpakaļ^)
+echo.
+echo Manuāli:
 echo   1^) STOP-VS-SYSTEM.bat
 echo   2^) Atrodi VECU volume no saraksta augša
 echo   3^) Palaid ^(aizvieto OLD_VOLUME^):

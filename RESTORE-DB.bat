@@ -27,9 +27,9 @@ if not exist "backups" (
 
 echo Pieejamie backupi:
 echo.
-dir /b /o-d "backups\vs-system-db-*.sql" 2>nul
+dir /b /o-d "backups\*.sql" 2>nul
 if errorlevel 1 (
-  echo ERROR: nav neviena vs-system-db-*.sql
+  echo ERROR: nav neviena backups\*.sql
   pause
   exit /b 1
 )

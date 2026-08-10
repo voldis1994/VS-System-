@@ -221,9 +221,10 @@ echo.
 echo   Login: owner@nexus.pro / NexusOwner123!
 echo   PIN:   123456
 echo.
-echo   Kontu backup:  BACKUP-DB.bat   ^(dari regulari!^)
-echo   Kontu restore: RESTORE-DB.bat
-echo   Veca DB:       FIND-OLD-DB.bat
+echo   Konti pazuda?:  RECOVER-ACCOUNTS.bat
+echo   Kontu backup:   BACKUP-DB.bat
+echo   Kontu restore:  RESTORE-DB.bat
+echo   Veca DB:        FIND-OLD-DB.bat
 echo.
 echo   Apturet:  STOP-VS-SYSTEM.bat
 echo   Update:   UPDATE-VS-SYSTEM.bat
