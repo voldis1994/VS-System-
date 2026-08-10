@@ -511,6 +511,8 @@ export default function StrategiesPage() {
           Katram kontam <strong className="text-white">savs bots</strong> — savs{" "}
           <strong className="text-white">epic</strong>, režīms, lots. SCALPING / EMA 1/3 — exit AUTO
           (bez TP/Trail picker). Mode un tirgu vari mainīt jebkurā brīdī.
+          <strong className="text-white"> One trade only:</strong> kamēr kontā ir atvērts treids,
+          jauni orderi netiek sūtīti (pēc close — nākamais signāls).
           BOSS un Guntis var darboties <strong className="text-white">vienlaikus ar dažādiem</strong>{" "}
           iestatījumiem; viens otru nebloķē.
         </p>
