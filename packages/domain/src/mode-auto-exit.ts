@@ -33,9 +33,9 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** 10s SCALPING — want BE at +£0.05 floating PnL, then trail.
- * Capital GOLD: BE SL cannot stick until mark clears ~0.50 min-stop from
- * the BE level (entry+1pip). Money trigger arms intent; placement defers. */
+/** 10s SCALPING — £0.05 floating PnL → SL follows price (Capital trail).
+ * True BE lock at entry needs Capital min-stop room (~0.50 GOLD); trail
+ * does NOT wait for that — it arms at £0.05. */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
