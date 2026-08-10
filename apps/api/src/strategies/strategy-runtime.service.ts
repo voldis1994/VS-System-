@@ -886,19 +886,14 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           beOffDist = pip;
           trailDist = 0;
         } else if (isClassicScalping || timeframe === "10s") {
-          if (isClassicScalping) {
-            beActDist = resolveScalpDistance(
-              brokerSymbol,
-              entry,
-              beActivationPips,
-            );
-            beOffDist = Math.max(pip * Math.max(beOffsetPips, 1), pip);
-            trailDist = resolveScalpDistance(brokerSymbol, entry, trailPips);
-          } else {
-            beActDist = Math.max(beActivationPips, pip * 0.1);
-            beOffDist = Math.max(beOffsetPips, pip);
-            trailDist = Math.max(trailPips, minDist);
-          }
+          // Always pip-based for 10s / SCALPING — never raw priceOffset of 10
+          beActDist = resolveScalpDistance(
+            brokerSymbol,
+            entry,
+            beActivationPips,
+          );
+          beOffDist = Math.max(pip * Math.max(beOffsetPips, 1), pip);
+          trailDist = resolveScalpDistance(brokerSymbol, entry, trailPips);
         } else {
           beActDist =
             beActivationPips > 0 && beActivationPips < 1

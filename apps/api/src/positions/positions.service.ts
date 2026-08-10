@@ -17,8 +17,10 @@ import {
   clampCloseVolume,
   parseVolume,
   newId,
+  resolveScalpDistance,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
+import { modeAutoExit, StrategyMode } from "@nexus/domain";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -787,13 +789,13 @@ export class PositionsService {
         if (fresh.status === "CLOSED") continue;
 
         if (fresh.trailingEnabled && fresh.trailingDistance != null) {
-          const distance = String(fresh.trailingDistance);
+          let distance = String(fresh.trailingDistance);
           // Arm from user pips — never multiply floored broker distance (that made 1-pip start need ~8–18+ pips)
           let armThreshold = Number(distance);
           if (fresh.strategyId) {
             const strategy = await this.prisma.strategy.findFirst({
               where: { id: fresh.strategyId },
-              select: { configurationJson: true },
+              select: { mode: true, configurationJson: true },
             });
             const cfg = (strategy?.configurationJson ?? {}) as {
               trailingActivationPips?: number;
@@ -801,18 +803,39 @@ export class PositionsService {
               priceOffsetMode?: boolean;
               timeframe?: string;
               trailArmImmediate?: boolean;
+              exitVersion?: string;
             };
+            const auto = strategy?.mode
+              ? modeAutoExit(strategy.mode as StrategyMode)
+              : null;
+            const priceOffset = cfg.priceOffsetMode === true;
+            const trailPips = Number(
+              cfg.trailingDistancePips ?? auto?.trailingDistancePips ?? 10,
+            );
+            // Heal poisoned trail distance (10s was stored as price 10 instead of pips)
+            if (!priceOffset && Number.isFinite(trailPips) && trailPips > 0) {
+              const entry = Number(fresh.averageEntry);
+              if (Number.isFinite(entry) && entry > 0) {
+                distance = resolveScalpDistance(
+                  position.symbol,
+                  entry,
+                  trailPips,
+                ).toFixed(8);
+              }
+            }
             armThreshold = trailingArmThreshold(position.symbol, {
               trailingDistance: distance,
               trailingActivationPips: cfg.trailingActivationPips,
-              trailingDistancePips: cfg.trailingDistancePips,
-              priceOffsetMode:
-                cfg.priceOffsetMode === true ||
-                cfg.timeframe === "10s" ||
-                cfg.trailArmImmediate === true,
+              trailingDistancePips: cfg.trailingDistancePips ?? auto?.trailingDistancePips,
+              priceOffsetMode: priceOffset,
             });
             // Immediate-arm modes (SCALPING): treat as already past threshold
-            if (cfg.trailArmImmediate === true) {
+            if (
+              cfg.trailArmImmediate === true ||
+              auto?.trailArmImmediate === true ||
+              cfg.exitVersion === "SCALP" ||
+              strategy?.mode === StrategyMode.SCALPING
+            ) {
               armThreshold = 0;
             }
           }

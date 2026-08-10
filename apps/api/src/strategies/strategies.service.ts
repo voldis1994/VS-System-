@@ -13,7 +13,7 @@ import {
   tfMinutes,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpDistance } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -818,7 +818,7 @@ export class StrategiesService {
             trailingDistancePips: auto.trailingDistancePips,
             trailingActivationPips: auto.trailingActivationPips,
             trailArmImmediate: auto.trailArmImmediate,
-            priceOffsetMode: auto.priceOffsetMode,
+            priceOffsetMode: false,
             atrStopMult: auto.atrStopMult,
             atrTpMult: auto.atrTpMult,
             stopDistancePips: auto.stopDistancePips,
@@ -826,6 +826,8 @@ export class StrategiesService {
             cooldownSeconds: 0,
             exitVersion: auto.exitVersion,
             timeframe: modePreferredTimeframe(input.mode),
+            trailingEnabled: auto.trailingEnabled,
+            trailArmImmediate: auto.trailArmImmediate,
           }
         : {}),
       autoAggressive: false,
@@ -1038,12 +1040,10 @@ export class StrategiesService {
     const beOffPips = Number(config.breakEvenOffsetPips ?? 1);
     const trailPips = Number(config.trailingDistancePips ?? 15);
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
-    const priceOffset =
-      config.priceOffsetMode === true ||
-      config.timeframe === "10s" ||
-      (beActPips > 0 && beActPips < 1) ||
-      (trailPips > 0 && trailPips < 1);
-    const trailImmediate = config.trailArmImmediate === true;
+    // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
+    const priceOffset = config.priceOffsetMode === true;
+    const trailImmediate =
+      config.trailArmImmediate === true || config.exitVersion === "SCALP";
 
     for (const pos of open) {
       // Never overwrite manual trades that belong to another strategy
@@ -1058,9 +1058,10 @@ export class StrategiesService {
       const beOff = priceOffset
         ? Math.max(beOffPips, pip)
         : Math.max(pip * Math.max(beOffPips, 0), pip);
+      // Pip-based trail (resolveScalpDistance) — 10 pips ≠ price 10
       const trail = priceOffset
         ? Math.max(trailPips, minDist)
-        : Math.max(pip * Math.max(trailPips, 0.01), minDist);
+        : resolveScalpDistance(pos.symbol, entry, trailPips);
 
       await this.prisma.position.update({
         where: { id: pos.id },
