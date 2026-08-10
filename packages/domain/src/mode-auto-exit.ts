@@ -28,22 +28,23 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** SCALP RAZOR — tight trail that arms only after price is in profit (not at entry). */
+/** 10s SCALPING — BE on first tick into profit; trail chases after +. */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
-  /** Lock BE after ~5 pips in favor */
-  breakEvenActivationPips: 5,
+  /** BE the moment price is in profit (1 pip) — NOT 5 / NOT trail soft-floor */
+  breakEvenActivationPips: 1,
+  /** Lock SL at entry + 1 pip */
   breakEvenOffsetPips: 1,
   trailingEnabled: true,
-  /** Tight chase — 6 pips (GOLD ~0.12–0.15 soft floor; US100 ~0.6) */
-  trailingDistancePips: 6,
-  /** Arm trail only once favorable ≥ 1 pip (no trailing from entry / at a loss) */
+  /** Normal 10s chase distance (pip count → soft trail floor at runtime) */
+  trailingDistancePips: 8,
+  /** Start trailing once already in plus (same bar as BE) */
   trailingActivationPips: 1,
   trailArmImmediate: false,
   atrStopMult: 0.45,
   atrTpMult: 1.0,
-  /** Wider initial SL — trail is the real exit after +move */
+  /** Initial protective SL until BE/trail take over */
   stopDistancePips: 18,
   cooldownSeconds: 0,
   exitVersion: "SCALP",

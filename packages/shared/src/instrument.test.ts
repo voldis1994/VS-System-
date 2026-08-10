@@ -5,6 +5,7 @@ import {
   instrumentPipSize,
   isFxLikeSymbol,
   minProtectiveDistance,
+  resolveScalpActivationDistance,
   resolveScalpDistance,
   resolveScalpTrailDistance,
   trailingArmThreshold,
@@ -39,6 +40,15 @@ describe("resolveScalpDistance", () => {
   it("floors GOLD initial SL to Capital min protective distance", () => {
     const d = resolveScalpDistance("GOLD", 4200, 10);
     expect(d).toBeGreaterThanOrEqual(minProtectiveDistance("GOLD", 4200));
+  });
+});
+
+describe("resolveScalpActivationDistance", () => {
+  it("GOLD 1-pip BE is 0.01 — not trail soft-floor 0.12", () => {
+    expect(resolveScalpActivationDistance("GOLD", 1)).toBeCloseTo(0.01, 8);
+    expect(resolveScalpActivationDistance("GOLD", 1)).toBeLessThan(
+      resolveScalpTrailDistance("GOLD", 4200, 1),
+    );
   });
 });
 

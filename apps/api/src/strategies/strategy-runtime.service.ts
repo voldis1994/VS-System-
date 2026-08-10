@@ -19,6 +19,7 @@ import {
   buildEqualMultiTpPlan,
   resolveScalpDistance,
   resolveScalpTrailDistance,
+  resolveScalpActivationDistance,
   isMarginOrFundsError,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -879,18 +880,32 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 );
         }
 
-        const beActivationPips = Number(
-          config.breakEvenActivationPips ?? scalpAuto?.breakEvenActivationPips ?? 10,
-        );
-        const beOffsetPips = Number(
-          config.breakEvenOffsetPips ?? scalpAuto?.breakEvenOffsetPips ?? 1,
-        );
-        const trailPips = Number(
-          config.trailingDistancePips ?? scalpAuto?.trailingDistancePips ?? 15,
-        );
-        const trailActPips = Number(
-          config.trailingActivationPips ?? scalpAuto?.trailingActivationPips ?? trailPips,
-        );
+        const beActivationPips = isClassicScalping
+          ? Number(scalpAuto?.breakEvenActivationPips ?? 1)
+          : Number(
+              config.breakEvenActivationPips ??
+                scalpAuto?.breakEvenActivationPips ??
+                10,
+            );
+        const beOffsetPips = isClassicScalping
+          ? Number(scalpAuto?.breakEvenOffsetPips ?? 1)
+          : Number(
+              config.breakEvenOffsetPips ?? scalpAuto?.breakEvenOffsetPips ?? 1,
+            );
+        const trailPips = isClassicScalping
+          ? Number(scalpAuto?.trailingDistancePips ?? 8)
+          : Number(
+              config.trailingDistancePips ??
+                scalpAuto?.trailingDistancePips ??
+                15,
+            );
+        const trailActPips = isClassicScalping
+          ? Number(scalpAuto?.trailingActivationPips ?? 1)
+          : Number(
+              config.trailingActivationPips ??
+                scalpAuto?.trailingActivationPips ??
+                trailPips,
+            );
         let beActDist: number;
         let beOffDist: number;
         let trailDist: number;
@@ -909,13 +924,15 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           beOffDist = pip;
           trailDist = 0;
         } else if (isClassicScalping || timeframe === "10s") {
-          // Soft trail/BE floors — initial SL still uses resolveScalpDistance (Capital min)
-          beActDist = resolveScalpTrailDistance(
+          // BE/trail ARM = pure pips (first +). Trail DISTANCE uses soft floor.
+          beActDist = resolveScalpActivationDistance(
             brokerSymbol,
-            entry,
             beActivationPips,
           );
-          beOffDist = Math.max(pip * Math.max(beOffsetPips, 1), pip);
+          beOffDist = resolveScalpActivationDistance(
+            brokerSymbol,
+            Math.max(beOffsetPips, 0),
+          );
           trailDist = resolveScalpTrailDistance(
             brokerSymbol,
             entry,

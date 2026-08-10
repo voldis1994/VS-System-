@@ -139,8 +139,24 @@ export function resolveScalpDistance(
 }
 
 /**
- * Tight SCALPING trail / BE distance — pip counts with soft floor.
- * Do NOT use initial Capital min-stop (50 GOLD pts) or trail feels dead.
+ * Activation threshold in **price** for BE / trail arm (SCALPING).
+ * Pure pip×count — NEVER apply trail soft-floor or Capital min-stop
+ * (those made "1 pip BE" wait ~12 GOLD pts).
+ */
+export function resolveScalpActivationDistance(
+  symbol: string,
+  configuredPips: number,
+): number {
+  const pip = instrumentPipSize(symbol);
+  const n = Number(configuredPips);
+  const pips = Number.isFinite(n) && n > 0 ? n : 1;
+  if (pips > 0 && pips < 1) return Math.max(pips, pip * 0.05);
+  return Math.max(pip * pips, pip * 0.05);
+}
+
+/**
+ * Tight SCALPING trail / BE *offset distance* — pip counts with soft floor.
+ * Do NOT use for BE/trail *activation* — use resolveScalpActivationDistance.
  */
 export function resolveScalpTrailDistance(
   symbol: string,

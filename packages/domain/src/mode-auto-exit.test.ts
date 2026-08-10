@@ -8,15 +8,15 @@ import {
 } from "./index";
 
 describe("mode-auto-exit", () => {
-  it("SCALPING RAZOR trails from profit, not entry", () => {
+  it("SCALPING: BE on first +pip, trail chases from profit", () => {
     const e = modeAutoExit(StrategyMode.SCALPING)!;
     expect(e.trailingEnabled).toBe(true);
     expect(e.takeProfitEnabled).toBe(false);
     expect(e.trailArmImmediate).toBe(false);
-    expect(e.trailingActivationPips).toBeGreaterThanOrEqual(1);
+    expect(e.breakEvenActivationPips).toBe(1);
+    expect(e.trailingActivationPips).toBe(1);
+    expect(e.trailingDistancePips).toBe(8);
     expect(e.priceOffsetMode).toBe(false);
-    expect(e.trailingDistancePips).toBe(6);
-    expect(e.breakEvenActivationPips).toBe(5);
     expect(e.stopDistancePips).toBeGreaterThanOrEqual(15);
     expect(modeHidesExitPickers(StrategyMode.SCALPING)).toBe(true);
   });

@@ -13,7 +13,7 @@ import {
   tfMinutes,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -179,6 +179,7 @@ export class StrategiesService {
         configurationJson,
         updated.id,
         assignedSymbols,
+        updated.mode,
       );
     }
 
@@ -877,6 +878,7 @@ export class StrategiesService {
         configuration,
         strategy.id,
         input.assignedSymbols,
+        strategy.mode,
       );
       return { action: "save", accountId: input.accountId, strategy };
     }
@@ -1009,6 +1011,7 @@ export class StrategiesService {
     config: Record<string, unknown>,
     strategyId: string,
     assignedSymbols?: string[],
+    strategyMode?: string,
   ) {
     const symbols = (assignedSymbols ?? []).flatMap((s) => {
       const u = s.toUpperCase();
@@ -1034,14 +1037,23 @@ export class StrategiesService {
     const beEnabled = Boolean(config.breakEvenEnabled);
     const trailEnabled = Boolean(config.trailingEnabled);
     const tpEnabled = config.takeProfitEnabled !== false;
-    const beActPips = Number(config.breakEvenActivationPips ?? 10);
-    const beOffPips = Number(config.breakEvenOffsetPips ?? 1);
-    const trailPips = Number(config.trailingDistancePips ?? 15);
+    // Live SCALPING profile wins over stale DB config (BE was stuck at 5 / soft-floor)
+    const auto = strategyMode ? modeAutoExit(strategyMode) : null;
+    const beActPips = Number(
+      auto?.breakEvenActivationPips ?? config.breakEvenActivationPips ?? 10,
+    );
+    const beOffPips = Number(
+      auto?.breakEvenOffsetPips ?? config.breakEvenOffsetPips ?? 1,
+    );
+    const trailPips = Number(
+      auto?.trailingDistancePips ?? config.trailingDistancePips ?? 15,
+    );
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
     // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
     const priceOffset = config.priceOffsetMode === true;
     // Arm at entry only when explicitly requested — SCALP default is from profit (+)
-    const trailImmediate = config.trailArmImmediate === true;
+    const trailImmediate =
+      config.trailArmImmediate === true || auto?.trailArmImmediate === true;
 
     for (const pos of open) {
       // Never overwrite manual trades that belong to another strategy
@@ -1050,13 +1062,14 @@ export class StrategiesService {
       const entry = Number(pos.averageEntry);
       const pip = instrumentPipSize(pos.symbol);
       const minDist = minProtectiveDistance(pos.symbol, entry);
+      // BE activation = pure pips (first +). Do NOT use trail soft-floor.
       const beAct = priceOffset
         ? Math.max(beActPips, pip * 0.1)
-        : Math.max(pip * Math.max(beActPips, 0.01), pip * 0.1);
+        : resolveScalpActivationDistance(pos.symbol, Math.max(beActPips, 1));
       const beOff = priceOffset
         ? Math.max(beOffPips, pip)
-        : Math.max(pip * Math.max(beOffPips, 0), pip);
-      // Pip-based tight trail (SCALP RAZOR) — soft floor, not Capital initial min-stop
+        : resolveScalpActivationDistance(pos.symbol, Math.max(beOffPips, 0));
+      // Trail chase distance — soft floor OK
       const trail = priceOffset
         ? Math.max(trailPips, minDist)
         : resolveScalpTrailDistance(pos.symbol, entry, trailPips);
