@@ -823,7 +823,7 @@ export default function ClientPortalPage() {
             className="mt-2 w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-2.5 font-mono text-[13px] outline-none focus:border-[#00f0ff]"
             inputMode="decimal"
             placeholder="Custom lot (piem. 0.13)"
-            value={LOTS.includes(lotSize as (typeof LOTS)[number]) ? "" : lotSize}
+            value={(LOTS as readonly string[]).includes(lotSize) ? "" : lotSize}
             onChange={(e) => {
               const v = e.target.value.trim().replace(",", ".");
               if (v === "" || /^\d*\.?\d*$/.test(v)) setLotSize(v || "0.01");
