@@ -1,6 +1,6 @@
 "use client";
 
-import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers, modeMinScore } from "@nexus/domain";
+import { StrategyMode, modePreferredTimeframe, modeAutoExit, modeHidesExitPickers } from "@nexus/domain";
 import { useEffect, useMemo, useState } from "react";
 import { deploymentHint, type DeploymentState } from "@/lib/strategy-status";
 import {
