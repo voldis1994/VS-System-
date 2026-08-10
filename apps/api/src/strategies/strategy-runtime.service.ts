@@ -32,7 +32,10 @@ import { NewsCalendarService } from "../market-data/news-calendar.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { evaluateMicro1mFive } from "./micro-1m";
-import { evaluateCandleBiasFive } from "./candle-bias";
+import {
+  evaluateCandleBiasFive,
+  directionAllowedAgainstCandles,
+} from "./candle-bias";
 import {
   computeIndicators,
   evaluateStrategyMode,
@@ -564,9 +567,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         ));
       if (!m1Source) m1Source = this.market.getCandleSource(brokerSymbol, "1m");
       const micro = evaluateMicro1mFive(m1candles);
-      // Strategy TF last 5 — mandatory: BUY≠bearish, SELL≠bullish
-      // For 10s we used 1m indicators/bias above; use m1candles for bias when timeframe===10s
-      const tfBias = timeframe === "10s" ? evaluateCandleBiasFive(m1candles) : evaluateCandleBiasFive(candles);
+      // Strategy TF last 5 — SCALPING: include live Close[0]; others: completed only
+      // 10s Capital = minute bars; still read the series the scalp engine trades on
+      const tfBias = isClassicScalping
+        ? evaluateCandleBiasFive(candles, { includeForming: true })
+        : timeframe === "10s"
+          ? evaluateCandleBiasFive(m1candles)
+          : evaluateCandleBiasFive(candles);
 
       lastStatus = {
         ...lastStatus,
@@ -589,7 +596,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         tfBias: tfBias.bias,
         tfBull: tfBias.bullCount,
         tfBear: tfBias.bearCount,
-        candleDirectionFilter: !(isEmaTickScalp || isClassicScalping),
+        candleDirectionFilter: isClassicScalping,
         tfNote:
           timeframe === "10s"
             ? "Capital has no true 10s OHLC — using 1m bars + live mid"
@@ -738,19 +745,56 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // Candle filter OFF — use engine signal as-is
-      const signal: "BUY" | "SELL" = scored.signal;
-      lastStatus = {
-        ...lastStatus,
-        signal,
-        gate: scored.gate,
-        candleDirectionFilter: false,
-        reason: "protective_gates_off",
-        buyScore: scored.buyScore,
-        sellScore: scored.sellScore,
-      };
-
-      // EMA anti-chop disabled (protective gates off)
+      // 10s SCALPING: never BUY vs sell/bear candles, never SELL vs buy/bull.
+      // Flat candles OK. No auto-flip — wait for candle-aligned signal.
+      let signal: "BUY" | "SELL" = scored.signal;
+      if (isClassicScalping) {
+        const tfDir = directionAllowedAgainstCandles(scored.signal, tfBias.bias);
+        const microBias =
+          micro.signal === "BUY"
+            ? ("bull" as const)
+            : micro.signal === "SELL"
+              ? ("bear" as const)
+              : ("flat" as const);
+        const microDir =
+          microBias === "flat"
+            ? { ok: true as const }
+            : directionAllowedAgainstCandles(scored.signal, microBias);
+        if (!tfDir.ok || !microDir.ok) {
+          const blocked = !tfDir.ok ? tfDir : microDir;
+          lastStatus = {
+            ...lastStatus,
+            signal: "HOLD",
+            skip: blocked.skip ?? "candle_filter",
+            reason: blocked.reason ?? "candle_direction_block",
+            candleDirectionFilter: true,
+            tfBias: tfBias.bias,
+            micro: micro.signal,
+            buyScore: scored.buyScore,
+            sellScore: scored.sellScore,
+          };
+          continue;
+        }
+        lastStatus = {
+          ...lastStatus,
+          signal,
+          gate: scored.gate,
+          candleDirectionFilter: true,
+          reason: "scalp_candle_dir_ok",
+          buyScore: scored.buyScore,
+          sellScore: scored.sellScore,
+        };
+      } else {
+        lastStatus = {
+          ...lastStatus,
+          signal,
+          gate: scored.gate,
+          candleDirectionFilter: false,
+          reason: "protective_gates_off",
+          buyScore: scored.buyScore,
+          sellScore: scored.sellScore,
+        };
+      }
 
       lastStatus = {
         ...lastStatus,

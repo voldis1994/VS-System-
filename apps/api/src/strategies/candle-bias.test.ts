@@ -50,6 +50,34 @@ describe("candle bias + direction filter", () => {
     expect(directionAllowedAgainstCandles("SELL", "flat").ok).toBe(true);
   });
 
+  it("includeForming counts live Close[0] in last-5 bias", () => {
+    // 4 completed red + forming green — without forming = bear; with forming may differ
+    const candles = [
+      bar(110, 109),
+      bar(109, 108),
+      bar(108, 107),
+      bar(107, 106),
+      bar(106, 105), // would be excluded as forming when includeForming=false and length>5
+      bar(105, 106.5), // Close[0] forming green
+    ];
+    const completed = evaluateCandleBiasFive(candles);
+    const withLive = evaluateCandleBiasFive(candles, { includeForming: true });
+    expect(completed.bias).toBe("bear");
+    expect(withLive.bearCount + withLive.bullCount).toBeGreaterThanOrEqual(4);
+    // Live series is last 5 including green Close[0]
+    expect(withLive.bullCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("10s scalp rule: BUY blocked when last candles bear", () => {
+    expect(directionAllowedAgainstCandles("BUY", "bear").ok).toBe(false);
+    expect(directionAllowedAgainstCandles("SELL", "bear").ok).toBe(true);
+  });
+
+  it("10s scalp rule: SELL blocked when last candles bull", () => {
+    expect(directionAllowedAgainstCandles("SELL", "bull").ok).toBe(false);
+    expect(directionAllowedAgainstCandles("BUY", "bull").ok).toBe(true);
+  });
+
   it("blocked BUY → opens SELL when candles bearish", () => {
     const r = resolveEntryWithCandleFlip("BUY", "bear", "bear");
     expect(r).toMatchObject({ signal: "SELL", flipped: true, from: "BUY" });

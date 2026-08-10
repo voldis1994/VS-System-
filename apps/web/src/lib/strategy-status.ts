@@ -56,8 +56,11 @@ export function deploymentHint(d: DeploymentState): string | null {
   ) {
     return "Multi TP → Single TP (lot < TP×0.01).";
   }
-  if (d.skip === "buy_vs_bearish" || d.skip === "sell_vs_bullish") {
-    return null;
+  if (d.skip === "buy_vs_bearish") {
+    return "SCALPING: BUY bloķēts — pēdējās sveces ir SELL/bear.";
+  }
+  if (d.skip === "sell_vs_bullish") {
+    return "SCALPING: SELL bloķēts — pēdējās sveces ir BUY/bull.";
   }
   if (d.gate === "flip_no_confluence") {
     return null;

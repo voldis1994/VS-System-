@@ -3,10 +3,16 @@ export type CandleLike = { open: unknown; high?: unknown; low?: unknown; close: 
 export type CandleBias = "bull" | "bear" | "flat";
 
 /**
- * Last 5 completed candles → bull / bear / flat (symmetric).
+ * Last 5 candles → bull / bear / flat (symmetric).
  * ≥3 green → bull; ≥3 red → bear; color-tie broken by net close.
+ *
+ * Default: completed bars only (drop forming Close[0]).
+ * `includeForming: true` — include live Close[0] (10s SCALPING direction filter).
  */
-export function evaluateCandleBiasFive(candles: CandleLike[]): {
+export function evaluateCandleBiasFive(
+  candles: CandleLike[],
+  opts?: { includeForming?: boolean },
+): {
   bias: CandleBias;
   bullCount: number;
   bearCount: number;
@@ -22,8 +28,11 @@ export function evaluateCandleBiasFive(candles: CandleLike[]): {
       gate: "candles_short",
     };
   }
-  const series =
-    candles.length > 5 ? candles.slice(0, -1).slice(-5) : candles.slice(-5);
+  const series = opts?.includeForming
+    ? candles.slice(-5)
+    : candles.length > 5
+      ? candles.slice(0, -1).slice(-5)
+      : candles.slice(-5);
   let bull = 0;
   let bear = 0;
   for (const c of series) {
