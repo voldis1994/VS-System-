@@ -175,7 +175,7 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
   const base = {
     useRiskPercent: false as const,
     volume: lot,
-    oneTradeOnly: false as const,
+    oneTradeOnly: true as const,
     closeOnlyNoFlip: false as const,
     autoAggressive: false as const,
     minScore: 0,

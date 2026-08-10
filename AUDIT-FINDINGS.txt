@@ -21,7 +21,7 @@ FIXED THIS PASS
 INTENTIONAL (operator request — NOT bugs)
 - Risk engine hard-OFF
 - Protective entry gates OFF (cooldown 0, minScore 0, news/session off)
-- Same-side stacking allowed (no oneTradeOnly)
+- oneTradeOnly ON — max 1 open position per account until flat (no order spam)
 
 STILL KNOWN / NOT CHANGED
 - Trail soft floor can sit under Capital min-stop (attach may warn; hard SL still set)

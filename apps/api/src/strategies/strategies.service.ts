@@ -147,7 +147,7 @@ export class StrategiesService {
         : {};
     const configurationJson = {
       ...prevConfig,
-      oneTradeOnly: false,
+      oneTradeOnly: true,
       closeOnlyNoFlip: prevConfig.closeOnlyNoFlip === true,
       useRiskPercent: false,
       cooldownSeconds: 0,
@@ -539,7 +539,7 @@ export class StrategiesService {
         typeof body.trailingActivationPips === "number"
           ? body.trailingActivationPips
           : 15,
-      oneTradeOnly: false,
+      oneTradeOnly: true,
       closeOnlyNoFlip: false,
       volume: body.volume ?? "0.1",
       startingEquity,
@@ -803,7 +803,7 @@ export class StrategiesService {
       ...cfgIn,
       useRiskPercent: false,
       volume: String(cfgIn.volume ?? "0.01"),
-      oneTradeOnly: false,
+      oneTradeOnly: true,
       closeOnlyNoFlip: false,
       newsFilterEnabled: false,
       sessionFilter: false,

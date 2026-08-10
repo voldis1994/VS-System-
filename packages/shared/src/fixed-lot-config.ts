@@ -26,8 +26,8 @@ export function normalizeFixedLotStrategyConfig(
     ...src,
     volume,
     useRiskPercent: false,
-    // Protective gates OFF for client/desk — operator owns lot & entries
-    oneTradeOnly: false,
+    // One trade only ON — place, then wait until flat (no order spam)
+    oneTradeOnly: true,
     closeOnlyNoFlip: false,
     newsFilterEnabled: false,
     sessionFilter: false,

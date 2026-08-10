@@ -347,14 +347,15 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const breakEvenEnabled = Boolean(config.breakEvenEnabled);
     const trailingEnabled = Boolean(config.trailingEnabled);
     const mode = strategy.mode as StrategyMode;
-    // Risk/delay gates OFF — ignore saved oneTradeOnly / cooldown
+    // Score/news/session gates stay OFF — but ONE TRADE ONLY is ON:
+    // place once; while any open trade on the account, do not spam more orders.
     const autoExit = modeAutoExit(mode);
     const cooldownMs = 0;
     const minScore = 0;
     const sessionFilter = false;
-    const oneTradeOnly = false;
-    // Allow BUY↔SELL flip by default (close opposite then open new)
-    const closeOnlyNoFlip = false;
+    const oneTradeOnly = true;
+    // Flip allowed: close opposite, then open new (still max 1 open)
+    const closeOnlyNoFlip = config.closeOnlyNoFlip === true;
     // Default OFF — aggressive EMA fallback was deadly on micro accounts
     const _autoAggressive = config.autoAggressive === true;
     void _autoAggressive;
@@ -369,7 +370,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     void config.sessionFilter;
     void config.newsFilterEnabled;
     void config.oneTradeOnly;
-    void config.closeOnlyNoFlip;
     void config.minScore;
     let lastStatus: Record<string, unknown> = {
       oneTradeOnly,
@@ -385,6 +385,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       candleDirectionFilter: false,
       midRangeFilter: false,
       protectiveGatesOff: true,
+      stackingOff: true,
     };
 
     for (const symbol of symbols) {
@@ -869,8 +870,31 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           };
           continue;
         }
-        // Fingerprint / same-signal / same-side / oneTradeOnly waits OFF
 
+        // Same fingerprint while still open → wait (do not re-fire every tick)
+        if (this.lastFingerprint.get(key) === fingerprint) {
+          const openSame = await this.prisma.position.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+              direction: signal,
+              OR: [{ symbol: brokerSymbol }, { symbol }],
+            },
+          });
+          lastStatus = {
+            ...lastStatus,
+            symbol: brokerSymbol,
+            signal,
+            skip: openSame > 0 ? "waiting_open_close" : "same_signal",
+            reason: openSame > 0 ? "same_side_open" : undefined,
+            openTrades: openSame > 0 ? openSame : undefined,
+            accountId,
+          };
+          continue;
+        }
+
+        // Account-wide open positions — oneTradeOnly = max 1 open on this account
         const openOnAccount = await this.prisma.position.findMany({
           where: {
             organizationId: strategy.organizationId,
@@ -881,6 +905,23 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const openOnSymbol = openOnAccount.filter(
           (p) => p.symbol === brokerSymbol || p.symbol === symbol,
         );
+        const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
+
+        const hasOtherSymbolOpen =
+          oneTradeOnly &&
+          openAnywhere.some(
+            (p) => p.symbol !== brokerSymbol && p.symbol !== symbol,
+          );
+        if (hasOtherSymbolOpen) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "waiting_open_close",
+            reason: "other_symbol_open",
+            openTrades: openAnywhere.length,
+            accountId,
+          };
+          continue;
+        }
 
         const opposite = openOnSymbol.filter((p) => p.direction !== signal);
         let blockedNakedClose = false;
@@ -908,9 +949,47 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               break;
             }
           }
+          if (blockedNakedClose) continue;
+          if (closeOnlyNoFlip) {
+            lastStatus = {
+              ...lastStatus,
+              skip: "closed_opposite_no_flip",
+              openTrades: openAnywhere.length,
+              accountId,
+            };
+            continue;
+          }
+          // Capital free-margin update after close lags — avoid instant RISK_CHECK
+          await new Promise((r) => setTimeout(r, 900));
         }
         // Never open a new side while a naked opposite trade cannot be closed
         if (blockedNakedClose) continue;
+
+        // Same-side already open → do NOT stack another order
+        const sameSide = openOnSymbol.filter((p) => p.direction === signal);
+        if (sameSide.length > 0) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "waiting_open_close",
+            reason: "same_side_open",
+            openTrades: openAnywhere.length,
+            positionId: sameSide[0]?.id,
+            accountId,
+          };
+          continue;
+        }
+
+        // oneTradeOnly: any remaining open on account blocks a new entry
+        if (oneTradeOnly && openAnywhere.length > 0 && opposite.length === 0) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "waiting_open_close",
+            reason: "account_has_open",
+            openTrades: openAnywhere.length,
+            accountId,
+          };
+          continue;
+        }
 
         const tick = this.market.getTick(brokerSymbol);
         const entry = Number(
