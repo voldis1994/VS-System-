@@ -102,12 +102,91 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     this.trailing = true;
     try {
       await this.manageExitProtections();
+      // EMA3 trail must chase live Close[0] every 1s (not wait for Close[1] bar)
+      await this.tickEma3TrailsLiveClose0();
     } catch (err) {
       this.log.warn(
         `Trail tick: ${err instanceof Error ? err.message : err}`,
       );
     } finally {
       this.trailing = false;
+    }
+  }
+
+  /**
+   * EMA_TICK_SCALP: move SL to EMA3 built from live Close[0] (forming mid),
+   * never from stale completed Close[1] alone.
+   */
+  private async tickEma3TrailsLiveClose0() {
+    const running = await this.prisma.strategy.findMany({
+      where: { status: "RUNNING", mode: StrategyMode.EMA_TICK_SCALP },
+    });
+    for (const strategy of running) {
+      const accountIds = (strategy.assignedAccountIds as string[]) ?? [];
+      const symbols = (strategy.assignedSymbols as string[]) ?? [];
+      if (!accountIds.length || !symbols.length) continue;
+      const config = (strategy.configurationJson ?? {}) as { timeframe?: string };
+      const timeframe =
+        config.timeframe ??
+        modePreferredTimeframe(StrategyMode.EMA_TICK_SCALP) ??
+        "10s";
+      const primaryAccountId = accountIds[0];
+      const actorId = strategy.updatedById ?? strategy.createdById ?? "system";
+      for (const symbol of symbols) {
+        const brokerSymbol = resolveCapitalEpic(symbol);
+        const tick =
+          this.market.getTick(brokerSymbol) ?? this.market.getTick(symbol);
+        if (!tick) continue;
+        const mid = (Number(tick.bid) + Number(tick.ask)) / 2;
+        if (!Number.isFinite(mid) || mid <= 0) continue;
+        let candles: Awaited<ReturnType<MarketDataService["getCandles"]>>;
+        try {
+          candles = await this.market.getCandles(
+            brokerSymbol,
+            timeframe,
+            80,
+            primaryAccountId ? { accountId: primaryAccountId } : undefined,
+          );
+        } catch {
+          continue;
+        }
+        if (!candles?.length) continue;
+        const ind0 = computeIndicators(
+          candles.map((c) => ({
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+            openTime: c.openTime,
+            closeTime: c.closeTime,
+          })),
+        );
+        if (!ind0) continue;
+        const ind = applyEmaTickLivePrice(
+          ind0,
+          candles.map((c) => ({
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+            openTime: c.openTime,
+            closeTime: c.closeTime,
+          })),
+          mid,
+        );
+        if (!Number.isFinite(ind.ema3) || ind.ema3 <= 0) continue;
+        await this.applyEma3Trail({
+          organizationId: strategy.organizationId,
+          actorId,
+          accountIds,
+          symbol,
+          brokerSymbol,
+          ema3: ind.ema3,
+          correlationId: newId(),
+        });
+      }
     }
   }
 

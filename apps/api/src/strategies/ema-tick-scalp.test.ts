@@ -2,21 +2,28 @@ import { describe, expect, it } from "vitest";
 import { StrategyMode } from "@nexus/domain";
 import {
   applyEmaTickLivePrice,
+  closesWithLiveClose0,
   computeIndicators,
   evaluateStrategyMode,
+  isFormingCandle,
   type CandleLike,
 } from "./strategy-engine";
 
-function bar(close: number, i: number): CandleLike {
-  const t = new Date(Date.UTC(2026, 0, 1, 12, 0, i * 10)).toISOString();
+function bar(close: number, i: number, opts?: { forming?: boolean }): CandleLike {
+  const openMs = Date.UTC(2026, 0, 1, 12, 0, i * 10);
+  const openTime = new Date(openMs).toISOString();
+  // Forming bar: closeTime still in the future relative to a frozen "now"
+  const closeTime = opts?.forming
+    ? new Date(openMs + 60_000).toISOString()
+    : openTime;
   return {
     open: close,
     high: close + 0.05,
     low: close - 0.05,
     close,
     volume: 100,
-    openTime: t,
-    closeTime: t,
+    openTime,
+    closeTime,
   };
 }
 
@@ -42,6 +49,40 @@ describe("EMA_TICK_SCALP mode", () => {
     const live = applyEmaTickLivePrice(ind, candles, ind.ema3 + 1);
     expect(live.ema1Prev).toBe(ind.ema1Prev);
     expect(live.ema1).toBe(ind.ema3 + 1);
+  });
+
+  it("closesWithLiveClose0 replaces forming last bar (Close[0])", () => {
+    const now = Date.UTC(2026, 0, 1, 12, 0, 30);
+    const candles = [
+      bar(100, 0),
+      bar(101, 1),
+      bar(102, 2, { forming: true }),
+    ];
+    expect(isFormingCandle(candles[2]!, now)).toBe(true);
+    const series = closesWithLiveClose0(candles, 102.5, now);
+    expect(series).toEqual([100, 101, 102.5]);
+  });
+
+  it("closesWithLiveClose0 appends when last bar is completed (keeps Close[1])", () => {
+    const now = Date.UTC(2026, 6, 1, 12, 0, 0); // long after bars
+    const candles = [bar(100, 0), bar(101, 1), bar(102, 2)];
+    expect(isFormingCandle(candles[2]!, now)).toBe(false);
+    const series = closesWithLiveClose0(candles, 103, now);
+    // Must keep Close[1]=102 and add live Close[0]=103 — never drop 102
+    expect(series).toEqual([100, 101, 102, 103]);
+  });
+
+  it("live EMA3 uses Close[0] mid without dropping Close[1]", () => {
+    const now = Date.UTC(2026, 6, 1, 12, 0, 0);
+    const candles = risingCrossCandles();
+    const ind = computeIndicators(candles)!;
+    const liveMid = ind.ema3 + 2;
+    const live = applyEmaTickLivePrice(ind, candles, liveMid);
+    const series = closesWithLiveClose0(candles, liveMid, now);
+    expect(series[series.length - 1]).toBe(liveMid);
+    expect(series[series.length - 2]).toBe(Number(candles[candles.length - 1]!.close));
+    expect(live.ema1).toBe(liveMid);
+    expect(live.ema3).not.toBe(ind.ema3);
   });
 
   it("BUY on structural cross window + divergence (no fake soft score while waiting)", () => {

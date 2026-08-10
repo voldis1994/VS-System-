@@ -1330,8 +1330,52 @@ function detectDivergence(
 }
 
 /**
+ * Build close series where the last value is always live Close[0] (forming).
+ * - Forming last bar → replace its close with liveMid
+ * - Completed last bar → append liveMid (do NOT drop Close[1])
+ *
+ * Trailing / EMA3 must chase Close[0], never lag on Close[1].
+ */
+export function closesWithLiveClose0(
+  candles: CandleLike[],
+  liveMid: number,
+  nowMs = Date.now(),
+): number[] {
+  const closes = candles
+    .map((c) => Number(c.close))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!Number.isFinite(liveMid) || liveMid <= 0) return closes;
+  if (closes.length === 0) return [liveMid];
+  const last = candles[candles.length - 1];
+  if (last && isFormingCandle(last, nowMs)) {
+    return [...closes.slice(0, -1), liveMid];
+  }
+  // Last historical bar already closed (= Close[1] on a live chart) — append Close[0]
+  return [...closes, liveMid];
+}
+
+/** True when candle closeTime is still in the future (or open+step not elapsed). */
+export function isFormingCandle(
+  candle: CandleLike,
+  nowMs = Date.now(),
+): boolean {
+  const closeRaw = candle.closeTime;
+  if (closeRaw != null) {
+    const closeMs = new Date(String(closeRaw)).getTime();
+    if (Number.isFinite(closeMs)) return closeMs > nowMs;
+  }
+  const openRaw = candle.openTime;
+  if (openRaw == null) return true; // unknown → treat as forming so we replace
+  const openMs = new Date(String(openRaw)).getTime();
+  if (!Number.isFinite(openMs)) return true;
+  // Infer step from typical 10s/1m when closeTime missing
+  const age = nowMs - openMs;
+  return age >= 0 && age < 60_000;
+}
+
+/**
  * EMA_TICK_SCALP live update: EMA1 ≈ live mid (period 1), keep candle ema1Prev/ema3Prev,
- * refresh EMA3 with forming close = mid. Never set ema1Prev from previous tick (that caused chop).
+ * refresh EMA3 with forming Close[0] = mid. Never set ema1Prev from previous tick (chop).
  */
 export function applyEmaTickLivePrice(
   ind: Indicators,
@@ -1339,19 +1383,16 @@ export function applyEmaTickLivePrice(
   liveMid: number,
 ): Indicators {
   if (!Number.isFinite(liveMid) || liveMid <= 0) return ind;
-  const closes = candles.map((c) => Number(c.close)).filter((n) => Number.isFinite(n));
-  if (closes.length < 3) {
+  const series = closesWithLiveClose0(candles, liveMid);
+  if (series.length < 3) {
     return { ...ind, price: liveMid, ema1: liveMid };
   }
-  // Drop last bar close (may be stale forming candle); rebuild with live mid
-  const closed = closes.slice(0, -1);
-  const series = closed.length >= 2 ? [...closed, liveMid] : [...closes.slice(0, -1), liveMid];
   const ema3Live = ema(series, 3);
   return {
     ...ind,
     price: liveMid,
     ema1: liveMid,
-    // ema1Prev / ema3Prev stay from computeIndicators (prior closed bars)
+    // ema1Prev / ema3Prev stay from computeIndicators (prior closed bars = Close[1]+)
     ema3: Number.isFinite(ema3Live) && ema3Live > 0 ? ema3Live : ind.ema3,
   };
 }

@@ -138,7 +138,22 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         cached.candles.length >= minAccept
       ) {
         this.candleSourceByKey.set(key, "capital");
-        return cached.candles as Awaited<ReturnType<MarketDataService["generateCandles"]>>;
+        // Always refresh Close[0] from live tick — trail must not lag on Close[1]
+        return this.patchCandlesLiveClose0(
+          resolved,
+          cached.candles as Array<{
+            id: string;
+            symbol: string;
+            timeframe: string;
+            open: string;
+            high: string;
+            low: string;
+            close: string;
+            volume: string;
+            openTime: Date;
+            closeTime: Date;
+          }>,
+        ) as Awaited<ReturnType<MarketDataService["generateCandles"]>>;
       }
       try {
         const raw = await adapter.getHistoricalPrices(
@@ -189,12 +204,13 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
             });
           }
           candles.sort((a, b) => a.openTime.getTime() - b.openTime.getTime());
-          this.candleFetchCache.set(key, { at: Date.now(), candles });
+          const withLive = this.patchCandlesLiveClose0(resolved, candles);
+          this.candleFetchCache.set(key, { at: Date.now(), candles: withLive });
           this.candleSourceByKey.set(key, "capital");
           this.log.log(
-            `Candles ${resolved} ${timeframe}: ${candles.length} from Capital (${resolution})`,
+            `Candles ${resolved} ${timeframe}: ${withLive.length} from Capital (${resolution})`,
           );
-          return candles.slice(-limit);
+          return withLive.slice(-limit);
         }
       } catch (err) {
         this.log.warn(
@@ -527,6 +543,65 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
         // ignore per-symbol
       }
     }
+  }
+
+  /**
+   * Ensure the candle series ends on live Close[0] (forming mid),
+   * never stale completed Close[1] alone — trailing chases the live bar.
+   */
+  private patchCandlesLiveClose0<
+    T extends {
+      open: string;
+      high: string;
+      low: string;
+      close: string;
+      openTime: Date;
+      closeTime: Date;
+      id?: string;
+      symbol?: string;
+      timeframe?: string;
+      volume?: string;
+    },
+  >(symbol: string, candles: T[]): T[] {
+    if (!candles.length) return candles;
+    const tick = this.getTick(symbol);
+    if (!tick) return candles;
+    const mid = Number(tick.mid);
+    if (!Number.isFinite(mid) || mid <= 0) return candles;
+    const now = Date.now();
+    const last = candles[candles.length - 1]!;
+    const closeMs = new Date(last.closeTime).getTime();
+    const forming = Number.isFinite(closeMs) && closeMs > now;
+    if (forming) {
+      const open = Number(last.open);
+      const high = Math.max(Number(last.high), mid, Number.isFinite(open) ? open : mid);
+      const low = Math.min(Number(last.low), mid, Number.isFinite(open) ? open : mid);
+      const patched = {
+        ...last,
+        close: String(mid),
+        high: String(high),
+        low: String(low),
+      };
+      return [...candles.slice(0, -1), patched];
+    }
+    // Last bar already closed — synthesize forming Close[0] from live mid
+    const stepMs = Math.max(
+      1_000,
+      new Date(last.closeTime).getTime() - new Date(last.openTime).getTime() || 60_000,
+    );
+    const openTime = new Date(last.closeTime);
+    const synthetic = {
+      ...last,
+      id: last.id ? `${last.id}-live` : undefined,
+      open: String(mid),
+      high: String(mid),
+      low: String(mid),
+      close: String(mid),
+      openTime,
+      closeTime: new Date(openTime.getTime() + stepMs),
+      volume: "0",
+    } as T;
+    return [...candles, synthetic];
   }
 
   private async tickSimulation() {
