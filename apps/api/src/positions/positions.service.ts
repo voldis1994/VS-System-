@@ -49,6 +49,8 @@ export class PositionsService {
   private nakedNotifyAt = new Map<string, number>();
   private static readonly NAKED_RECOVERY_MS = 15_000;
   private static readonly NAKED_NOTIFY_MS = 120_000;
+  /** Serialize BE/trail ticks — concurrent tickAll + trailTimer double-modified Capital. */
+  private protectionsRunning = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -808,6 +810,19 @@ export class PositionsService {
     correlationId: string,
     _opts?: { skipReconcile?: boolean },
   ) {
+    if (this.protectionsRunning) return;
+    this.protectionsRunning = true;
+    try {
+      await this.autoManageProtectionsLocked(priceBySymbol, correlationId);
+    } finally {
+      this.protectionsRunning = false;
+    }
+  }
+
+  private async autoManageProtectionsLocked(
+    priceBySymbol: Map<string, number>,
+    correlationId: string,
+  ) {
     const open = await this.prisma.position.findMany({
       where: {
         status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
@@ -974,11 +989,22 @@ export class PositionsService {
           }
         }
 
-        // Recovery: if Capital chart has no stopLevel, attach one — but THROTTLE.
-        // Never fire 4× modify every 1s: Capital login lock + confirm poll blocks
-        // the whole desk API (Strategies START / sync toast Internal Server Error).
-        const hasBrokerSl = brokerStopLoss.has(position.id);
-        if (!hasBrokerSl) {
+        // Resolve whether Capital (or DB) already has a stopLevel.
+        // Never treat "broker map miss" as naked if DB has stopLoss — that
+        // used to skip BE/trail forever while price ran in profit.
+        if (
+          !brokerStopLoss.has(position.id) &&
+          position.stopLoss != null &&
+          String(position.stopLoss).trim().length > 0
+        ) {
+          brokerStopLoss.set(position.id, String(position.stopLoss));
+        }
+        let hasSl = brokerStopLoss.has(position.id);
+        const inProfit = favorable > 0 || (Number.isFinite(moneyPnl) && moneyPnl > 0);
+
+        if (!hasSl && !inProfit) {
+          // Flat/loss + naked: throttled entry-based protective SL only.
+          // Do NOT run this storm when in profit — trail attach below owns it.
           const now = Date.now();
           const lastAt = this.nakedRecoveryAt.get(position.id) ?? 0;
           if (now - lastAt >= PositionsService.NAKED_RECOVERY_MS) {
@@ -1020,6 +1046,7 @@ export class PositionsService {
                   : "";
               if (liveSl) {
                 brokerStopLoss.set(position.id, liveSl);
+                hasSl = true;
                 attached = true;
                 this.nakedRecoveryLevel.delete(position.id);
                 this.nakedNotifyAt.delete(position.id);
@@ -1032,10 +1059,9 @@ export class PositionsService {
                 });
               }
             } catch {
-              // escalate on next window
+              // escalate next window
             }
             if (!attached && level >= 1) {
-              // Native Capital trailingStop after first fixed-SL failure window
               try {
                 await this.modifySlTp(
                   position.organizationId,
@@ -1059,16 +1085,10 @@ export class PositionsService {
                     String(match.stopLoss).length > 0
                   ) {
                     brokerStopLoss.set(position.id, String(match.stopLoss));
+                    hasSl = true;
                     attached = true;
                     this.nakedRecoveryLevel.delete(position.id);
                     this.nakedNotifyAt.delete(position.id);
-                    await this.notifications.create({
-                      organizationId: position.organizationId,
-                      userId: null,
-                      title: "Native Capital trail ON",
-                      body: `${position.symbol} trailingStop distance ${minD}`,
-                      severity: "WARNING",
-                    });
                   }
                 }
               } catch (nativeErr) {
@@ -1087,20 +1107,20 @@ export class PositionsService {
                   organizationId: position.organizationId,
                   userId: null,
                   title: "NO SL ON CHART",
-                  body: `${position.symbol}: Capital rejected stopLevel — retrying every ${PositionsService.NAKED_RECOVERY_MS / 1000}s (desk stays responsive)`,
+                  body: `${position.symbol}: Capital rejected stopLevel — retrying`,
                   severity: "CRITICAL",
                 });
               }
             }
           }
-          // No broker SL yet — skip trail chase this tick (recovery owns attach).
-          // Soft trail here was another modify storm on the same lock.
+          // Still flat/loss and naked — nothing to trail yet
           if (!brokerStopLoss.has(position.id)) continue;
-        } else {
+        } else if (hasSl) {
           this.nakedRecoveryAt.delete(position.id);
           this.nakedRecoveryLevel.delete(position.id);
           this.nakedNotifyAt.delete(position.id);
         }
+        // inProfit + naked: fall through — trail will attach at mark−minDist
 
         // Money BE threshold (£0.05) — used for BE + to unlock Capital-safe trail
         // even before true BE SL is legal (GOLD needs ~0.50 price move).
@@ -1207,10 +1227,39 @@ export class PositionsService {
           }
         }
 
+        // SCALPING / trail-enabled: when price is in PLUS, SL MUST chase.
+        // Arm immediately on any favorable tick (not after BE, not after 0.50 move).
+        if (
+          !fresh.trailingEnabled &&
+          inProfit &&
+          fresh.strategyId
+        ) {
+          const stP = await this.prisma.strategy.findFirst({
+            where: { id: fresh.strategyId },
+            select: { mode: true },
+          });
+          if (stP?.mode === StrategyMode.SCALPING) {
+            const autoP = modeAutoExit(StrategyMode.SCALPING)!;
+            const td = resolveScalpTrailDistance(
+              position.symbol,
+              entry,
+              autoP.trailingDistancePips,
+            );
+            fresh = await this.prisma.position.update({
+              where: { id: position.id },
+              data: {
+                trailingEnabled: true,
+                trailingDistance: td.toFixed(8),
+              },
+            });
+          }
+        }
+
         if (fresh.trailingEnabled && fresh.trailingDistance != null) {
           let distance = String(fresh.trailingDistance);
           // Arm from user pips — never multiply floored broker distance (that made 1-pip start need ~8–18+ pips)
           let armThreshold = Number(distance);
+          let isScalping = false;
           if (fresh.strategyId) {
             const strategy = await this.prisma.strategy.findFirst({
               where: { id: fresh.strategyId },
@@ -1227,6 +1276,7 @@ export class PositionsService {
             const auto = strategy?.mode
               ? modeAutoExit(strategy.mode as StrategyMode)
               : null;
+            isScalping = strategy?.mode === StrategyMode.SCALPING;
             const priceOffset = cfg.priceOffsetMode === true;
             const trailPips = Number(
               cfg.trailingDistancePips ?? auto?.trailingDistancePips ?? 3,
@@ -1250,25 +1300,25 @@ export class PositionsService {
                 cfg.trailingDistancePips ?? auto?.trailingDistancePips,
               priceOffsetMode: priceOffset,
             });
-            // Only force arm-at-entry when operator explicitly set trailArmImmediate
             if (cfg.trailArmImmediate === true) {
               armThreshold = 0;
             } else if (
               auto?.trailArmImmediate === true &&
               cfg.trailArmImmediate !== false &&
-              strategy?.mode !== StrategyMode.SCALPING
+              !isScalping
             ) {
               armThreshold = 0;
             }
-            // SCALPING: always arm Capital-safe trail immediately (chase every 1s).
-            // Money £0.05 still drives BE; do NOT gate trail on moneyHit — that
-            // froze SL whenever upl/flags lagged.
-            if (strategy?.mode === StrategyMode.SCALPING) {
+            // SCALPING: arm as soon as price is in plus (favorable > 0 / money > 0)
+            if (isScalping) {
               armThreshold = 0;
             }
           }
           const armed =
-            fresh.trailingActivatedAt != null || favorable >= armThreshold;
+            fresh.trailingActivatedAt != null ||
+            inProfit ||
+            favorable >= armThreshold ||
+            moneyHit;
 
           if (!armed) continue;
 
@@ -1281,10 +1331,8 @@ export class PositionsService {
           );
           distance = brokerTrailDist.toFixed(8);
 
-          // Continuous software trail for Paper + Capital.
-          // Capital native trail was arm-once-then-skip: if native failed once,
-          // trailingActivatedAt froze further SL moves. App-managed stopLevel
-          // updates every tick so BUY↑ / SELL↓ trailing actually moves.
+          // Continuous software trail: SL = mark ± Capital-min distance.
+          // This is what "SL follows price when in plus" means on GOLD/US100.
           const liveSl = brokerStopLoss.get(position.id);
           const existing =
             liveSl ?? (fresh.stopLoss ? String(fresh.stopLoss) : null);
@@ -1329,13 +1377,13 @@ export class PositionsService {
               { silent: !firstArm },
             );
           } catch (trailErr) {
-            // Retry once with an extra pip of distance (Capital sometimes picky)
+            // Retry once with a slightly wider Capital-safe distance
             try {
               const wider = capitalSafeTrailingStop({
                 symbol: position.symbol,
                 direction: dir,
                 mark,
-                distance: brokerTrailDist + capitalMinStopDistance(position.symbol) * 0.02,
+                distance: brokerTrailDist + minDist * 0.02,
                 existingSl: existing,
               });
               if (existing && d(wider).eq(d(existing))) throw trailErr;
@@ -1391,7 +1439,7 @@ export class PositionsService {
               organizationId: position.organizationId,
               userId: null,
               title: "Trailing ON",
-              body: `${position.symbol} ${dir} trail SL → ${candidate}`,
+              body: `${position.symbol} ${dir} trail SL → ${candidate} (follows price)`,
               severity: "SUCCESS",
             });
           } else {

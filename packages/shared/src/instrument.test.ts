@@ -305,6 +305,23 @@ describe("capitalSafeTrailingStop", () => {
     expect(2650.119 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
   });
 
+  it("follows BUY price into profit (tightens above initial protective SL)", () => {
+    // Initial Capital-safe SL at entry−0.50; mark runs +0.58 → trail SL must rise
+    const entry = 2650;
+    const initialSl = "2649.50";
+    const mark = 2650.58;
+    const sl = capitalSafeTrailingStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      mark,
+      distance: 0.03, // soft 3-pip floored inside helper
+      existingSl: initialSl,
+    });
+    expect(Number(sl)).toBeGreaterThan(Number(initialSl));
+    expect(Number(sl)).toBeGreaterThanOrEqual(entry - 1e-9); // at/above break-even zone
+    expect(mark - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+  });
+
   it("only tightens SELL trail", () => {
     const sl = capitalSafeTrailingStop({
       symbol: "GOLD",
