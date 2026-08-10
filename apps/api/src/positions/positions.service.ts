@@ -716,8 +716,9 @@ export class PositionsService {
         OR: [
           { breakEvenEnabled: true },
           { trailingEnabled: true },
-          // Multi-TP scale-out must run even when BE/Trail are off
           { takeProfitsJson: { not: Prisma.DbNull } },
+          // Naked Capital positions (no SL) — always try recovery
+          { stopLoss: null },
         ],
       },
     });

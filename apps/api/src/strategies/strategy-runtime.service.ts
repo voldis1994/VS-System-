@@ -182,6 +182,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           { breakEvenEnabled: true },
           { trailingEnabled: true },
           { takeProfitsJson: { not: Prisma.DbNull } },
+          { stopLoss: null },
         ],
       },
       select: { symbol: true },
