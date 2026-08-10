@@ -1143,8 +1143,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               stopLoss,
               takeProfit,
               takeProfits,
-              // Delay broker native trail until activation pips (autoManage)
-              trailingEnabled: false,
+              // App-managed trail (autoManage) — not Capital native trailingStop
+              trailingEnabled: useDistTrail,
               trailingDistance: useDistTrail ? trailDist.toFixed(8) : undefined,
               breakEvenEnabled: useBe,
               breakEvenActivation: useBe

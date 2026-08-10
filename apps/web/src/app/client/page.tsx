@@ -228,7 +228,7 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "SCALP: nav BUY pret SELL svecēm (un otrādāk). BE £0.05 → trail. Lot = tavs.",
+    tip: "SCALP: BE pie £0.05 (Capital GOLD chart BE pēc ~0.50), tad trail. Nav BUY pret SELL svecēm.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
