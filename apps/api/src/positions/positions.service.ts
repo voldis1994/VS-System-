@@ -1353,8 +1353,8 @@ export class PositionsService {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // Trail when in profit OR SL is stuck far from mark.
-        // Do not wait only on moneyPnl — stuck SL must chase anyway.
+        // MQL idea: if (floatingPnL >= 0.05) → every tick SL follows mark.
+        // Also chase if SL is stuck far from mark (Capital freeze recovery).
         // ═══════════════════════════════════════════════════════════
         {
           const liveSlEarly =
@@ -1372,20 +1372,15 @@ export class PositionsService {
           const stuckSl =
             Number.isFinite(liveN) && gapEarly > minDEarly * 1.5;
           const profitHit =
-            (Number.isFinite(moneyPnl) &&
-              moneyPnl >= PositionsService.SCALP_MONEY_ARM) ||
-            favorable > 0;
+            Number.isFinite(moneyPnl) &&
+            moneyPnl >= PositionsService.SCALP_MONEY_ARM;
           if (profitHit || stuckSl) {
             await this.chaseScalpTrailFromMoneyHit({
               position,
               mark,
               entry,
               dir,
-              moneyPnl: Number.isFinite(moneyPnl)
-                ? moneyPnl
-                : favorable > 0
-                  ? PositionsService.SCALP_MONEY_ARM
-                  : 0,
+              moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
               correlationId,
               brokerStopLoss,
             });
