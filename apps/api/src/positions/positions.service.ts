@@ -8,7 +8,6 @@ import {
   PartialCloseSchema,
 } from "@nexus/domain";
 import {
-  breakEvenStop,
   d,
   trailingArmThreshold,
   trailingStopCandidate,
@@ -17,9 +16,12 @@ import {
   clampCloseVolume,
   parseVolume,
   newId,
-  resolveScalpDistance,
   resolveScalpTrailDistance,
   instrumentMoneyPnl,
+  capitalSafeBreakEvenStop,
+  capitalSafeTrailDistance,
+  capitalSafeInitialStop,
+  capitalMinStopDistance,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { modeAutoExit, StrategyMode } from "@nexus/domain";
@@ -599,18 +601,32 @@ export class PositionsService {
     actorId: string,
     id: string,
     correlationId: string,
-    opts?: { silent?: boolean },
+    opts?: { silent?: boolean; mark?: number },
   ) {
     const position = await this.get(organizationId, id);
     if (position.breakEvenActivatedAt) {
       return position;
     }
+    const mark =
+      opts?.mark ??
+      (position.currentPrice != null ? Number(position.currentPrice) : NaN);
+    if (!Number.isFinite(mark) || mark <= 0) {
+      // Cannot validate Capital min-stop without a mark — retry next tick
+      return position;
+    }
     const offset = position.breakEvenOffset ? String(position.breakEvenOffset) : "0";
-    const newSl = breakEvenStop(
-      position.direction as "BUY" | "SELL",
-      String(position.averageEntry),
+    // NEVER push entry+1pip on GOLD — Capital min-stop ~0.50 rejects it.
+    // Defer until mark is far enough that a lock at ≥ entry is legal.
+    const newSl = capitalSafeBreakEvenStop({
+      symbol: position.symbol,
+      direction: position.direction as "BUY" | "SELL",
+      entry: String(position.averageEntry),
       offset,
-    );
+      mark,
+    });
+    if (!newSl) {
+      return position;
+    }
     const updated = await this.modifySlTp(
       organizationId,
       actorId,
@@ -793,6 +809,46 @@ export class PositionsService {
           });
         }
 
+        // Recovery: post-fill SL attach often fails silently on Capital (min-stop /
+        // account race). If broker has no stopLevel, push a Capital-safe SL now
+        // so the chart shows protection before BE is legal.
+        const hasBrokerSl = brokerStopLoss.has(position.id);
+        if (!hasBrokerSl && !position.breakEvenActivatedAt) {
+          const preferredDist =
+            position.stopLoss != null
+              ? Math.abs(entry - Number(position.stopLoss))
+              : NaN;
+          const recoverySl = capitalSafeInitialStop({
+            symbol: position.symbol,
+            direction: dir,
+            entry,
+            distance: Number.isFinite(preferredDist) ? preferredDist : null,
+            mark,
+          });
+          try {
+            await this.modifySlTp(
+              position.organizationId,
+              "system",
+              position.id,
+              { stopLoss: recoverySl },
+              correlationId,
+              { silent: true },
+            );
+            brokerStopLoss.set(position.id, recoverySl);
+            await this.prisma.position.update({
+              where: { id: position.id },
+              data: { stopLoss: recoverySl, currentPrice: mark },
+            });
+          } catch (attachErr) {
+            const msg =
+              attachErr instanceof Error ? attachErr.message : String(attachErr);
+            console.warn(
+              `autoManageProtections ${position.id} recovery SL:`,
+              msg,
+            );
+          }
+        }
+
         if (
           position.breakEvenEnabled &&
           !position.breakEvenActivatedAt &&
@@ -833,7 +889,7 @@ export class PositionsService {
               "system",
               position.id,
               correlationId,
-              { silent: false },
+              { silent: false, mark },
             );
           }
         }
@@ -903,7 +959,7 @@ export class PositionsService {
               if (!fresh.breakEvenActivatedAt && !fresh.trailingActivatedAt) {
                 continue;
               }
-              // After BE — start 3-pip trail right away
+              // After BE — start trail right away (distance floored for Capital)
               armThreshold = 0;
             }
           }
@@ -911,6 +967,15 @@ export class PositionsService {
             fresh.trailingActivatedAt != null || favorable >= armThreshold;
 
           if (!armed) continue;
+
+          // Capital rejects stopLevel closer than min-stop (~0.50 GOLD). Soft
+          // 3-pip trail (0.03) always fails — floor chase distance for modify.
+          const brokerTrailDist = capitalSafeTrailDistance(
+            position.symbol,
+            entry,
+            distance,
+          );
+          distance = brokerTrailDist.toFixed(8);
 
           // Continuous software trail for Paper + Capital.
           // Capital native trail was arm-once-then-skip: if native failed once,
@@ -938,6 +1003,10 @@ export class PositionsService {
           }
 
           if (existing && d(candidate).eq(d(existing))) continue;
+
+          // Skip if candidate still inside Capital min-stop of mark (safety)
+          const minDist = capitalMinStopDistance(position.symbol);
+          if (Math.abs(mark - Number(candidate)) + 1e-12 < minDist) continue;
 
           const firstArm = !fresh.trailingActivatedAt;
           await this.modifySlTp(

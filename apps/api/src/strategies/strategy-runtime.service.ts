@@ -20,6 +20,7 @@ import {
   resolveScalpDistance,
   resolveScalpTrailDistance,
   resolveScalpActivationDistance,
+  capitalSafeInitialStop,
   isMarginOrFundsError,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -1112,14 +1113,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                     : {}),
               },
             });
-            // Static SL/TP on fill — trail arms after activation in profit
+            // Static SL/TP on fill — Capital-safe distance (GOLD min-stop ~0.50).
+            // Trail arms after BE in autoManage — not at entry.
             try {
+              const safeSl = capitalSafeInitialStop({
+                symbol: brokerSymbol,
+                direction: signal,
+                entry,
+                distance: stopDist,
+                mark: entry,
+              });
               await this.positions.modifySlTp(
                 strategy.organizationId,
                 actorId,
                 positionId,
                 {
-                  stopLoss,
+                  stopLoss: safeSl,
                   takeProfit: takeProfit ?? null,
                 },
                 correlationId,
@@ -1142,20 +1151,41 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 );
               }
             } catch (attachErr) {
-              this.log.warn(
-                `Post-fill SL/TP attach failed: ${
-                  attachErr instanceof Error ? attachErr.message : attachErr
-                }`,
-              );
-              await this.notifications.create({
-                organizationId: strategy.organizationId,
-                userId: actorId === "system" ? null : actorId,
-                title: "SL/TP attach failed",
-                body: `${brokerSymbol}: ${
-                  attachErr instanceof Error ? attachErr.message : "modify failed"
-                }`,
-                severity: "WARNING",
-              });
+              // Widen once and retry — borderline min-stop / spread rejects
+              try {
+                const wider = capitalSafeInitialStop({
+                  symbol: brokerSymbol,
+                  direction: signal,
+                  entry,
+                  distance: Math.max(stopDist, minDist) * 1.25,
+                  mark: entry,
+                });
+                await this.positions.modifySlTp(
+                  strategy.organizationId,
+                  actorId,
+                  positionId,
+                  { stopLoss: wider, takeProfit: takeProfit ?? null },
+                  correlationId,
+                  { silent: true },
+                );
+              } catch (retryErr) {
+                this.log.warn(
+                  `Post-fill SL/TP attach failed: ${
+                    retryErr instanceof Error ? retryErr.message : retryErr
+                  } (first: ${
+                    attachErr instanceof Error ? attachErr.message : attachErr
+                  })`,
+                );
+                await this.notifications.create({
+                  organizationId: strategy.organizationId,
+                  userId: actorId === "system" ? null : actorId,
+                  title: "SL/TP attach failed",
+                  body: `${brokerSymbol}: ${
+                    retryErr instanceof Error ? retryErr.message : "modify failed"
+                  } — recovery tick will retry`,
+                  severity: "WARNING",
+                });
+              }
             }
             await this.notifications.create({
               organizationId: strategy.organizationId,

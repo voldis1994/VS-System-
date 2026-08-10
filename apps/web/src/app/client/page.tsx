@@ -228,7 +228,7 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "SCALP RAZOR: tūlītējs 6-pip trail + BE@5. Lot = tavs.",
+    tip: "SCALP: BE pie £0.05 (Capital GOLD SL pieejams pēc ~0.50 min-stop), tad trail. Lot = tavs.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",

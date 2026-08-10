@@ -660,6 +660,14 @@ export class CapitalComAdapter implements BrokerAdapter {
     const fx = /^[A-Z]{6}$/.test(epic);
     const rules = capitalDealRulesFallback(epic);
     const volPrec = volumePrecisionForStep(rules.step);
+    const s = epic.toUpperCase();
+    // GOLD/XAU Capital min-stop is typically ~0.50 (not 0.1 generic CFD)
+    let minStop = fx ? "0.00010" : "0.1";
+    if (/XAU|GOLD/.test(s)) minStop = "0.50";
+    else if (/XAG|SILVER/.test(s)) minStop = "0.05";
+    else if (/US100|US500|US30|NASDAQ|NDX|SPX|GER40|DE40|UK100|DOW/.test(s)) {
+      minStop = "1.0";
+    }
     return {
       brokerSymbol: epic,
       canonicalSymbol: epic,
@@ -674,7 +682,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       tickSize: fx ? "0.00001" : "0.01",
       tickValue: "1",
       contractSize: "1",
-      minStopDistance: fx ? "0.00010" : "0.1",
+      minStopDistance: minStop,
       tradingHoursJson: {
         provider: "CAPITAL",
         name: m.name,
@@ -1230,17 +1238,29 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
     if (!found) throw new Error("Position not found after modify");
 
-    // Prefer requested levels when broker readback omits them (common race)
+    // Prefer requested levels when broker readback omits them (common race),
+    // BUT never claim a stop that Capital rejected — rejection already threw.
+    // For UNKNOWN confirms: only trust readback when present.
+    const confirmedSl =
+      found.stopLoss != null && String(found.stopLoss).length > 0
+        ? String(found.stopLoss)
+        : undefined;
+    const confirmedTp =
+      found.takeProfit != null && String(found.takeProfit).length > 0
+        ? String(found.takeProfit)
+        : undefined;
     return {
       ...found,
       stopLoss:
-        request.stopLoss !== undefined && request.stopLoss !== null
+        confirmedSl ??
+        (request.stopLoss !== undefined && request.stopLoss !== null
           ? String(request.stopLoss)
-          : found.stopLoss,
+          : found.stopLoss),
       takeProfit:
-        request.takeProfit !== undefined && request.takeProfit !== null
+        confirmedTp ??
+        (request.takeProfit !== undefined && request.takeProfit !== null
           ? String(request.takeProfit)
-          : found.takeProfit,
+          : found.takeProfit),
     };
   }
 

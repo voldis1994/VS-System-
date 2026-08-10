@@ -9,6 +9,10 @@ import {
   resolveScalpDistance,
   resolveScalpTrailDistance,
   trailingArmThreshold,
+  capitalSafeBreakEvenStop,
+  capitalSafeTrailDistance,
+  capitalSafeInitialStop,
+  capitalMinStopDistance,
 } from "./instrument";
 
 describe("instrumentPipSize", () => {
@@ -40,6 +44,96 @@ describe("resolveScalpDistance", () => {
   it("floors GOLD initial SL to Capital min protective distance", () => {
     const d = resolveScalpDistance("GOLD", 4200, 10);
     expect(d).toBeGreaterThanOrEqual(minProtectiveDistance("GOLD", 4200));
+  });
+});
+
+describe("capitalSafeBreakEvenStop", () => {
+  it("defers GOLD BE when mark is only pennies above entry (min-stop ~0.50)", () => {
+    // £0.11 on 0.12 lot ≈ +0.009 price — entry+0.01 would be rejected
+    expect(
+      capitalSafeBreakEvenStop({
+        symbol: "GOLD",
+        direction: "BUY",
+        entry: 2650,
+        offset: 0.01,
+        mark: 2650.01,
+      }),
+    ).toBeNull();
+  });
+
+  it("places GOLD BE at entry+offset once mark clears min-stop", () => {
+    const sl = capitalSafeBreakEvenStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      entry: 2650,
+      offset: 0.01,
+      mark: 2650.6,
+    });
+    expect(sl).toBe("2650.01");
+  });
+
+  it("locks at entry when ideal offset is too close but entry is legal", () => {
+    // mark-minDist = 2650.05, ideal = 2650.40 → use 2650.05 (tightest legal ≥ entry)
+    const sl = capitalSafeBreakEvenStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      entry: 2650,
+      offset: 0.4,
+      mark: 2650.55,
+    });
+    expect(Number(sl)).toBeGreaterThanOrEqual(2650);
+    expect(Number(sl)).toBeLessThanOrEqual(2650.05 + 1e-9);
+  });
+
+  it("SELL defers until mark is minDist below entry", () => {
+    expect(
+      capitalSafeBreakEvenStop({
+        symbol: "GOLD",
+        direction: "SELL",
+        entry: 2650,
+        offset: 0.01,
+        mark: 2649.9,
+      }),
+    ).toBeNull();
+    expect(
+      capitalSafeBreakEvenStop({
+        symbol: "GOLD",
+        direction: "SELL",
+        entry: 2650,
+        offset: 0.01,
+        mark: 2649.4,
+      }),
+    ).toBe("2649.99");
+  });
+});
+
+describe("capitalSafeTrailDistance", () => {
+  it("floors GOLD 3-pip trail (0.03) to Capital min-stop (~0.50)", () => {
+    const d = capitalSafeTrailDistance("GOLD", 2650, 0.03);
+    expect(d).toBeGreaterThanOrEqual(capitalMinStopDistance("GOLD"));
+    expect(d).toBeCloseTo(0.5, 8);
+  });
+});
+
+describe("capitalMinStopDistance", () => {
+  it("GOLD is 0.50 not %−of−price inflated", () => {
+    expect(capitalMinStopDistance("GOLD")).toBeCloseTo(0.5, 8);
+    // minProtectiveDistance at 2650 is ~2.12 — must not use that for BE
+    expect(minProtectiveDistance("GOLD", 2650)).toBeGreaterThan(1);
+  });
+});
+
+describe("capitalSafeInitialStop", () => {
+  it("places GOLD BUY SL at least Capital min-stop below entry", () => {
+    const sl = capitalSafeInitialStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      entry: 2650,
+      distance: 0.18,
+    });
+    expect(2650 - Number(sl)).toBeGreaterThanOrEqual(
+      capitalMinStopDistance("GOLD"),
+    );
   });
 });
 

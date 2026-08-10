@@ -41,6 +41,25 @@ export function minProtectiveDistance(symbol: string, entryPrice: number): numbe
 }
 
 /**
+ * Broker min-stop distance (price units) — no %−of−price inflation.
+ * Use for BE legality / trail modify floors. At GOLD≈2650, minProtectiveDistance
+ * rises to ~2.12 via 0.08% — that would block BE until huge profit. Capital's
+ * actual GOLD min-stop is typically ~0.50.
+ */
+export function capitalMinStopDistance(symbol: string): number {
+  const pip = instrumentPipSize(symbol);
+  const s = String(symbol ?? "").toUpperCase();
+  if (/XAU|GOLD/.test(s)) return Math.max(0.5, pip * 50);
+  if (/XAG|SILVER/.test(s)) return Math.max(0.05, pip * 5);
+  if (/BTC|ETH|BITCOIN/.test(s)) return Math.max(pip * 8, pip);
+  if (/US100|US500|US30|NASDAQ|NDX|SPX|GER40|DE40|UK100|DOW/.test(s)) {
+    return Math.max(1, pip * 8);
+  }
+  if (isFxLikeSymbol(symbol)) return Math.max(pip * 8, pip * 2);
+  return Math.max(pip * 8, pip * 2);
+}
+
+/**
  * Favorable move (price units) required before trailing arms.
  * Values in (0, 1) are treated as price offsets (10s scalp); ≥1 as pip counts.
  */
@@ -142,6 +161,11 @@ export function resolveScalpDistance(
  * Activation threshold in **price** for BE / trail arm (SCALPING).
  * Pure pip×count — NEVER apply trail soft-floor or Capital min-stop
  * (those made "1 pip BE" wait ~12 GOLD pts).
+ *
+ * NOTE: Activation can fire early (e.g. £0.05 money BE). Actually *placing*
+ * the BE SL on Capital still requires capitalSafeBreakEvenStop clearance —
+ * GOLD min-stop is ~0.50 from mark, so entry+1pip is rejected until price
+ * has moved far enough.
  */
 export function resolveScalpActivationDistance(
   symbol: string,
@@ -152,6 +176,102 @@ export function resolveScalpActivationDistance(
   const pips = Number.isFinite(n) && n > 0 ? n : 1;
   if (pips > 0 && pips < 1) return Math.max(pips, pip * 0.05);
   return Math.max(pip * pips, pip * 0.05);
+}
+
+/**
+ * Capital-safe break-even stopLevel.
+ *
+ * Ideal BE = entry ± offset (often +1 pip). Capital rejects stopLevel when
+ * |mark − SL| < min-stop (~0.50 on GOLD). Returns null to **defer** until
+ * mark is far enough that a lock at ≥ entry is legal.
+ *
+ * When ideal BE is too close to mark but entry itself is legal, returns the
+ * tightest legal lock (≥ entry for BUY / ≤ entry for SELL).
+ */
+export function capitalSafeBreakEvenStop(input: {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  entry: number | string;
+  offset?: number | string | null;
+  mark: number | string;
+}): string | null {
+  const entry = Number(input.entry);
+  const mark = Number(input.mark);
+  const offsetRaw = Number(input.offset ?? 0);
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+  if (![entry, mark].every((n) => Number.isFinite(n) && n > 0)) return null;
+
+  const minDist = capitalMinStopDistance(input.symbol);
+  const ideal =
+    input.direction === "BUY" ? entry + offset : entry - offset;
+
+  if (input.direction === "BUY") {
+    // SL must sit ≥ minDist below mark
+    const maxLegalSl = mark - minDist;
+    if (maxLegalSl < entry) return null; // cannot lock at/above entry yet
+    const locked = Math.max(entry, Math.min(ideal, maxLegalSl));
+    return formatInstrumentPrice(input.symbol, locked);
+  }
+
+  const minLegalSl = mark + minDist;
+  if (minLegalSl > entry) return null;
+  const locked = Math.min(entry, Math.max(ideal, minLegalSl));
+  return formatInstrumentPrice(input.symbol, locked);
+}
+
+/**
+ * Floor trail chase distance so Capital modify(stopLevel) is not rejected.
+ * Soft 3-pip SCALPING trails (0.03 on GOLD) are below ~0.50 min-stop.
+ */
+export function capitalSafeTrailDistance(
+  symbol: string,
+  entryOrMark: number,
+  configuredDistance: number | string,
+): number {
+  const raw = Number(configuredDistance);
+  const dist = Number.isFinite(raw) && raw > 0 ? raw : 0;
+  void entryOrMark;
+  return Math.max(dist, capitalMinStopDistance(symbol));
+}
+
+/**
+ * Initial / recovery protective SL floored to Capital min-stop from entry.
+ */
+export function capitalSafeInitialStop(input: {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  entry: number | string;
+  /** Preferred distance; floored to minProtectiveDistance */
+  distance?: number | string | null;
+  /** Optional live mark — widen if spread leaves entry-based SL too close */
+  mark?: number | string | null;
+}): string {
+  const entry = Number(input.entry);
+  const markRaw = input.mark != null ? Number(input.mark) : NaN;
+  const mark = Number.isFinite(markRaw) && markRaw > 0 ? markRaw : entry;
+  const minDist = Math.max(
+    capitalMinStopDistance(input.symbol),
+    minProtectiveDistance(input.symbol, entry),
+  );
+  const pref = Number(input.distance);
+  let dist = Number.isFinite(pref) && pref > 0 ? Math.max(pref, minDist) : minDist;
+
+  if (input.direction === "BUY") {
+    // Ensure |mark − SL| ≥ capital min (Capital measures vs live bid)
+    const brokerMin = capitalMinStopDistance(input.symbol);
+    const sl = entry - dist;
+    if (mark - sl < brokerMin) {
+      dist = Math.max(dist, mark - entry + brokerMin);
+    }
+    return formatInstrumentPrice(input.symbol, entry - dist);
+  }
+
+  const brokerMin = capitalMinStopDistance(input.symbol);
+  const sl = entry + dist;
+  if (sl - mark < brokerMin) {
+    dist = Math.max(dist, entry - mark + brokerMin);
+  }
+  return formatInstrumentPrice(input.symbol, entry + dist);
 }
 
 /**
