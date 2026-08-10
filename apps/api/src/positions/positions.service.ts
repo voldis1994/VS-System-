@@ -19,6 +19,7 @@ import {
   newId,
   resolveScalpDistance,
   resolveScalpTrailDistance,
+  instrumentMoneyPnl,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { modeAutoExit, StrategyMode } from "@nexus/domain";
@@ -688,6 +689,7 @@ export class PositionsService {
     }
     const brokerMarks = new Map<string, number>();
     const brokerStopLoss = new Map<string, string>();
+    const brokerUpl = new Map<string, number>();
     const missingOnBroker = new Set<string>();
     for (const [accountId, positions] of byAccount) {
       const adapter = this.brokers.get(accountId);
@@ -711,6 +713,10 @@ export class PositionsService {
           if (Number.isFinite(mark) && mark > 0) {
             brokerMarks.set(p.id, mark);
             brokerMarks.set(p.symbol, mark);
+          }
+          const upl = Number(match.unrealizedPnl);
+          if (Number.isFinite(upl)) {
+            brokerUpl.set(p.id, upl);
           }
           if (match.stopLoss != null && String(match.stopLoss).length > 0) {
             brokerStopLoss.set(p.id, String(match.stopLoss));
@@ -767,6 +773,25 @@ export class PositionsService {
         const dir = position.direction as "BUY" | "SELL";
         const favorable =
           dir === "BUY" ? mark - entry : entry - mark;
+        const moneyPnl =
+          brokerUpl.get(position.id) ??
+          (() => {
+            const fromDb = Number(position.unrealizedPnl);
+            if (Number.isFinite(fromDb)) return fromDb;
+            return instrumentMoneyPnl({
+              symbol: position.symbol,
+              direction: dir,
+              entry,
+              exit: mark,
+              volumeLots: Number(position.volume),
+            });
+          })();
+        if (Number.isFinite(moneyPnl)) {
+          await this.prisma.position.update({
+            where: { id: position.id },
+            data: { unrealizedPnl: String(moneyPnl), currentPrice: mark },
+          });
+        }
 
         if (
           position.breakEvenEnabled &&
@@ -774,7 +799,35 @@ export class PositionsService {
           position.breakEvenActivation != null
         ) {
           const activation = Number(position.breakEvenActivation);
-          if (Number.isFinite(activation) && favorable >= activation) {
+          let hit = false;
+          if (Number.isFinite(activation)) {
+            // SCALPING money BE: activation is £/account currency (e.g. 0.05)
+            let moneyMode = false;
+            if (position.strategyId) {
+              const st = await this.prisma.strategy.findFirst({
+                where: { id: position.strategyId },
+                select: { mode: true, configurationJson: true },
+              });
+              const cfg = (st?.configurationJson ?? {}) as {
+                breakEvenMoneyMode?: boolean;
+                breakEvenActivationMoney?: number;
+                exitVersion?: string;
+              };
+              const auto = st?.mode
+                ? modeAutoExit(st.mode as StrategyMode)
+                : null;
+              moneyMode =
+                cfg.breakEvenMoneyMode === true ||
+                (typeof auto?.breakEvenActivationMoney === "number" &&
+                  auto.breakEvenActivationMoney > 0) ||
+                st?.mode === StrategyMode.SCALPING ||
+                cfg.exitVersion === "SCALP";
+            }
+            hit = moneyMode
+              ? moneyPnl >= activation
+              : favorable >= activation;
+          }
+          if (hit) {
             await this.activateBreakEven(
               position.organizationId,
               "system",
@@ -811,15 +864,15 @@ export class PositionsService {
               : null;
             const priceOffset = cfg.priceOffsetMode === true;
             const trailPips = Number(
-              cfg.trailingDistancePips ?? auto?.trailingDistancePips ?? 10,
+              cfg.trailingDistancePips ?? auto?.trailingDistancePips ?? 3,
             );
             // Heal poisoned trail distance (10s was stored as price 10 instead of pips)
             if (!priceOffset && Number.isFinite(trailPips) && trailPips > 0) {
-              const entry = Number(fresh.averageEntry);
-              if (Number.isFinite(entry) && entry > 0) {
+              const entryPx = Number(fresh.averageEntry);
+              if (Number.isFinite(entryPx) && entryPx > 0) {
                 distance = resolveScalpTrailDistance(
                   position.symbol,
-                  entry,
+                  entryPx,
                   trailPips,
                 ).toFixed(8);
               }
@@ -827,7 +880,7 @@ export class PositionsService {
             armThreshold = trailingArmThreshold(position.symbol, {
               trailingDistance: distance,
               trailingActivationPips:
-                cfg.trailingActivationPips ?? auto?.trailingActivationPips ?? 5,
+                cfg.trailingActivationPips ?? auto?.trailingActivationPips ?? 0,
               trailingDistancePips:
                 cfg.trailingDistancePips ?? auto?.trailingDistancePips,
               priceOffsetMode: priceOffset,
@@ -842,14 +895,16 @@ export class PositionsService {
             ) {
               armThreshold = 0;
             }
-            // SCALPING: trail only after BE has locked (or already trailing)
+            // SCALPING: trail only AFTER BE locks; then chase immediately (3 pips)
             if (
               strategy?.mode === StrategyMode.SCALPING &&
-              auto?.breakEvenEnabled !== false &&
-              !fresh.breakEvenActivatedAt &&
-              !fresh.trailingActivatedAt
+              auto?.breakEvenEnabled !== false
             ) {
-              continue;
+              if (!fresh.breakEvenActivatedAt && !fresh.trailingActivatedAt) {
+                continue;
+              }
+              // After BE — start 3-pip trail right away
+              armThreshold = 0;
             }
           }
           const armed =

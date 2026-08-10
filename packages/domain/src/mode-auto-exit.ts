@@ -11,10 +11,15 @@ export type ModeAutoExitConfig = {
   breakEvenEnabled: boolean;
   breakEvenActivationPips: number;
   breakEvenOffsetPips: number;
+  /**
+   * When set, BE arms on floating PnL in account currency (£/$) —
+   * not on price pips. SCALPING uses 0.05 (£0.05).
+   */
+  breakEvenActivationMoney?: number;
   trailingEnabled: boolean;
   trailingDistancePips: number;
   trailingActivationPips: number;
-  /** When true, trail arms immediately on fill. Prefer false — arm from profit (+). */
+  /** When true, trail arms immediately on fill. Prefer false — arm after BE. */
   trailArmImmediate: boolean;
   atrStopMult: number;
   atrTpMult: number;
@@ -28,19 +33,21 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** 10s SCALPING — BE at +0.05 (GOLD), then 3-pip trail. */
+/** 10s SCALPING — BE at +£0.05 floating PnL, then 3-pip trail. */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
-  /** BE when favorable ≥ 5 pips (GOLD = +0.05) */
+  /** Unused when breakEvenActivationMoney is set (kept for non-money fallbacks) */
   breakEvenActivationPips: 5,
   /** Lock SL at entry + 1 pip */
   breakEvenOffsetPips: 1,
+  /** BE when floating profit ≥ £0.05 (account currency) */
+  breakEvenActivationMoney: 0.05,
   trailingEnabled: true,
   /** Chase distance after BE */
   trailingDistancePips: 3,
-  /** Trail arms at same +0.05 (after BE in tick order) */
-  trailingActivationPips: 5,
+  /** After BE locks, trail arms immediately (threshold unused when BE-gated) */
+  trailingActivationPips: 0,
   trailArmImmediate: false,
   atrStopMult: 0.45,
   atrTpMult: 1.0,

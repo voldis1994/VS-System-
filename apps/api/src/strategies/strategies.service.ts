@@ -815,6 +815,10 @@ export class StrategiesService {
             breakEvenEnabled: auto.breakEvenEnabled,
             breakEvenActivationPips: auto.breakEvenActivationPips,
             breakEvenOffsetPips: auto.breakEvenOffsetPips,
+            breakEvenActivationMoney: auto.breakEvenActivationMoney,
+            breakEvenMoneyMode:
+              auto.breakEvenActivationMoney != null &&
+              auto.breakEvenActivationMoney > 0,
             trailingEnabled: auto.trailingEnabled,
             trailingDistancePips: auto.trailingDistancePips,
             trailingActivationPips: auto.trailingActivationPips,
@@ -1037,7 +1041,7 @@ export class StrategiesService {
     const beEnabled = Boolean(config.breakEvenEnabled);
     const trailEnabled = Boolean(config.trailingEnabled);
     const tpEnabled = config.takeProfitEnabled !== false;
-    // Live SCALPING profile wins over stale DB config (BE was stuck at 5 / soft-floor)
+    // Live SCALPING profile wins over stale DB config
     const auto = strategyMode ? modeAutoExit(strategyMode) : null;
     const beActPips = Number(
       auto?.breakEvenActivationPips ?? config.breakEvenActivationPips ?? 10,
@@ -1045,13 +1049,20 @@ export class StrategiesService {
     const beOffPips = Number(
       auto?.breakEvenOffsetPips ?? config.breakEvenOffsetPips ?? 1,
     );
+    const beMoney = Number(
+      auto?.breakEvenActivationMoney ?? config.breakEvenActivationMoney ?? 0,
+    );
+    const moneyMode =
+      (auto?.breakEvenActivationMoney != null &&
+        auto.breakEvenActivationMoney > 0) ||
+      config.breakEvenMoneyMode === true;
     const trailPips = Number(
       auto?.trailingDistancePips ?? config.trailingDistancePips ?? 15,
     );
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
     // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
     const priceOffset = config.priceOffsetMode === true;
-    // Arm at entry only when explicitly requested — SCALP default is from profit (+)
+    // Arm at entry only when explicitly requested — SCALP default is after BE
     const trailImmediate =
       config.trailArmImmediate === true || auto?.trailArmImmediate === true;
 
@@ -1062,10 +1073,12 @@ export class StrategiesService {
       const entry = Number(pos.averageEntry);
       const pip = instrumentPipSize(pos.symbol);
       const minDist = minProtectiveDistance(pos.symbol, entry);
-      // BE activation = pure pips (first +). Do NOT use trail soft-floor.
-      const beAct = priceOffset
-        ? Math.max(beActPips, pip * 0.1)
-        : resolveScalpActivationDistance(pos.symbol, Math.max(beActPips, 1));
+      // Money BE: store £0.05 as activation. Price BE: pip distance.
+      const beAct = moneyMode
+        ? Math.max(beMoney, 0.05)
+        : priceOffset
+          ? Math.max(beActPips, pip * 0.1)
+          : resolveScalpActivationDistance(pos.symbol, Math.max(beActPips, 1));
       const beOff = priceOffset
         ? Math.max(beOffPips, pip)
         : resolveScalpActivationDistance(pos.symbol, Math.max(beOffPips, 0));

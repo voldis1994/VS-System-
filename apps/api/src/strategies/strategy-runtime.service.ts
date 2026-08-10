@@ -226,6 +226,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       breakEvenEnabled?: boolean;
       breakEvenActivationPips?: number;
       breakEvenOffsetPips?: number;
+      breakEvenActivationMoney?: number;
+      breakEvenMoneyMode?: boolean;
       trailingEnabled?: boolean;
       trailingDistancePips?: number;
       trailingActivationPips?: number;
@@ -892,6 +894,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           : Number(
               config.breakEvenOffsetPips ?? scalpAuto?.breakEvenOffsetPips ?? 1,
             );
+        const beMoney = isClassicScalping
+          ? Number(scalpAuto?.breakEvenActivationMoney ?? 0.05)
+          : Number(config.breakEvenActivationMoney ?? 0);
+        const moneyBe =
+          isClassicScalping && Number.isFinite(beMoney) && beMoney > 0;
         const trailPips = isClassicScalping
           ? Number(scalpAuto?.trailingDistancePips ?? 3)
           : Number(
@@ -900,7 +907,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 15,
             );
         const trailActPips = isClassicScalping
-          ? Number(scalpAuto?.trailingActivationPips ?? 5)
+          ? Number(scalpAuto?.trailingActivationPips ?? 0)
           : Number(
               config.trailingActivationPips ??
                 scalpAuto?.trailingActivationPips ??
@@ -924,11 +931,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           beOffDist = pip;
           trailDist = 0;
         } else if (isClassicScalping || timeframe === "10s") {
-          // BE/trail ARM = pure pips (first +). Trail DISTANCE uses soft floor.
-          beActDist = resolveScalpActivationDistance(
-            brokerSymbol,
-            beActivationPips,
-          );
+          // BE arm = £0.05 account currency (NOT price pips)
+          beActDist = moneyBe
+            ? beMoney
+            : resolveScalpActivationDistance(brokerSymbol, beActivationPips);
           beOffDist = resolveScalpActivationDistance(
             brokerSymbol,
             Math.max(beOffsetPips, 0),
