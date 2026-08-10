@@ -103,6 +103,9 @@ echo   1^) START-VS-SYSTEM.bat
 echo   2^) Telefonā: Safari refresh / clear cache uz /client
 echo   3^) SAVE → START
 echo.
+echo   Konti / DB: UPDATE NEAIZKAR Docker volume.
+echo   Backup: BACKUP-DB.bat   Veca DB: FIND-OLD-DB.bat
+echo.
 echo   Ja commit joprojam vecs — tu esi nepareizaja mapē
 echo   ^(nevis git clone VS-System-^).
 echo ========================================

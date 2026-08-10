@@ -1,3 +1,6 @@
+# Stable project name — volume stays vs-system_nexus_pg even if folder renames
+name: vs-system
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -29,3 +32,4 @@ services:
 
 volumes:
   nexus_pg:
+    name: vs-system_nexus_pg

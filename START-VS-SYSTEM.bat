@@ -127,6 +127,16 @@ if errorlevel 1 (
 echo Waiting for Postgres...
 timeout /t 8 /nobreak >nul
 
+REM Auto-backup before migrate (keeps last accounts safe)
+if not exist "backups" mkdir backups
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss" 2^>nul') do set "VS_BTS=%%i"
+if defined VS_BTS (
+  docker exec nexus-postgres pg_dump -U nexus -d nexus_pro --clean --if-exists > "backups\auto-%VS_BTS%.sql" 2>nul
+  if exist "backups\auto-%VS_BTS%.sql" (
+    for %%A in ("backups\auto-%VS_BTS%.sql") do if %%~zA GTR 100 echo   Auto-backup: backups\auto-%VS_BTS%.sql
+  )
+)
+
 echo.
 echo [4/7] Prisma generate + migrate...
 call pnpm db:generate
@@ -210,6 +220,10 @@ echo     fails: client-url.txt
 echo.
 echo   Login: owner@nexus.pro / NexusOwner123!
 echo   PIN:   123456
+echo.
+echo   Kontu backup:  BACKUP-DB.bat   ^(dari regulari!^)
+echo   Kontu restore: RESTORE-DB.bat
+echo   Veca DB:       FIND-OLD-DB.bat
 echo.
 echo   Apturet:  STOP-VS-SYSTEM.bat
 echo   Update:   UPDATE-VS-SYSTEM.bat

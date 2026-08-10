@@ -1,3 +1,3 @@
-main tip: SCALP RAZOR — 6pip immediate trail + BE@5; soft trail floor (not 0.50 GOLD)
+main tip: accounts live in Docker volume vs-system_nexus_pg — UPDATE never deletes them
 repo: https://github.com/voldis1994/VS-System-
-fix: 1s trail tick; resolveScalpTrailDistance for tight chase
+fix: BACKUP-DB / RESTORE-DB / FIND-OLD-DB bats; auto-backup on START
