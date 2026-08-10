@@ -28,19 +28,19 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** 10s SCALPING — BE on first tick into profit; trail chases after +. */
+/** 10s SCALPING — BE at +0.05 (GOLD), then 3-pip trail. */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
-  /** BE the moment price is in profit (1 pip) — NOT 5 / NOT trail soft-floor */
-  breakEvenActivationPips: 1,
+  /** BE when favorable ≥ 5 pips (GOLD = +0.05) */
+  breakEvenActivationPips: 5,
   /** Lock SL at entry + 1 pip */
   breakEvenOffsetPips: 1,
   trailingEnabled: true,
-  /** Normal 10s chase — 3 pips */
+  /** Chase distance after BE */
   trailingDistancePips: 3,
-  /** Start trailing once already in plus (same bar as BE) */
-  trailingActivationPips: 1,
+  /** Trail arms at same +0.05 (after BE in tick order) */
+  trailingActivationPips: 5,
   trailArmImmediate: false,
   atrStopMult: 0.45,
   atrTpMult: 1.0,

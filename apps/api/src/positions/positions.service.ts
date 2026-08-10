@@ -827,7 +827,7 @@ export class PositionsService {
             armThreshold = trailingArmThreshold(position.symbol, {
               trailingDistance: distance,
               trailingActivationPips:
-                cfg.trailingActivationPips ?? auto?.trailingActivationPips ?? 1,
+                cfg.trailingActivationPips ?? auto?.trailingActivationPips ?? 5,
               trailingDistancePips:
                 cfg.trailingDistancePips ?? auto?.trailingDistancePips,
               priceOffsetMode: priceOffset,
@@ -841,6 +841,15 @@ export class PositionsService {
               strategy?.mode !== StrategyMode.SCALPING
             ) {
               armThreshold = 0;
+            }
+            // SCALPING: trail only after BE has locked (or already trailing)
+            if (
+              strategy?.mode === StrategyMode.SCALPING &&
+              auto?.breakEvenEnabled !== false &&
+              !fresh.breakEvenActivatedAt &&
+              !fresh.trailingActivatedAt
+            ) {
+              continue;
             }
           }
           const armed =

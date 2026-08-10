@@ -44,10 +44,14 @@ describe("resolveScalpDistance", () => {
 });
 
 describe("resolveScalpActivationDistance", () => {
-  it("GOLD 1-pip BE is 0.01 — not trail soft-floor 0.12", () => {
+  it("GOLD 5-pip BE is +0.05", () => {
+    expect(resolveScalpActivationDistance("GOLD", 5)).toBeCloseTo(0.05, 8);
+  });
+
+  it("GOLD 1-pip is 0.01 — not trail soft-floor", () => {
     expect(resolveScalpActivationDistance("GOLD", 1)).toBeCloseTo(0.01, 8);
     expect(resolveScalpActivationDistance("GOLD", 1)).toBeLessThan(
-      resolveScalpTrailDistance("GOLD", 4200, 1),
+      resolveScalpTrailDistance("GOLD", 4200, 3),
     );
   });
 });

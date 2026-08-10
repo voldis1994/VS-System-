@@ -8,13 +8,13 @@ import {
 } from "./index";
 
 describe("mode-auto-exit", () => {
-  it("SCALPING: BE on first +pip, trail chases from profit", () => {
+  it("SCALPING: BE at +5 pips (GOLD 0.05), then 3-pip trail", () => {
     const e = modeAutoExit(StrategyMode.SCALPING)!;
     expect(e.trailingEnabled).toBe(true);
     expect(e.takeProfitEnabled).toBe(false);
     expect(e.trailArmImmediate).toBe(false);
-    expect(e.breakEvenActivationPips).toBe(1);
-    expect(e.trailingActivationPips).toBe(1);
+    expect(e.breakEvenActivationPips).toBe(5);
+    expect(e.trailingActivationPips).toBe(5);
     expect(e.trailingDistancePips).toBe(3);
     expect(e.priceOffsetMode).toBe(false);
     expect(e.stopDistancePips).toBeGreaterThanOrEqual(15);

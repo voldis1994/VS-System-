@@ -881,7 +881,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
 
         const beActivationPips = isClassicScalping
-          ? Number(scalpAuto?.breakEvenActivationPips ?? 1)
+          ? Number(scalpAuto?.breakEvenActivationPips ?? 5)
           : Number(
               config.breakEvenActivationPips ??
                 scalpAuto?.breakEvenActivationPips ??
@@ -900,7 +900,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 15,
             );
         const trailActPips = isClassicScalping
-          ? Number(scalpAuto?.trailingActivationPips ?? 1)
+          ? Number(scalpAuto?.trailingActivationPips ?? 5)
           : Number(
               config.trailingActivationPips ??
                 scalpAuto?.trailingActivationPips ??
