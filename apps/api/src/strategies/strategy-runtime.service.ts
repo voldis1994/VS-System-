@@ -240,7 +240,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     // Risk/delay gates OFF — ignore saved oneTradeOnly / cooldown
     const autoExit = modeAutoExit(mode);
     const cooldownMs = 0;
-    void config.cooldownSeconds;
     // Per-mode default score bar; SCALPING always uses domain bar (ignore stale high saved minScore)
     let minScore = config.minScore ?? modeMinScore(mode);
     if (config.minScore == null || mode === StrategyMode.SCALPING) {
