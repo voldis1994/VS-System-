@@ -26,6 +26,10 @@ import {
   capitalMinStopDistance,
   closeAllowedByStopLoss,
   instrumentPipSize,
+  scalpSoftTrailDistancePrice,
+  updateScalpSoftPeakPrice,
+  scalpSoftExitLevel,
+  scalpSoftExitHit,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { modeAutoExit, StrategyMode } from "@nexus/domain";
@@ -52,7 +56,7 @@ export class PositionsService {
   private nativeTrailArmed = new Set<string>();
   /** Throttle CRITICAL "SL CHASE FAILED" toasts per position. */
   private chaseFailNotifyAt = new Map<string, number>();
-  /** Peak favorable price move (for app soft-trail exit when Capital freezes). */
+  /** Absolute peak price for 10s SCALPING soft trail (BUY high / SELL low). */
   private peakFavorable = new Map<string, number>();
   private softExitBusy = new Set<string>();
   private static readonly NAKED_RECOVERY_MS = 15_000;
@@ -836,16 +840,18 @@ export class PositionsService {
   }
 
   /**
-   * MT5-style tick trail (operator idea):
+   * 10s SCALPING only — software soft trail after floating PnL ≥ £0.05.
    *
-   *   if (floatingPnL >= 0.05) {
-   *     newSL = BUY ? mark - trailDist : mark + trailDist;
-   *     if (improves) PositionModify(ticket, newSL, tp);
-   *   }
+   * Conflict (old): resolveScalpTrailDistance → capitalSafeTrailDistance
+   * turned 0.3/3 pip into Capital ~0.50 GOLD, so "trail" chased broker SL
+   * instead of a tight app exit.
    *
-   * Runs every protection tick (~1s). trailDist is floored to Capital
-   * min-stop (~0.50 GOLD) — broker rejects tighter. Soft exit only if
-   * Capital keeps refusing while price retraces from peak.
+   * New:
+   *   softTrailDistance = instrumentPipSize(symbol) * 0.3
+   *   peak = absolute highest (BUY) / lowest (SELL) after arm
+   *   exit when mark hits peak ± softTrailDistance
+   * Broker Capital SL is left alone as emergency failsafe
+   * (brokerStopDistance ≠ softTrailDistance).
    */
   private async chaseScalpTrailFromMoneyHit(input: {
     position: {
@@ -875,41 +881,12 @@ export class PositionsService {
       dir,
       moneyPnl,
       correlationId,
-      brokerStopLoss,
     } = input;
+    void entry;
+    void input.brokerStopLoss;
     let mark = input.mark;
-    const minD = capitalMinStopDistance(position.symbol);
-    const pip = Math.max(instrumentPipSize(position.symbol), 1e-6);
-    // Same idea as MQL trail distance — Capital forces ≥ min-stop
-    const softPips = resolveScalpTrailDistance(position.symbol, entry, 3);
-    const trailDist = capitalSafeTrailDistance(position.symbol, entry, softPips);
-    const firstArm = !position.trailingActivatedAt;
 
-    await this.prisma.position.update({
-      where: { id: position.id },
-      data: {
-        trailingEnabled: true,
-        trailingDistance: trailDist.toFixed(8),
-        trailingActivatedAt: position.trailingActivatedAt ?? new Date(),
-        breakEvenEnabled: true,
-        breakEvenActivation: String(PositionsService.SCALP_MONEY_ARM),
-        ...(position.breakEvenOffset == null
-          ? {
-              breakEvenOffset: resolveScalpActivationDistance(
-                position.symbol,
-                1,
-              ).toFixed(8),
-            }
-          : {}),
-      },
-    });
-
-    // Live broker mark + SL (Capital chart is truth)
-    let liveSl =
-      brokerStopLoss.get(position.id) ??
-      (position.stopLoss != null && String(position.stopLoss).length > 0
-        ? String(position.stopLoss)
-        : null);
+    // Prefer live broker mark for soft exit (bid/offer)
     const adapter = this.brokers.get(position.accountId);
     if (adapter && position.brokerPositionId) {
       try {
@@ -917,170 +894,110 @@ export class PositionsService {
         const match = live.find(
           (x) => x.brokerPositionId === position.brokerPositionId,
         );
-        if (match?.stopLoss != null && String(match.stopLoss).length > 0) {
-          liveSl = String(match.stopLoss);
-          brokerStopLoss.set(position.id, liveSl);
-        }
         const liveMark = Number(match?.currentPrice);
         if (Number.isFinite(liveMark) && liveMark > 0) mark = liveMark;
       } catch {
-        // keep caller mark
+        // caller mark
       }
     }
 
-    const favNow = dir === "BUY" ? mark - entry : entry - mark;
-    const peak = Math.max(this.peakFavorable.get(position.id) ?? 0, favNow, 0);
+    const softPips =
+      modeAutoExit(StrategyMode.SCALPING)?.trailingDistancePips ?? 0.3;
+    const softTrailDistance = scalpSoftTrailDistancePrice(
+      position.symbol,
+      softPips,
+    );
+    // Broker failsafe distance stays Capital-safe — never mixed into soft trail
+    const brokerStopDistance = capitalMinStopDistance(position.symbol);
+    void brokerStopDistance;
+
+    const firstArm = !position.trailingActivatedAt;
+    const prevPeak = this.peakFavorable.get(position.id);
+    const peak = updateScalpSoftPeakPrice(dir, prevPeak, mark);
+    const oldPeak = prevPeak;
     this.peakFavorable.set(position.id, peak);
+    const exitLevel = scalpSoftExitLevel(dir, peak, softTrailDistance);
 
-    // ── MQL equivalent ──────────────────────────────────────────
-    // newSL = open-side of mark by trailDist; only tighten (never loosen)
-    const newSl = capitalSafeTrailingStop({
-      symbol: position.symbol,
-      direction: dir,
-      mark,
-      distance: trailDist,
-      existingSl: liveSl,
-    });
-    const curSl = liveSl != null ? Number(liveSl) : 0;
-    const improves =
-      liveSl == null ||
-      curSl === 0 ||
-      !Number.isFinite(curSl) ||
-      (dir === "BUY" ? Number(newSl) > curSl : Number(newSl) < curSl);
-
-    let stillLagging = true;
-    if (improves) {
-      try {
-        // stopLevel only — never send trailingStop:false (Capital silent no-op)
-        const after = await this.modifySlTp(
-          position.organizationId,
-          "system",
-          position.id,
-          { stopLoss: newSl },
-          correlationId,
-          { silent: !firstArm },
-        );
-        const confirmed =
-          after?.stopLoss != null && String(after.stopLoss).length > 0
-            ? String(after.stopLoss)
-            : newSl;
-        brokerStopLoss.set(position.id, confirmed);
-        liveSl = confirmed;
-        await this.prisma.position.update({
-          where: { id: position.id },
-          data: {
-            stopLoss: confirmed,
-            currentPrice: mark,
-            trailingEnabled: true,
-            trailingActivatedAt: new Date(),
-          },
-        });
-        this.chaseFailNotifyAt.delete(position.id);
-        const g =
-          dir === "BUY"
-            ? mark - Number(confirmed)
-            : Number(confirmed) - mark;
-        stillLagging = !Number.isFinite(g) || g > minD + pip;
-        if (firstArm) {
-          await this.notifications.create({
-            organizationId: position.organizationId,
-            userId: null,
-            title: "TRAIL ON (+£0.05)",
-            body: `${position.symbol} ${dir} SL → ${confirmed} follows mark (dist ${trailDist})`,
-            severity: "SUCCESS",
-          });
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`tick trail ${position.id}:`, msg);
-        // Fallback: relative stopDistance (Capital alternative to stopLevel)
-        try {
-          const after = await this.modifySlTp(
-            position.organizationId,
-            "system",
-            position.id,
-            { stopDistance: String(trailDist) },
-            correlationId,
-            { silent: true },
-          );
-          const confirmed =
-            after?.stopLoss != null && String(after.stopLoss).length > 0
-              ? String(after.stopLoss)
-              : null;
-          if (confirmed) {
-            brokerStopLoss.set(position.id, confirmed);
-            liveSl = confirmed;
-            await this.prisma.position.update({
-              where: { id: position.id },
-              data: { stopLoss: confirmed, currentPrice: mark },
-            });
-            const g =
-              dir === "BUY"
-                ? mark - Number(confirmed)
-                : Number(confirmed) - mark;
-            stillLagging = !Number.isFinite(g) || g > minD + pip;
-            this.chaseFailNotifyAt.delete(position.id);
-          } else {
-            stillLagging = true;
-          }
-        } catch (err2) {
-          stillLagging = true;
-          const msg2 = err2 instanceof Error ? err2.message : String(err2);
-          const now = Date.now();
-          const last = this.chaseFailNotifyAt.get(position.id) ?? 0;
-          if (now - last >= PositionsService.CHASE_FAIL_NOTIFY_MS) {
-            this.chaseFailNotifyAt.set(position.id, now);
-            await this.notifications.create({
-              organizationId: position.organizationId,
-              userId: null,
-              title: "TRAIL TICK FAILED",
-              body: `${position.symbol}: ${msg} | fallback: ${msg2}`,
-              severity: "CRITICAL",
-            });
-          }
-        }
-      }
-    } else if (liveSl != null) {
-      const g =
-        dir === "BUY" ? mark - Number(liveSl) : Number(liveSl) - mark;
-      stillLagging = !Number.isFinite(g) || g > minD + pip;
+    if (firstArm) {
+      await this.prisma.position.update({
+        where: { id: position.id },
+        data: {
+          trailingEnabled: true,
+          trailingDistance: softTrailDistance.toFixed(8),
+          trailingActivatedAt: new Date(),
+          breakEvenEnabled: true,
+          breakEvenActivation: String(PositionsService.SCALP_MONEY_ARM),
+          currentPrice: mark,
+        },
+      });
+      console.log(
+        `[SCALP TRAIL ARMED] symbol=${position.symbol} side=${dir} pnl=${moneyPnl.toFixed(4)} price=${mark} softTrailDistance=${softTrailDistance} peak=${peak}`,
+      );
+      await this.notifications.create({
+        organizationId: position.organizationId,
+        userId: null,
+        title: "SCALP TRAIL ARMED",
+        body: `${position.symbol} ${dir} softTrail=${softTrailDistance} peak=${peak} (broker SL failsafe untouched)`,
+        severity: "SUCCESS",
+      });
+    } else if (
+      oldPeak != null &&
+      Number.isFinite(oldPeak) &&
+      peak !== oldPeak
+    ) {
+      console.log(
+        `[SCALP TRAIL PEAK] symbol=${position.symbol} oldPeak=${oldPeak} newPeak=${peak} exitLevel=${exitLevel}`,
+      );
+      await this.prisma.position.update({
+        where: { id: position.id },
+        data: { currentPrice: mark },
+      });
     }
 
-    // Soft exit only if Capital SL will not follow (chart frozen)
-    const softDist = Math.max(softPips, pip * 3);
-    const retrace = peak - favNow;
     if (
-      stillLagging &&
-      peak >= softDist &&
-      retrace + 1e-12 >= softDist &&
-      !this.softExitBusy.has(position.id)
+      !scalpSoftExitHit(dir, mark, exitLevel) ||
+      this.softExitBusy.has(position.id)
     ) {
-      this.softExitBusy.add(position.id);
-      try {
-        await this.notifications.create({
-          organizationId: position.organizationId,
-          userId: null,
-          title: "SOFT TRAIL EXIT",
-          body: `${position.symbol}: Capital SL frozen — close on ${retrace.toFixed(3)} retrace`,
-          severity: "WARNING",
-        });
-        await this.close(
-          position.organizationId,
-          "system",
-          position.id,
-          { clientRequestId: newId() },
-          correlationId,
-        );
-        this.peakFavorable.delete(position.id);
-        this.chaseFailNotifyAt.delete(position.id);
-      } catch (closeErr) {
-        console.warn(
-          `soft trail exit ${position.id}:`,
-          closeErr instanceof Error ? closeErr.message : closeErr,
-        );
-      } finally {
-        this.softExitBusy.delete(position.id);
-      }
+      return;
+    }
+
+    this.softExitBusy.add(position.id);
+    try {
+      console.log(
+        `[SCALP TRAIL EXIT] symbol=${position.symbol} side=${dir} peak=${peak} currentPrice=${mark} exitLevel=${exitLevel} reason=soft_trail_retrace`,
+      );
+      await this.notifications.create({
+        organizationId: position.organizationId,
+        userId: null,
+        title: "SCALP TRAIL EXIT",
+        body: `${position.symbol} ${dir}: mark ${mark} hit exit ${exitLevel} (peak ${peak}, soft ${softTrailDistance})`,
+        severity: "WARNING",
+      });
+      await this.close(
+        position.organizationId,
+        "system",
+        position.id,
+        { clientRequestId: newId() },
+        correlationId,
+      );
+      this.peakFavorable.delete(position.id);
+      this.chaseFailNotifyAt.delete(position.id);
+    } catch (closeErr) {
+      console.warn(
+        `scalp soft trail exit ${position.id}:`,
+        closeErr instanceof Error ? closeErr.message : closeErr,
+      );
+      await this.notifications.create({
+        organizationId: position.organizationId,
+        userId: null,
+        title: "SCALP TRAIL EXIT FAILED",
+        body: `${position.symbol}: ${
+          closeErr instanceof Error ? closeErr.message : String(closeErr)
+        }`,
+        severity: "CRITICAL",
+      });
+    } finally {
+      this.softExitBusy.delete(position.id);
     }
   }
 
@@ -1305,9 +1222,8 @@ export class PositionsService {
             const needBe =
               !position.breakEvenEnabled || position.breakEvenActivation == null;
             if (needTrail || needBe) {
-              const trailDist = resolveScalpTrailDistance(
+              const trailDist = scalpSoftTrailDistancePrice(
                 position.symbol,
-                entry,
                 autoHeal.trailingDistancePips,
               );
               const beMoney = String(autoHeal.breakEvenActivationMoney ?? 0.05);
@@ -1353,38 +1269,35 @@ export class PositionsService {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // MQL idea: if (floatingPnL >= 0.05) → every tick SL follows mark.
-        // Also chase if SL is stuck far from mark (Capital freeze recovery).
+        // 10s SCALPING ONLY: software 0.3-pip soft trail after £0.05.
+        // Manual / other modes / other TFs never enter this path.
         // ═══════════════════════════════════════════════════════════
         {
-          const liveSlEarly =
-            brokerStopLoss.get(position.id) ??
-            (position.stopLoss != null && String(position.stopLoss).length > 0
-              ? String(position.stopLoss)
-              : null);
-          const liveN = liveSlEarly != null ? Number(liveSlEarly) : NaN;
-          const minDEarly = capitalMinStopDistance(position.symbol);
-          const gapEarly = Number.isFinite(liveN)
-            ? dir === "BUY"
-              ? mark - liveN
-              : liveN - mark
-            : 0;
-          const stuckSl =
-            Number.isFinite(liveN) && gapEarly > minDEarly * 1.5;
-          const profitHit =
-            Number.isFinite(moneyPnl) &&
-            moneyPnl >= PositionsService.SCALP_MONEY_ARM;
-          if (profitHit || stuckSl) {
-            await this.chaseScalpTrailFromMoneyHit({
-              position,
-              mark,
-              entry,
-              dir,
-              moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
-              correlationId,
-              brokerStopLoss,
+          let isClassicScalping = false;
+          if (position.strategyId) {
+            const stTrail = await this.prisma.strategy.findFirst({
+              where: { id: position.strategyId },
+              select: { mode: true },
             });
-            continue;
+            isClassicScalping = stTrail?.mode === StrategyMode.SCALPING;
+          }
+          if (isClassicScalping) {
+            const profitHit =
+              Number.isFinite(moneyPnl) &&
+              moneyPnl >= PositionsService.SCALP_MONEY_ARM;
+            const alreadyArmed = position.trailingActivatedAt != null;
+            if (profitHit || alreadyArmed) {
+              await this.chaseScalpTrailFromMoneyHit({
+                position,
+                mark,
+                entry,
+                dir,
+                moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
+                correlationId,
+                brokerStopLoss,
+              });
+              continue; // do not run Capital SL chase for SCALPING
+            }
           }
         }
 
@@ -1611,9 +1524,8 @@ export class PositionsService {
           });
           if (stForce?.mode === StrategyMode.SCALPING) {
             const autoF = modeAutoExit(StrategyMode.SCALPING)!;
-            const td = resolveScalpTrailDistance(
+            const td = scalpSoftTrailDistancePrice(
               position.symbol,
-              entry,
               autoF.trailingDistancePips,
             );
             fresh = await this.prisma.position.update({
@@ -1639,9 +1551,8 @@ export class PositionsService {
           });
           if (stP?.mode === StrategyMode.SCALPING) {
             const autoP = modeAutoExit(StrategyMode.SCALPING)!;
-            const td = resolveScalpTrailDistance(
+            const td = scalpSoftTrailDistancePrice(
               position.symbol,
-              entry,
               autoP.trailingDistancePips,
             );
             fresh = await this.prisma.position.update({
@@ -1676,6 +1587,9 @@ export class PositionsService {
               ? modeAutoExit(strategy.mode as StrategyMode)
               : null;
             isScalping = strategy?.mode === StrategyMode.SCALPING;
+            // 10s SCALPING exit is software soft trail (chaseScalpTrailFromMoneyHit).
+            // Never Capital-chase SL with min-stop floor for this mode.
+            if (isScalping) continue;
             const priceOffset = cfg.priceOffsetMode === true;
             const trailPips = Number(
               cfg.trailingDistancePips ?? auto?.trailingDistancePips ?? 3,

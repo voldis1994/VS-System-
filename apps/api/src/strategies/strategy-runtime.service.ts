@@ -20,6 +20,7 @@ import {
   resolveScalpDistance,
   resolveScalpTrailDistance,
   resolveScalpActivationDistance,
+  scalpSoftTrailDistancePrice,
   capitalSafeInitialStop,
   capitalMinStopDistance,
   isMarginOrFundsError,
@@ -1165,7 +1166,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const moneyBe =
           isClassicScalping && Number.isFinite(beMoney) && beMoney > 0;
         const trailPips = isClassicScalping
-          ? Number(scalpAuto?.trailingDistancePips ?? 3)
+          ? Number(scalpAuto?.trailingDistancePips ?? 0.3)
           : Number(
               config.trailingDistancePips ??
                 scalpAuto?.trailingDistancePips ??
@@ -1204,11 +1205,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             brokerSymbol,
             Math.max(beOffsetPips, 0),
           );
-          trailDist = resolveScalpTrailDistance(
-            brokerSymbol,
-            entry,
-            trailPips,
-          );
+          // Classic 10s SCALPING: software soft trail = pip × 0.3 (not Capital-safe)
+          trailDist = isClassicScalping
+            ? scalpSoftTrailDistancePrice(brokerSymbol, trailPips)
+            : resolveScalpTrailDistance(brokerSymbol, entry, trailPips);
         } else {
           beActDist =
             beActivationPips > 0 && beActivationPips < 1

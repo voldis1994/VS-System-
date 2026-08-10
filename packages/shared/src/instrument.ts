@@ -352,8 +352,53 @@ export function capitalSafeInitialStop(input: {
 }
 
 /**
+ * 10s SCALPING software trail distance in **price** units.
+ * Pure pip×count — NEVER floor to Capital min-stop / protective distance.
+ * Example: GOLD pip=0.01, 0.3 pip → 0.003
+ */
+export function scalpSoftTrailDistancePrice(
+  symbol: string,
+  pips = 0.3,
+): number {
+  const pip = instrumentPipSize(symbol);
+  const n = Number(pips);
+  const count = Number.isFinite(n) && n > 0 ? n : 0.3;
+  return pip * count;
+}
+
+/** Absolute peak price for soft trail (BUY=high watermark, SELL=low). */
+export function updateScalpSoftPeakPrice(
+  direction: "BUY" | "SELL",
+  peak: number | null | undefined,
+  mark: number,
+): number {
+  if (!Number.isFinite(mark)) return Number(peak) || 0;
+  if (peak == null || !Number.isFinite(peak)) return mark;
+  return direction === "BUY" ? Math.max(peak, mark) : Math.min(peak, mark);
+}
+
+export function scalpSoftExitLevel(
+  direction: "BUY" | "SELL",
+  peak: number,
+  softTrailDistance: number,
+): number {
+  return direction === "BUY"
+    ? peak - softTrailDistance
+    : peak + softTrailDistance;
+}
+
+export function scalpSoftExitHit(
+  direction: "BUY" | "SELL",
+  mark: number,
+  exitLevel: number,
+): boolean {
+  return direction === "BUY" ? mark <= exitLevel : mark >= exitLevel;
+}
+
+/**
  * Tight SCALPING trail / BE *offset distance* — pip counts with soft floor.
  * Do NOT use for BE/trail *activation* — use resolveScalpActivationDistance.
+ * Do NOT use for 10s SCALPING software exit — use scalpSoftTrailDistancePrice.
  */
 export function resolveScalpTrailDistance(
   symbol: string,

@@ -8,13 +8,13 @@ import {
 } from "./index";
 
 describe("mode-auto-exit", () => {
-  it("SCALPING: BE at £0.05 money PnL, then 3-pip trail", () => {
+  it("SCALPING: BE at £0.05 money PnL, then 0.3-pip software soft trail", () => {
     const e = modeAutoExit(StrategyMode.SCALPING)!;
     expect(e.trailingEnabled).toBe(true);
     expect(e.takeProfitEnabled).toBe(false);
     expect(e.trailArmImmediate).toBe(true);
     expect(e.breakEvenActivationMoney).toBe(0.05);
-    expect(e.trailingDistancePips).toBe(3);
+    expect(e.trailingDistancePips).toBe(0.3);
     expect(e.priceOffsetMode).toBe(false);
     expect(e.stopDistancePips).toBeGreaterThanOrEqual(15);
     expect(modeHidesExitPickers(StrategyMode.SCALPING)).toBe(true);

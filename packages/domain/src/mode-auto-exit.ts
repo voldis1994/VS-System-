@@ -33,9 +33,8 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** 10s SCALPING — £0.05 floating PnL → SL follows price (Capital trail).
- * True BE lock at entry needs Capital min-stop room (~0.50 GOLD); trail
- * does NOT wait for that — it arms at £0.05. */
+/** 10s SCALPING — £0.05 floating PnL arms software soft trail (0.3 pip).
+ * Soft exit is app-side (peak ± pip×0.3). Capital broker SL stays failsafe only. */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
@@ -46,14 +45,14 @@ export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   /** BE when floating profit ≥ £0.05 (account currency) */
   breakEvenActivationMoney: 0.05,
   trailingEnabled: true,
-  /** Chase distance after BE */
-  trailingDistancePips: 3,
-  /** Runtime arms Capital-safe trail immediately; threshold unused */
+  /** Software soft-trail distance in pips (NOT Capital min-stop) */
+  trailingDistancePips: 0.3,
+  /** Runtime arms soft trail at £0.05 money; threshold unused */
   trailingActivationPips: 0,
   trailArmImmediate: true,
   atrStopMult: 0.45,
   atrTpMult: 1.0,
-  /** Initial protective SL until BE/trail take over */
+  /** Initial Capital failsafe SL until soft trail / exit */
   stopDistancePips: 18,
   cooldownSeconds: 0,
   exitVersion: "SCALP",

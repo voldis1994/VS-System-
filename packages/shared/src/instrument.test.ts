@@ -15,6 +15,10 @@ import {
   capitalSafeTrailingStop,
   capitalSafeInitialStop,
   capitalMinStopDistance,
+  scalpSoftTrailDistancePrice,
+  updateScalpSoftPeakPrice,
+  scalpSoftExitLevel,
+  scalpSoftExitHit,
 } from "./instrument";
 
 describe("instrumentPipSize", () => {
@@ -359,5 +363,52 @@ describe("capitalSafeTrailingStop", () => {
     expect(Number(sl)).toBeLessThan(Number(stuckSl));
     expect(Number(sl)).toBeCloseTo(mark + 0.5, 1);
     expect(Number(sl) - mark).toBeGreaterThanOrEqual(0.5 - 1e-9);
+  });
+});
+
+describe("scalpSoftTrail 0.3 pip (10s SCALPING software exit)", () => {
+  it("GOLD softTrailDistance = pip × 0.3 = 0.003 (never Capital 0.50)", () => {
+    expect(instrumentPipSize("GOLD")).toBe(0.01);
+    expect(scalpSoftTrailDistancePrice("GOLD", 0.3)).toBeCloseTo(0.003, 12);
+    expect(scalpSoftTrailDistancePrice("GOLD", 0.3)).toBeLessThan(
+      capitalMinStopDistance("GOLD"),
+    );
+  });
+
+  it("BUY: peak rises, exit = peak − 0.003, hits on retrace", () => {
+    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
+    let peak = updateScalpSoftPeakPrice("BUY", null, 3000.1);
+    expect(peak).toBe(3000.1);
+    let exit = scalpSoftExitLevel("BUY", peak, soft);
+    expect(exit).toBeCloseTo(3000.097, 9);
+    expect(scalpSoftExitHit("BUY", exit, exit)).toBe(true);
+    expect(scalpSoftExitHit("BUY", exit + soft * 0.5, exit)).toBe(false);
+
+    peak = updateScalpSoftPeakPrice("BUY", peak, 3000.15);
+    expect(peak).toBe(3000.15);
+    // never moves back
+    peak = updateScalpSoftPeakPrice("BUY", peak, 3000.12);
+    expect(peak).toBe(3000.15);
+    exit = scalpSoftExitLevel("BUY", peak, soft);
+    expect(exit).toBeCloseTo(3000.147, 9);
+    expect(scalpSoftExitHit("BUY", exit, exit)).toBe(true);
+    expect(scalpSoftExitHit("BUY", exit - 0.001, exit)).toBe(true);
+    expect(scalpSoftExitHit("BUY", exit + soft * 0.5, exit)).toBe(false);
+  });
+
+  it("SELL: peak falls, exit = peak + 0.003, hits on bounce", () => {
+    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
+    let peak = updateScalpSoftPeakPrice("SELL", null, 3000.1);
+    expect(peak).toBe(3000.1);
+    peak = updateScalpSoftPeakPrice("SELL", peak, 2999.9);
+    expect(peak).toBe(2999.9);
+    // never moves back up
+    peak = updateScalpSoftPeakPrice("SELL", peak, 3000.0);
+    expect(peak).toBe(2999.9);
+    const exit = scalpSoftExitLevel("SELL", peak, soft);
+    expect(exit).toBeCloseTo(2999.903, 9);
+    expect(scalpSoftExitHit("SELL", exit, exit)).toBe(true);
+    expect(scalpSoftExitHit("SELL", exit + 0.001, exit)).toBe(true);
+    expect(scalpSoftExitHit("SELL", exit - soft * 0.5, exit)).toBe(false);
   });
 });
