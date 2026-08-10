@@ -1216,14 +1216,21 @@ export class CapitalComAdapter implements BrokerAdapter {
     const body: Record<string, unknown> = {};
     const trailDist =
       request.stopDistance != null ? Number(request.stopDistance) : NaN;
-    if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
-      // Native trail — do not also send stopLevel (Capital rejects the combo)
+    const hasDist = Number.isFinite(trailDist) && trailDist > 0;
+    const hasLevel =
+      request.stopLoss !== undefined && request.stopLoss !== null;
+
+    if (request.trailingStop && hasDist) {
+      // Native Capital trail — chart SL should walk with price
       body.trailingStop = true;
       body.stopDistance = trailDist;
-    } else if (request.stopLoss !== undefined && request.stopLoss !== null) {
+    } else if (hasDist && !hasLevel) {
+      // Static relative stop (Capital: only ONE of stopLevel|stopDistance|stopAmount)
+      body.stopDistance = trailDist;
+    } else if (hasLevel) {
+      // Absolute stopLevel ONLY — do NOT send trailingStop:false.
+      // That combo often ACK's while leaving the old stopLevel frozen.
       body.stopLevel = Number(request.stopLoss);
-      // Switching back to fixed SL clears broker trailing
-      body.trailingStop = false;
     }
     if (request.takeProfit !== undefined && request.takeProfit !== null) {
       body.profitLevel = Number(request.takeProfit);
@@ -1231,6 +1238,24 @@ export class CapitalComAdapter implements BrokerAdapter {
     // Only clear TP when explicitly null — never send null on every SCALPING attach
     if (request.takeProfit === null) body.profitLevel = null;
     if (request.stopLoss === null) body.stopLevel = null;
+
+    if (Object.keys(body).length === 0) {
+      throw new Error("Capital modify: empty body (no stop/TP fields)");
+    }
+
+    // Snapshot SL before PUT — used to detect "ACK but unchanged"
+    let beforeSl = NaN as number;
+    let beforeMark = NaN as number;
+    try {
+      const beforeList = await this.getOpenPositionsLocked({ force: true });
+      const before = beforeList.find(
+        (p) => p.brokerPositionId === request.brokerPositionId,
+      );
+      if (before?.stopLoss != null) beforeSl = Number(before.stopLoss);
+      if (before?.currentPrice != null) beforeMark = Number(before.currentPrice);
+    } catch {
+      // continue — verify after
+    }
 
     const res = await this.request<{ dealReference?: string }>(
       "PUT",
@@ -1256,19 +1281,16 @@ export class CapitalComAdapter implements BrokerAdapter {
 
     this.invalidatePositionsCache();
     const wantSl =
-      request.stopLoss !== undefined && request.stopLoss !== null
-        ? Number(request.stopLoss)
-        : NaN;
+      hasLevel ? Number(request.stopLoss) : NaN;
     const tol =
       Number.isFinite(wantSl)
-        ? Math.max(0.02, Math.abs(wantSl) * 1e-6) // GOLD 2dp ≈ 0.02
+        ? Math.max(0.02, Math.abs(wantSl) * 1e-6)
         : 0.02;
 
     let found: BrokerPosition | undefined;
     let confirmedSl: string | undefined;
     let confirmedTp: string | undefined;
     // Capital often ACK's PUT before stopLevel is visible / updated.
-    // Poll until the requested SL is on the broker — never fabricate success.
     for (let attempt = 0; attempt < 8; attempt++) {
       if (attempt > 0) {
         await new Promise((r) => setTimeout(r, 120 + 80 * attempt));
@@ -1289,19 +1311,34 @@ export class CapitalComAdapter implements BrokerAdapter {
           ? String(found.takeProfit)
           : undefined;
 
-      if (request.stopLoss === undefined || request.stopLoss === null) break;
+      if (!hasLevel && !hasDist) break;
       if (!confirmedSl) continue;
-      if (!Number.isFinite(wantSl)) break;
+
+      if (hasLevel && Number.isFinite(wantSl)) {
+        const got = Number(confirmedSl);
+        if (Number.isFinite(got) && Math.abs(got - wantSl) <= tol) break;
+        continue;
+      }
+
+      // stopDistance / native trail: accept when SL exists and moved or gap≈dist
       const got = Number(confirmedSl);
-      if (Number.isFinite(got) && Math.abs(got - wantSl) <= tol) break;
-      // keep polling — stale readback is common right after ACK
+      const mark = Number(found.currentPrice);
+      if (!Number.isFinite(got)) continue;
+      const moved =
+        !Number.isFinite(beforeSl) || Math.abs(got - beforeSl) > tol;
+      const gap =
+        Number.isFinite(mark) && mark > 0 ? Math.abs(mark - got) : NaN;
+      const gapOk =
+        Number.isFinite(gap) &&
+        hasDist &&
+        gap <= trailDist * 1.6 + 0.05 &&
+        gap + 1e-9 >= Math.min(trailDist, 0.45) * 0.5;
+      if (moved || gapOk) break;
     }
     if (!found) throw new Error("Position not found after modify");
 
-    // NEVER fabricate SL/TP — Capital chart is source of truth
     if (
-      request.stopLoss !== undefined &&
-      request.stopLoss !== null &&
+      (hasLevel || hasDist || request.trailingStop) &&
       !confirmedSl
     ) {
       throw new Error(
@@ -1309,20 +1346,31 @@ export class CapitalComAdapter implements BrokerAdapter {
       );
     }
 
-    // CRITICAL: Capital often ACK's the PUT but leaves the old stopLevel.
-    // If we treat that as success, trail "runs" forever while the chart SL is frozen.
-    if (
-      request.stopLoss !== undefined &&
-      request.stopLoss !== null &&
-      confirmedSl &&
-      Number.isFinite(wantSl)
-    ) {
+    if (hasLevel && confirmedSl && Number.isFinite(wantSl)) {
       const got = Number(confirmedSl);
       if (Number.isFinite(got) && Math.abs(got - wantSl) > tol) {
         throw new Error(
           `Capital SL not moved: requested ${wantSl}, broker still ${got}`,
         );
       }
+    }
+
+    if (hasDist && !hasLevel && confirmedSl) {
+      const got = Number(confirmedSl);
+      const mark = Number(found.currentPrice);
+      const unchanged =
+        Number.isFinite(beforeSl) &&
+        Number.isFinite(got) &&
+        Math.abs(got - beforeSl) <= tol;
+      const gap =
+        Number.isFinite(mark) && mark > 0 ? Math.abs(mark - got) : Infinity;
+      const gapTooWide = hasDist && gap > trailDist * 1.6 + 0.05;
+      if (unchanged && gapTooWide) {
+        throw new Error(
+          `Capital SL not moved via stopDistance=${trailDist}: broker still ${got} (mark ${mark}, before ${beforeSl})`,
+        );
+      }
+      void beforeMark;
     }
 
     return {
@@ -1336,9 +1384,15 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async closePosition(request: BrokerClosePositionRequest): Promise<BrokerCloseResult> {
+    return this.withLoginLock(async () => this.closePositionLocked(request));
+  }
+
+  private async closePositionLocked(
+    request: BrokerClosePositionRequest,
+  ): Promise<BrokerCloseResult> {
     await this.ensureSession();
     await this.ensureActiveAccount();
-    const positions = await this.getOpenPositions({ force: true });
+    const positions = await this.getOpenPositionsLocked({ force: true });
     const pos = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
     if (!pos) throw new Error("Position not found");
     this.invalidatePositionsCache();
@@ -1360,7 +1414,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     // Confirm UNKNOWN — verify deal is gone from open list
     if (confirm.dealStatus === "UNKNOWN" || (!confirm.dealId && !confirm.dealStatus)) {
       await new Promise((r) => setTimeout(r, 200));
-      const stillOpen = await this.getOpenPositions({ force: true });
+      const stillOpen = await this.getOpenPositionsLocked({ force: true });
       if (stillOpen.some((p) => p.brokerPositionId === request.brokerPositionId)) {
         throw new Error("Capital close confirm timeout — position still open");
       }
@@ -1379,9 +1433,15 @@ export class CapitalComAdapter implements BrokerAdapter {
   async partialClosePosition(
     request: BrokerPartialCloseRequest,
   ): Promise<BrokerCloseResult> {
+    return this.withLoginLock(async () => this.partialClosePositionLocked(request));
+  }
+
+  private async partialClosePositionLocked(
+    request: BrokerPartialCloseRequest,
+  ): Promise<BrokerCloseResult> {
     await this.ensureSession();
     await this.ensureActiveAccount();
-    const positions = await this.getOpenPositions();
+    const positions = await this.getOpenPositionsLocked({ force: true });
     const pos = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
     if (!pos) throw new Error("Position not found");
     const closeSize = Number(request.volume);
@@ -1408,7 +1468,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       );
     }
     this.invalidatePositionsCache();
-    const still = await this.getOpenPositions({ force: true });
+    const still = await this.getOpenPositionsLocked({ force: true });
     const after = still.find((p) => p.brokerPositionId === request.brokerPositionId);
     const remaining = after ? Number(after.volume) : 0;
     // Never force 2dp — GOLD/crypto micro lots use 0.001 steps

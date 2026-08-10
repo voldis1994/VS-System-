@@ -328,7 +328,8 @@ export class PaperBrokerAdapter implements BrokerAdapter {
     const symbol = this.requireSymbol(position.symbol);
     const trailDist =
       request.stopDistance != null ? Number(request.stopDistance) : NaN;
-    if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
+    const hasDist = Number.isFinite(trailDist) && trailDist > 0;
+    if ((request.trailingStop || (hasDist && request.stopLoss === undefined)) && hasDist) {
       const mark = d(position.currentPrice);
       const dist = d(String(trailDist));
       const sl =

@@ -48,16 +48,20 @@ export class PositionsService {
   private nakedRecoveryAt = new Map<string, number>();
   private nakedRecoveryLevel = new Map<string, number>();
   private nakedNotifyAt = new Map<string, number>();
-  /** Capital native trailingStop already armed for this position (last resort). */
+  /** Capital native trailingStop already armed for this position. */
   private nativeTrailArmed = new Set<string>();
   /** Throttle CRITICAL "SL CHASE FAILED" toasts per position. */
   private chaseFailNotifyAt = new Map<string, number>();
+  /** Peak favorable price move (for app soft-trail exit when Capital freezes). */
+  private peakFavorable = new Map<string, number>();
+  private softExitBusy = new Set<string>();
   private static readonly NAKED_RECOVERY_MS = 15_000;
   private static readonly NAKED_NOTIFY_MS = 120_000;
   private static readonly CHASE_FAIL_NOTIFY_MS = 30_000;
   /** Operator rule: £0.05 floating → SL starts following price. */
   private static readonly SCALP_MONEY_ARM = 0.05;
-  /** Serialize BE/trail ticks — concurrent tickAll + trailTimer double-modified Capital. */
+  /** Per-account BE/trail lock — one slow Capital confirm must not skip all accounts. */
+  private protectionsRunningByAccount = new Set<string>();
   private protectionsRunning = false;
 
   constructor(
@@ -387,15 +391,15 @@ export class PositionsService {
     const brokerPos = await adapter.modifyPosition({
       brokerPositionId: position.brokerPositionId,
       stopLoss:
-        input.trailingStop === true
+        input.trailingStop === true ||
+        (input.stopDistance != null && input.stopLoss === undefined)
           ? undefined
           : input.stopLoss === undefined
             ? undefined
             : input.stopLoss,
       takeProfit: input.takeProfit === undefined ? undefined : input.takeProfit,
       trailingStop: input.trailingStop === true ? true : undefined,
-      stopDistance:
-        input.trailingStop === true ? input.stopDistance : undefined,
+      stopDistance: input.stopDistance,
     });
 
     // Broker readback is source of truth — never stamp DB with requested SL
@@ -833,17 +837,19 @@ export class PositionsService {
 
   /**
    * Operator rule — SCALPING:
-   * Floating PnL ≥ £0.05 (or SL stuck far from mark) → SL MUST follow price
-   * on the Capital chart via fixed stopLevel PUTs every tick.
+   * Floating PnL ≥ £0.05 (or SL stuck) → trail must protect the trade.
    *
-   * Failure modes we hit in production:
-   * 1) Armed Capital native trailingStop → chart SL froze (e.g. 4394 vs 4388)
-   * 2) Capital ACK'd PUT but left old stopLevel → we stamped success → lie
-   * 3) Soft 3-pip distance rejected by GOLD min-stop ~0.50 → forever skip
+   * Capital chart SL has failed three ways:
+   *  A) native trailingStop alone didn't walk
+   *  B) stopLevel + trailingStop:false ACK'd but left old level
+   *  C) software chase starved behind login lock
    *
-   * Fix: software chase only (mark ± Capital-safe distance), retry wider
-   * distances on reject / "SL not moved", never claim success without broker
-   * readback match. Native trail is last-resort only after all distances fail.
+   * New order (this tick):
+   *  1) Arm Capital native trailingStop+stopDistance (PRIMARY)
+   *  2) If SL still lagging → PUT stopDistance only (relative static)
+   *  3) If still lagging → PUT stopLevel only (no trailingStop:false)
+   *  4) Soft app exit on scalp-distance retrace from peak (PnL protection
+   *     even when chart SL is frozen)
    */
   private async chaseScalpTrailFromMoneyHit(input: {
     position: {
@@ -901,7 +907,6 @@ export class PositionsService {
       },
     });
 
-    // Fresh broker SL + mark (Capital chart is source of truth)
     let liveSl =
       brokerStopLoss.get(position.id) ??
       (position.stopLoss != null && String(position.stopLoss).length > 0
@@ -927,116 +932,62 @@ export class PositionsService {
       }
     }
 
+    const favNow = dir === "BUY" ? mark - entry : entry - mark;
+    const prevPeak = this.peakFavorable.get(position.id) ?? 0;
+    const peak = Math.max(prevPeak, favNow, 0);
+    this.peakFavorable.set(position.id, peak);
+
     const liveSlN = liveSl != null ? Number(liveSl) : NaN;
     const gap = Number.isFinite(liveSlN)
       ? dir === "BUY"
         ? mark - liveSlN
         : liveSlN - mark
       : Infinity;
-    // SL lagging = further from mark than Capital min + 1 pip → MUST pull in
     const lagging = !Number.isFinite(liveSlN) || gap > minD + pip;
 
-    // Try Capital-legal distances: min → progressively wider (spread / reject)
     const distances = [
       baseDist,
       Math.max(baseDist, minD * 1.25),
       Math.max(baseDist, minD * 1.5),
       Math.max(baseDist, minD * 2),
-      Math.max(baseDist, minD * 3),
     ];
     const uniqDist = [...new Set(distances.map((x) => Number(x.toFixed(8))))];
 
     let lastErr: string | null = null;
     let pushed = false;
+    let stillLagging = lagging;
 
-    for (const dist of uniqDist) {
-      const candidate = capitalSafeTrailingStop({
-        symbol: position.symbol,
-        direction: dir,
-        mark,
-        distance: dist,
-        existingSl: liveSl,
+    const stampConfirmed = async (
+      confirmed: string,
+      title: string,
+      silent: boolean,
+    ) => {
+      brokerStopLoss.set(position.id, confirmed);
+      liveSl = confirmed;
+      await this.prisma.position.update({
+        where: { id: position.id },
+        data: {
+          stopLoss: confirmed,
+          currentPrice: mark,
+          trailingEnabled: true,
+          trailingActivatedAt: new Date(),
+        },
       });
-      const candN = Number(candidate);
-      if (!Number.isFinite(candN)) continue;
-
-      const improves =
-        !Number.isFinite(liveSlN) ||
-        (dir === "BUY" ? d(candidate).gt(d(liveSlN)) : d(candidate).lt(d(liveSlN)));
-      const legalGap = Math.abs(mark - candN) + 1e-9 >= minD - 1e-9;
-
-      // CORE: pull SL to mark±dist whenever it lags or can tighten
-      if (!(lagging || improves) || !legalGap) continue;
-
-      try {
-        const after = await this.modifySlTp(
-          position.organizationId,
-          "system",
-          position.id,
-          { stopLoss: candidate },
-          correlationId,
-          { silent: !firstArm && !lagging },
-        );
-        const afterSl =
-          after?.stopLoss != null ? String(after.stopLoss) : "";
-        const confirmed = afterSl.length > 0 ? afterSl : candidate;
-        brokerStopLoss.set(position.id, confirmed);
-        liveSl = confirmed;
-        this.nativeTrailArmed.delete(position.id);
-        await this.prisma.position.update({
-          where: { id: position.id },
-          data: {
-            stopLoss: confirmed,
-            currentPrice: mark,
-            trailingEnabled: true,
-            trailingActivatedAt: new Date(),
-          },
-        });
-        if (lagging || firstArm) {
-          await this.notifications.create({
-            organizationId: position.organizationId,
-            userId: null,
-            title: lagging ? "SL CHASE" : "£0.05 — SL FOLLOWS",
-            body: `${position.symbol} ${dir} SL ${Number.isFinite(liveSlN) ? liveSlN : "none"} → ${confirmed} (mark ${mark.toFixed(2)}, PnL £${moneyPnl.toFixed(2)})`,
-            severity: "SUCCESS",
-          });
-        }
-        pushed = true;
-        break;
-      } catch (err) {
-        lastErr = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `£0.05 SL chase ${position.id} dist=${dist}:`,
-          lastErr,
-        );
-        // try next wider distance
-      }
-    }
-
-    if (pushed) {
-      this.chaseFailNotifyAt.delete(position.id);
-      return;
-    }
-
-    if (lastErr) {
-      const now = Date.now();
-      const lastNotify = this.chaseFailNotifyAt.get(position.id) ?? 0;
-      if (now - lastNotify >= PositionsService.CHASE_FAIL_NOTIFY_MS) {
-        this.chaseFailNotifyAt.set(position.id, now);
+      if (!silent) {
         await this.notifications.create({
           organizationId: position.organizationId,
           userId: null,
-          title: "SL CHASE FAILED",
-          body: `${position.symbol}: ${lastErr}`,
-          severity: "CRITICAL",
+          title,
+          body: `${position.symbol} ${dir} SL → ${confirmed} (mark ${mark.toFixed(2)}, PnL £${moneyPnl.toFixed(2)})`,
+          severity: "SUCCESS",
         });
       }
-    }
+    };
 
-    // Last resort only — native often freezes the chart line; do not prefer it.
-    if (lastErr && !this.nativeTrailArmed.has(position.id)) {
+    // 1) Native Capital trail FIRST
+    if (!this.nativeTrailArmed.has(position.id)) {
       try {
-        await this.modifySlTp(
+        const after = await this.modifySlTp(
           position.organizationId,
           "system",
           position.id,
@@ -1048,18 +999,182 @@ export class PositionsService {
           { silent: true },
         );
         this.nativeTrailArmed.add(position.id);
+        const afterSl =
+          after?.stopLoss != null ? String(after.stopLoss) : "";
+        if (afterSl) {
+          await stampConfirmed(
+            afterSl,
+            firstArm ? "£0.05 — native TRAIL ON" : "native TRAIL refresh",
+            !firstArm,
+          );
+          const n = Number(afterSl);
+          const g = dir === "BUY" ? mark - n : n - mark;
+          if (Number.isFinite(g) && g <= minD + pip * 2) {
+            this.chaseFailNotifyAt.delete(position.id);
+            pushed = true;
+            stillLagging = false;
+          }
+        } else {
+          pushed = true;
+        }
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : String(err);
+        console.warn(`native trail arm ${position.id}:`, lastErr);
+      }
+    }
+
+    if (liveSl != null) {
+      const n = Number(liveSl);
+      const g = dir === "BUY" ? mark - n : n - mark;
+      stillLagging = !Number.isFinite(n) || g > minD + pip;
+    }
+
+    // 2) Relative stopDistance if still lagging
+    if (stillLagging) {
+      for (const dist of uniqDist) {
+        try {
+          const after = await this.modifySlTp(
+            position.organizationId,
+            "system",
+            position.id,
+            { stopDistance: String(dist) },
+            correlationId,
+            { silent: true },
+          );
+          const afterSl =
+            after?.stopLoss != null ? String(after.stopLoss) : "";
+          if (afterSl) {
+            const n = Number(afterSl);
+            const improves =
+              !Number.isFinite(liveSlN) ||
+              (dir === "BUY" ? n > liveSlN : n < liveSlN);
+            const g = dir === "BUY" ? mark - n : n - mark;
+            const tight = Number.isFinite(g) && g <= dist * 1.6 + pip;
+            if (improves || tight) {
+              await stampConfirmed(afterSl, "SL via stopDistance", !firstArm);
+              pushed = true;
+              stillLagging = !(Number.isFinite(g) && g <= minD + pip);
+              break;
+            }
+          }
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `stopDistance chase ${position.id} dist=${dist}:`,
+            lastErr,
+          );
+        }
+      }
+    }
+
+    // 3) Absolute stopLevel only (NO trailingStop:false)
+    if (stillLagging) {
+      for (const dist of uniqDist) {
+        const candidate = capitalSafeTrailingStop({
+          symbol: position.symbol,
+          direction: dir,
+          mark,
+          distance: dist,
+          existingSl: liveSl,
+        });
+        const candN = Number(candidate);
+        if (!Number.isFinite(candN)) continue;
+        const curSl = liveSl != null ? Number(liveSl) : NaN;
+        const improves =
+          !Number.isFinite(curSl) ||
+          (dir === "BUY"
+            ? d(candidate).gt(d(curSl))
+            : d(candidate).lt(d(curSl)));
+        const legalGap = Math.abs(mark - candN) + 1e-9 >= minD - 1e-9;
+        if (!improves || !legalGap) continue;
+        try {
+          const after = await this.modifySlTp(
+            position.organizationId,
+            "system",
+            position.id,
+            { stopLoss: candidate },
+            correlationId,
+            { silent: !firstArm },
+          );
+          const afterSl =
+            after?.stopLoss != null ? String(after.stopLoss) : "";
+          const confirmed = afterSl.length > 0 ? afterSl : candidate;
+          await stampConfirmed(confirmed, "SL CHASE (stopLevel)", !firstArm);
+          pushed = true;
+          stillLagging = false;
+          break;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `stopLevel chase ${position.id} dist=${dist}:`,
+            lastErr,
+          );
+        }
+      }
+    }
+
+    if (pushed && !stillLagging) {
+      this.chaseFailNotifyAt.delete(position.id);
+    } else if (lastErr && stillLagging) {
+      const now = Date.now();
+      const lastNotify = this.chaseFailNotifyAt.get(position.id) ?? 0;
+      if (now - lastNotify >= PositionsService.CHASE_FAIL_NOTIFY_MS) {
+        this.chaseFailNotifyAt.set(position.id, now);
         await this.notifications.create({
           organizationId: position.organizationId,
           userId: null,
-          title: "£0.05 — native TRAIL (last resort)",
-          body: `${position.symbol} trailingStop ${baseDist} after software chase failed`,
+          title: "SL CHASE FAILED — soft trail armed",
+          body: `${position.symbol}: ${lastErr}. App will market-close on ${trailDist} retrace from peak.`,
+          severity: "CRITICAL",
+        });
+      }
+    }
+
+    // 4) Soft app trail exit — ONLY when Capital chart SL is still lagging.
+    // If broker trail is tight, do not market-close on a 3-pip wiggle.
+    const softDist = Math.max(trailDist, pip * 3);
+    const retrace = peak - favNow;
+    if (
+      stillLagging &&
+      peak >= softDist &&
+      retrace + 1e-12 >= softDist &&
+      !this.softExitBusy.has(position.id)
+    ) {
+      this.softExitBusy.add(position.id);
+      try {
+        await this.notifications.create({
+          organizationId: position.organizationId,
+          userId: null,
+          title: "SOFT TRAIL EXIT",
+          body: `${position.symbol} ${dir}: peak +${peak.toFixed(3)} retraced ${retrace.toFixed(3)} ≥ ${softDist.toFixed(3)} — closing (Capital SL lagging=${stillLagging})`,
           severity: "WARNING",
         });
-      } catch (nativeErr) {
-        console.warn(
-          `£0.05 native fallback ${position.id}:`,
-          nativeErr instanceof Error ? nativeErr.message : nativeErr,
+        await this.close(
+          position.organizationId,
+          "system",
+          position.id,
+          { clientRequestId: newId() },
+          correlationId,
         );
+        this.peakFavorable.delete(position.id);
+        this.nativeTrailArmed.delete(position.id);
+        this.chaseFailNotifyAt.delete(position.id);
+      } catch (closeErr) {
+        console.warn(
+          `soft trail exit ${position.id}:`,
+          closeErr instanceof Error ? closeErr.message : closeErr,
+        );
+        await this.notifications.create({
+          organizationId: position.organizationId,
+          userId: null,
+          title: "SOFT TRAIL EXIT FAILED",
+          body: `${position.symbol}: ${
+            closeErr instanceof Error ? closeErr.message : String(closeErr)
+          }`,
+          severity: "CRITICAL",
+        });
+      } finally {
+        this.softExitBusy.delete(position.id);
       }
     }
   }
@@ -1073,13 +1188,8 @@ export class PositionsService {
     correlationId: string,
     _opts?: { skipReconcile?: boolean },
   ) {
-    if (this.protectionsRunning) return;
-    this.protectionsRunning = true;
-    try {
-      await this.autoManageProtectionsLocked(priceBySymbol, correlationId);
-    } finally {
-      this.protectionsRunning = false;
-    }
+    // Per-account locks inside Locked — do not globally skip when one account is busy
+    await this.autoManageProtectionsLocked(priceBySymbol, correlationId);
   }
 
   private async autoManageProtectionsLocked(
@@ -1108,32 +1218,117 @@ export class PositionsService {
       list.push(p);
       byAccount.set(p.accountId, list);
     }
+
+    await Promise.all(
+      [...byAccount.entries()].map(([accountId, accountPositions]) =>
+        this.autoManageAccountProtections(
+          accountId,
+          accountPositions,
+          priceBySymbol,
+          correlationId,
+        ),
+      ),
+    );
+  }
+
+  private async autoManageAccountProtections(
+    accountId: string,
+    accountPositions: Array<{
+      id: string;
+      organizationId: string;
+      accountId: string;
+      symbol: string;
+      direction: string;
+      volume: unknown;
+      averageEntry: unknown;
+      currentPrice: unknown;
+      stopLoss: unknown;
+      takeProfit: unknown;
+      unrealizedPnl: unknown;
+      trailingEnabled: boolean;
+      trailingDistance: unknown;
+      trailingActivatedAt: Date | null;
+      breakEvenEnabled: boolean;
+      breakEvenActivation: unknown;
+      breakEvenOffset: unknown;
+      breakEvenActivatedAt: Date | null;
+      brokerPositionId: string | null;
+      strategyId: string | null;
+      takeProfitsJson: unknown;
+      status: string;
+    }>,
+    priceBySymbol: Map<string, number>,
+    correlationId: string,
+  ) {
+    if (this.protectionsRunningByAccount.has(accountId)) return;
+    this.protectionsRunningByAccount.add(accountId);
+    try {
+      await this.autoManageAccountProtectionsLocked(
+        accountId,
+        accountPositions,
+        priceBySymbol,
+        correlationId,
+      );
+    } finally {
+      this.protectionsRunningByAccount.delete(accountId);
+    }
+  }
+
+  private async autoManageAccountProtectionsLocked(
+    accountId: string,
+    open: Array<{
+      id: string;
+      organizationId: string;
+      accountId: string;
+      symbol: string;
+      direction: string;
+      volume: unknown;
+      averageEntry: unknown;
+      currentPrice: unknown;
+      stopLoss: unknown;
+      takeProfit: unknown;
+      unrealizedPnl: unknown;
+      trailingEnabled: boolean;
+      trailingDistance: unknown;
+      trailingActivatedAt: Date | null;
+      breakEvenEnabled: boolean;
+      breakEvenActivation: unknown;
+      breakEvenOffset: unknown;
+      breakEvenActivatedAt: Date | null;
+      brokerPositionId: string | null;
+      strategyId: string | null;
+      takeProfitsJson: unknown;
+      status: string;
+    }>,
+    priceBySymbol: Map<string, number>,
+    correlationId: string,
+  ) {
     const brokerMarks = new Map<string, number>();
     const brokerStopLoss = new Map<string, string>();
     const brokerUpl = new Map<string, number>();
-    // Do NOT ghost-close on a single miss (wrong CFD session under shared login).
-    // Reconcile handles real closes with stronger guards.
-    for (const [accountId, positions] of byAccount) {
-      const adapter = this.brokers.get(accountId);
-      if (!adapter) continue;
+    const adapter = this.brokers.get(accountId);
+    if (adapter) {
       try {
         const live = await adapter.getOpenPositions({ force: true });
-        if (live.length === 0 && positions.length > 0) continue;
-        for (const p of positions) {
-          const match = live.find((x) => x.brokerPositionId === p.brokerPositionId);
-          if (!match) continue;
-          const mark = Number(match.currentPrice);
-          if (Number.isFinite(mark) && mark > 0) {
-            brokerMarks.set(p.id, mark);
-            brokerMarks.set(p.symbol, mark);
-          }
-          const uplRaw = match.unrealizedPnl;
-          if (uplRaw != null && String(uplRaw).length > 0) {
-            const upl = Number(uplRaw);
-            if (Number.isFinite(upl)) brokerUpl.set(p.id, upl);
-          }
-          if (match.stopLoss != null && String(match.stopLoss).length > 0) {
-            brokerStopLoss.set(p.id, String(match.stopLoss));
+        if (!(live.length === 0 && open.length > 0)) {
+          for (const p of open) {
+            const match = live.find(
+              (x) => x.brokerPositionId === p.brokerPositionId,
+            );
+            if (!match) continue;
+            const mark = Number(match.currentPrice);
+            if (Number.isFinite(mark) && mark > 0) {
+              brokerMarks.set(p.id, mark);
+              brokerMarks.set(p.symbol, mark);
+            }
+            const uplRaw = match.unrealizedPnl;
+            if (uplRaw != null && String(uplRaw).length > 0) {
+              const upl = Number(uplRaw);
+              if (Number.isFinite(upl)) brokerUpl.set(p.id, upl);
+            }
+            if (match.stopLoss != null && String(match.stopLoss).length > 0) {
+              brokerStopLoss.set(p.id, String(match.stopLoss));
+            }
           }
         }
       } catch {
