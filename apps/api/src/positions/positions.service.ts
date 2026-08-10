@@ -17,9 +17,11 @@ import {
   parseVolume,
   newId,
   resolveScalpTrailDistance,
-  instrumentMoneyPnl,
+  resolveScalpActivationDistance,
+  resolveFloatingMoneyPnl,
   capitalSafeBreakEvenStop,
   capitalSafeTrailDistance,
+  capitalSafeTrailingStop,
   capitalSafeInitialStop,
   capitalMinStopDistance,
   type MultiTpLevelPlan,
@@ -653,14 +655,24 @@ export class PositionsService {
     if (!newSl) {
       return position;
     }
-    const updated = await this.modifySlTp(
-      organizationId,
-      actorId,
-      id,
-      { stopLoss: newSl },
-      correlationId,
-      { silent: opts?.silent },
-    );
+    let updated;
+    try {
+      updated = await this.modifySlTp(
+        organizationId,
+        actorId,
+        id,
+        { stopLoss: newSl },
+        correlationId,
+        { silent: opts?.silent },
+      );
+    } catch (err) {
+      // Do NOT throw — trail must still run this tick. Retry BE next second.
+      console.warn(
+        `activateBreakEven ${id}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return position;
+    }
     // Software trailing continues on next tick — preserve arm state.
     // Do NOT invent trailingActivatedAt here (BE can fire before trail start pips).
     const final = await this.prisma.position.update({
@@ -719,6 +731,8 @@ export class PositionsService {
           { takeProfitsJson: { not: Prisma.DbNull } },
           // Naked Capital positions (no SL) — always try recovery
           { stopLoss: null },
+          // Strategy fills may have trailingEnabled=false until healed
+          { source: "STRATEGY" },
         ],
       },
     });
@@ -796,20 +810,82 @@ export class PositionsService {
         const dir = position.direction as "BUY" | "SELL";
         const favorable =
           dir === "BUY" ? mark - entry : entry - mark;
-        const moneyPnl = brokerUpl.has(position.id)
-          ? brokerUpl.get(position.id)!
-          : instrumentMoneyPnl({
-              symbol: position.symbol,
-              direction: dir,
-              entry,
-              exit: mark,
-              volumeLots: Number(position.volume),
-            });
+        const moneyPnl = resolveFloatingMoneyPnl({
+          symbol: position.symbol,
+          direction: dir,
+          entry,
+          mark,
+          volumeLots: Number(position.volume),
+          brokerUpl: brokerUpl.has(position.id)
+            ? brokerUpl.get(position.id)!
+            : null,
+        });
         if (Number.isFinite(moneyPnl)) {
           await this.prisma.position.update({
             where: { id: position.id },
             data: { unrealizedPnl: String(moneyPnl), currentPrice: mark },
           });
+        }
+
+        // Heal SCALPING flags — place() sends trailingEnabled:false (native delay);
+        // post-fill update can miss, leaving BE/trail dead forever.
+        if (position.strategyId) {
+          const stHeal = await this.prisma.strategy.findFirst({
+            where: { id: position.strategyId },
+            select: { mode: true },
+          });
+          if (stHeal?.mode === StrategyMode.SCALPING) {
+            const autoHeal = modeAutoExit(StrategyMode.SCALPING)!;
+            const needTrail =
+              !position.trailingEnabled || position.trailingDistance == null;
+            const needBe =
+              !position.breakEvenEnabled || position.breakEvenActivation == null;
+            if (needTrail || needBe) {
+              const trailDist = resolveScalpTrailDistance(
+                position.symbol,
+                entry,
+                autoHeal.trailingDistancePips,
+              );
+              const beMoney = String(autoHeal.breakEvenActivationMoney ?? 0.05);
+              const beOff = String(
+                resolveScalpActivationDistance(
+                  position.symbol,
+                  autoHeal.breakEvenOffsetPips,
+                ),
+              );
+              await this.prisma.position.update({
+                where: { id: position.id },
+                data: {
+                  ...(needBe
+                    ? {
+                        breakEvenEnabled: true,
+                        breakEvenActivation: beMoney,
+                        breakEvenOffset: beOff,
+                      }
+                    : {}),
+                  ...(needTrail
+                    ? {
+                        trailingEnabled: true,
+                        trailingDistance: trailDist.toFixed(8),
+                      }
+                    : {}),
+                },
+              });
+              // Mutate local row so this tick uses healed flags (Decimal fields as any)
+              if (needBe) {
+                (position as { breakEvenEnabled: boolean }).breakEvenEnabled =
+                  true;
+                (position as { breakEvenActivation: unknown }).breakEvenActivation =
+                  beMoney;
+                (position as { breakEvenOffset: unknown }).breakEvenOffset = beOff;
+              }
+              if (needTrail) {
+                (position as { trailingEnabled: boolean }).trailingEnabled = true;
+                (position as { trailingDistance: unknown }).trailingDistance =
+                  trailDist.toFixed(8);
+              }
+            }
+          }
         }
 
         // Recovery: if Capital chart has no stopLevel, push Capital-safe SL.
@@ -897,22 +973,34 @@ export class PositionsService {
         if (
           position.breakEvenEnabled &&
           !position.breakEvenActivatedAt &&
-          position.breakEvenActivation != null
+          (position.breakEvenActivation != null || moneyMode)
         ) {
-          const activation = Number(position.breakEvenActivation);
+          const activation = Number(
+            moneyMode
+              ? moneyTrigger
+              : position.breakEvenActivation,
+          );
           const hit = Number.isFinite(activation)
             ? moneyMode
               ? moneyPnl >= activation
               : favorable >= activation
             : false;
           if (hit) {
-            await this.activateBreakEven(
-              position.organizationId,
-              "system",
-              position.id,
-              correlationId,
-              { silent: false, mark },
-            );
+            // Never let BE modify failure abort trail this tick
+            try {
+              await this.activateBreakEven(
+                position.organizationId,
+                "system",
+                position.id,
+                correlationId,
+                { silent: false, mark },
+              );
+            } catch (beErr) {
+              console.warn(
+                `autoManageProtections ${position.id} BE:`,
+                beErr instanceof Error ? beErr.message : beErr,
+              );
+            }
           }
         }
 
@@ -973,8 +1061,8 @@ export class PositionsService {
             ) {
               armThreshold = 0;
             }
-            // SCALPING: start Capital-safe trail after £ money trigger OR true BE.
-            // True BE on GOLD needs ~0.50 price move — don't block trail until then.
+            // SCALPING: trail after £ money trigger OR true BE OR any profit move
+            // that already clears money via computed PnL (broker upl=0 was blocking).
             if (
               strategy?.mode === StrategyMode.SCALPING &&
               auto?.breakEvenEnabled !== false
@@ -982,7 +1070,8 @@ export class PositionsService {
               if (
                 !fresh.breakEvenActivatedAt &&
                 !fresh.trailingActivatedAt &&
-                !moneyHit
+                !moneyHit &&
+                !(favorable > 0 && moneyPnl >= (auto?.breakEvenActivationMoney ?? 0.05))
               ) {
                 continue;
               }
@@ -1010,12 +1099,13 @@ export class PositionsService {
           const liveSl = brokerStopLoss.get(position.id);
           const existing =
             liveSl ?? (fresh.stopLoss ? String(fresh.stopLoss) : null);
-          const candidate = trailingStopCandidate(
-            dir,
-            String(mark),
+          const candidate = capitalSafeTrailingStop({
+            symbol: position.symbol,
+            direction: dir,
+            mark,
             distance,
-            existing,
-          );
+            existingSl: existing,
+          });
 
           // Sync broker SL into DB even when we don't need to push a new level
           if (
@@ -1032,17 +1122,25 @@ export class PositionsService {
 
           // Skip if candidate still inside Capital min-stop of mark (safety)
           const minDist = capitalMinStopDistance(position.symbol);
-          if (Math.abs(mark - Number(candidate)) + 1e-12 < minDist) continue;
+          if (Math.abs(mark - Number(candidate)) + 1e-9 < minDist) continue;
 
           const firstArm = !fresh.trailingActivatedAt;
-          await this.modifySlTp(
-            position.organizationId,
-            "system",
-            position.id,
-            { stopLoss: candidate },
-            correlationId,
-            { silent: !firstArm },
-          );
+          try {
+            await this.modifySlTp(
+              position.organizationId,
+              "system",
+              position.id,
+              { stopLoss: candidate },
+              correlationId,
+              { silent: !firstArm },
+            );
+          } catch (trailErr) {
+            console.warn(
+              `autoManageProtections ${position.id} trail:`,
+              trailErr instanceof Error ? trailErr.message : trailErr,
+            );
+            continue;
+          }
           await this.prisma.position.update({
             where: { id: position.id },
             data: {
@@ -1053,6 +1151,7 @@ export class PositionsService {
               currentPrice: mark,
             },
           });
+          brokerStopLoss.set(position.id, candidate);
           if (firstArm) {
             await this.events.publish({
               eventType: DomainEventType.TrailingStopActivated,

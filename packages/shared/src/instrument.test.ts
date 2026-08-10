@@ -8,9 +8,11 @@ import {
   resolveScalpActivationDistance,
   resolveScalpDistance,
   resolveScalpTrailDistance,
+  resolveFloatingMoneyPnl,
   trailingArmThreshold,
   capitalSafeBreakEvenStop,
   capitalSafeTrailDistance,
+  capitalSafeTrailingStop,
   capitalSafeInitialStop,
   capitalMinStopDistance,
 } from "./instrument";
@@ -247,5 +249,59 @@ describe("instrumentMoneyPnl", () => {
         volumeLots: 0.1,
       }),
     ).toBe(0);
+  });
+});
+
+describe("resolveFloatingMoneyPnl", () => {
+  it("ignores stale broker upl=0 when price is in profit", () => {
+    expect(
+      resolveFloatingMoneyPnl({
+        symbol: "GOLD",
+        direction: "BUY",
+        entry: 2300,
+        mark: 2300.05,
+        volumeLots: 0.01,
+        brokerUpl: 0,
+      }),
+    ).toBeCloseTo(0.05, 6);
+  });
+
+  it("uses broker upl when it shows real profit", () => {
+    expect(
+      resolveFloatingMoneyPnl({
+        symbol: "GOLD",
+        direction: "BUY",
+        entry: 2300,
+        mark: 2300.05,
+        volumeLots: 0.01,
+        brokerUpl: 0.12,
+      }),
+    ).toBeCloseTo(0.12, 6);
+  });
+});
+
+describe("capitalSafeTrailingStop", () => {
+  it("keeps GOLD trail ≥0.50 from mark after 2dp rounding", () => {
+    const sl = capitalSafeTrailingStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      mark: 2650.11,
+      distance: 0.03, // soft 3-pip — must floor to 0.50
+      existingSl: 2649.5,
+    });
+    expect(2650.11 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    expect(Number(sl)).toBeGreaterThanOrEqual(2649.5);
+  });
+
+  it("only tightens SELL trail", () => {
+    const sl = capitalSafeTrailingStop({
+      symbol: "GOLD",
+      direction: "SELL",
+      mark: 2650,
+      distance: 0.5,
+      existingSl: 2650.6,
+    });
+    expect(Number(sl)).toBeLessThanOrEqual(2650.6);
+    expect(Number(sl) - 2650).toBeGreaterThanOrEqual(0.5 - 1e-9);
   });
 });

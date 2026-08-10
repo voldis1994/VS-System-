@@ -235,6 +235,79 @@ export function capitalSafeTrailDistance(
 }
 
 /**
+ * Trail SL that stays Capital-legal AFTER instrument price formatting
+ * (GOLD 2dp can shrink mark−0.50 → 0.49 and get rejected / skipped).
+ * Only tightens vs existing SL.
+ */
+export function capitalSafeTrailingStop(input: {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  mark: number | string;
+  distance: number | string;
+  existingSl?: number | string | null;
+}): string {
+  const mark = Number(input.mark);
+  const minDist = capitalMinStopDistance(input.symbol);
+  const dist = Math.max(Number(input.distance) || 0, minDist);
+  let raw =
+    input.direction === "BUY" ? mark - dist : mark + dist;
+
+  // Re-apply min-stop after rounding (toFixed on GOLD/indices)
+  let formatted = formatInstrumentPrice(input.symbol, raw);
+  if (input.direction === "BUY") {
+    if (mark - Number(formatted) < minDist - 1e-12) {
+      formatted = formatInstrumentPrice(input.symbol, mark - minDist);
+    }
+    const existing = Number(input.existingSl);
+    if (Number.isFinite(existing) && existing < mark) {
+      if (Number(formatted) < existing) {
+        formatted = formatInstrumentPrice(input.symbol, existing);
+      }
+    }
+  } else {
+    if (Number(formatted) - mark < minDist - 1e-12) {
+      formatted = formatInstrumentPrice(input.symbol, mark + minDist);
+    }
+    const existing = Number(input.existingSl);
+    if (Number.isFinite(existing) && existing > mark) {
+      if (Number(formatted) > existing) {
+        formatted = formatInstrumentPrice(input.symbol, existing);
+      }
+    }
+  }
+  return formatted;
+}
+
+/**
+ * Floating PnL for BE/trail arming.
+ * Capital often reports upl=0 while price is already in profit — never let
+ * a stale zero block £0.05 money BE / trail unlock.
+ */
+export function resolveFloatingMoneyPnl(input: {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  entry: number;
+  mark: number;
+  volumeLots: number;
+  brokerUpl?: number | null;
+}): number {
+  const computed = instrumentMoneyPnl({
+    symbol: input.symbol,
+    direction: input.direction,
+    entry: input.entry,
+    exit: input.mark,
+    volumeLots: input.volumeLots,
+  });
+  const broker = input.brokerUpl;
+  if (broker == null || !Number.isFinite(broker)) return computed;
+  // Stale/zero broker UPL while price shows profit → trust computed
+  if (broker <= 0 && computed > 0) return computed;
+  // Prefer the more informative positive reading
+  if (computed > 0 || broker > 0) return Math.max(broker, computed);
+  return broker;
+}
+
+/**
  * Initial / recovery protective SL floored to Capital min-stop from entry.
  */
 export function capitalSafeInitialStop(input: {
