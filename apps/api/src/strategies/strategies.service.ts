@@ -826,8 +826,6 @@ export class StrategiesService {
             cooldownSeconds: 0,
             exitVersion: auto.exitVersion,
             timeframe: modePreferredTimeframe(input.mode),
-            trailingEnabled: auto.trailingEnabled,
-            trailArmImmediate: auto.trailArmImmediate,
           }
         : {}),
       autoAggressive: false,
