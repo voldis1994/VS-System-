@@ -24,7 +24,7 @@ function synth(n: number, start = 100, step = 0.05): CandleLike[] {
 }
 
 describe("soft score when hard AND misses", () => {
-  it("BREAKOUT HOLD shows progressive score > 0 (not stuck at 0)", () => {
+  it("BREAKOUT fires soft lean when protective gates off", () => {
     const candles = synth(120, 2300, 0.4);
     const ind = computeIndicators(candles);
     expect(ind).toBeTruthy();
@@ -34,8 +34,8 @@ describe("soft score when hard AND misses", () => {
       55,
       false,
     );
-    expect(scored.signal).toBe("HOLD");
-    // Soft confluence must move the bar even without full breakout AND
+    // Protective gates OFF: soft lean becomes BUY/SELL instead of quality HOLD
+    expect(["BUY", "SELL"]).toContain(scored.signal);
     expect(scored.score).toBeGreaterThan(0);
     expect(scored.buyScore + scored.sellScore).toBeGreaterThan(0);
   });

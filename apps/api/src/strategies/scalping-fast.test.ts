@@ -32,9 +32,9 @@ function bullScalpCandles(): CandleLike[] {
 }
 
 describe("SCALPING FAST mode", () => {
-  it("min score is lower than EMA (fires more often)", () => {
-    expect(modeMinScore(StrategyMode.SCALPING)).toBe(28);
-    expect(modeMinScore(StrategyMode.EMA_TICK_SCALP)).toBe(50);
+  it("min score is 0 when protective gates off", () => {
+    expect(modeMinScore(StrategyMode.SCALPING)).toBe(0);
+    expect(modeMinScore(StrategyMode.EMA_TICK_SCALP)).toBe(0);
   });
 
   it("BUY on bullish 10s momentum without full AND / without EMA cross wait", () => {

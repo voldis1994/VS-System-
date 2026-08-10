@@ -145,26 +145,9 @@ export function modeUses1mTiming(mode: StrategyMode | string): boolean {
 }
 
 /** Engine entry score bar — keep web client/desk in sync via this helper. */
-export function modeMinScore(mode: StrategyMode | string): number {
-  switch (mode) {
-    case StrategyMode.SCALPING:
-      // Capital 1m-as-10s is choppy — keep bar low so LIVE entries actually fire
-      return 28;
-    case StrategyMode.EMA_TICK_SCALP:
-      return 50;
-    case StrategyMode.MEAN_REVERSION:
-    case StrategyMode.RANGE:
-    case StrategyMode.REVERSAL:
-    case StrategyMode.GRID:
-    case StrategyMode.DCA:
-    case StrategyMode.MARKET_MAKING_SIM:
-      return 52;
-    case StrategyMode.NEWS:
-    case StrategyMode.ARBITRAGE_SIM:
-      return 60;
-    default:
-      return 55;
-  }
+export function modeMinScore(_mode: StrategyMode | string): number {
+  // Protective gates OFF — no score floor blocks entries
+  return 0;
 }
 
 export function tfMinutes(tf: StrategyTimeframe | string): number {

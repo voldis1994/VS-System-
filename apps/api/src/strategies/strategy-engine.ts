@@ -309,6 +309,9 @@ export function computeIndicators(candles: CandleLike[]): Indicators | null {
   };
 }
 
+/** Hard OFF — operator owns risk; no session/ATR/mid/minScore entry blocks. */
+export const PROTECTIVE_GATES_OFF = true;
+
 export function evaluateStrategyMode(
   mode: StrategyMode,
   i: Indicators,
@@ -329,6 +332,7 @@ export function evaluateStrategyMode(
         : new Date(String(opts.at))
       : undefined;
   const sessionOk =
+    PROTECTIVE_GATES_OFF ||
     !sessionFilter ||
     isLiquidSessionUtc(
       at && Number.isFinite(at.getTime()) ? at : undefined,
@@ -340,6 +344,7 @@ export function evaluateStrategyMode(
   const atrRatio = i.atrSlow > 0 ? i.atr / i.atrSlow : 1;
   // Micro scalp modes skip ATR dead/spike — they live on thin 10s noise
   if (
+    !PROTECTIVE_GATES_OFF &&
     mode !== StrategyMode.EMA_TICK_SCALP &&
     mode !== StrategyMode.SCALPING
   ) {
@@ -412,7 +417,7 @@ export function evaluateStrategyMode(
   let buy = 0;
   let sell = 0;
   let gate = "confluence";
-  let applyMidHold = !skipMidModes.has(mode);
+  let applyMidHold = !PROTECTIVE_GATES_OFF && !skipMidModes.has(mode);
 
   const pass = (ok: boolean, pts: number, side: "buy" | "sell", g?: string) => {
     if (!ok) return;
@@ -960,7 +965,7 @@ export function evaluateStrategyMode(
       applyMidHold = false;
       const sessAt =
         at && Number.isFinite(at.getTime()) ? at : undefined;
-      if (!isLiquidSessionUtc(sessAt)) {
+      if (!PROTECTIVE_GATES_OFF && !isLiquidSessionUtc(sessAt)) {
         return { signal: "HOLD", score: 0, gate: "session_off", bias: "flat", buyScore: 0, sellScore: 0 };
       }
       // Fresh break of session high/low + stronger trend filter
@@ -1180,12 +1185,14 @@ export function evaluateStrategyMode(
   buy = Math.max(0, Math.min(100, buy));
   sell = Math.max(0, Math.min(100, sell));
 
-  const edge = mode === StrategyMode.SCALPING ? 0 : 3;
+  const effectiveMin = PROTECTIVE_GATES_OFF ? 0 : minScore;
+  const edge =
+    PROTECTIVE_GATES_OFF || mode === StrategyMode.SCALPING ? 0 : 3;
 
-  if (buy >= minScore && (edge === 0 ? buy > sell : buy >= sell + edge)) {
+  if (buy >= effectiveMin && (edge === 0 ? buy > sell : buy >= sell + edge)) {
     return { signal: "BUY", score: buy, gate, bias: "bull", buyScore: buy, sellScore: sell };
   }
-  if (sell >= minScore && (edge === 0 ? sell > buy : sell >= buy + edge)) {
+  if (sell >= effectiveMin && (edge === 0 ? sell > buy : sell >= buy + edge)) {
     return { signal: "SELL", score: sell, gate, bias: "bear", buyScore: buy, sellScore: sell };
   }
 
@@ -1206,6 +1213,27 @@ export function evaluateStrategyMode(
   if (displayBuy === 0 && displaySell === 0) {
     displayBuy = softSideScore(i, "buy");
     displaySell = softSideScore(i, "sell");
+  }
+  // Risk OFF: fire on soft lean instead of quality_wait HOLD
+  if (PROTECTIVE_GATES_OFF && displayBuy !== displaySell) {
+    if (displayBuy > displaySell) {
+      return {
+        signal: "BUY",
+        score: displayBuy,
+        gate: gate === "confluence" ? "soft_lean" : gate,
+        bias: "bull",
+        buyScore: displayBuy,
+        sellScore: displaySell,
+      };
+    }
+    return {
+      signal: "SELL",
+      score: displaySell,
+      gate: gate === "confluence" ? "soft_lean" : gate,
+      bias: "bear",
+      buyScore: displayBuy,
+      sellScore: displaySell,
+    };
   }
   return {
     signal: "HOLD",

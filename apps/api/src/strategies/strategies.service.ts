@@ -539,6 +539,10 @@ export class StrategiesService {
           ? body.trailingActivationPips
           : 15,
       oneTradeOnly: false,
+      closeOnlyNoFlip: false,
+      volume: body.volume ?? "0.1",
+      startingEquity,
+    };
 
     const results = [];
     for (const mode of modes) {

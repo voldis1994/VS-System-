@@ -8,7 +8,6 @@ import {
   VolumeMode,
   modePreferredTimeframe,
   modeAutoExit,
-  modeMinScore,
 } from "@nexus/domain";
 import { resolveCapitalEpic, isCapitalSizeError, capitalSizeErrorHint } from "@nexus/broker-adapters";
 import {
@@ -30,10 +29,7 @@ import { NewsCalendarService } from "../market-data/news-calendar.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { evaluateMicro1mFive } from "./micro-1m";
-import {
-  evaluateCandleBiasFive,
-  resolveEntryWithCandleFlip,
-} from "./candle-bias";
+import { evaluateCandleBiasFive } from "./candle-bias";
 import {
   computeIndicators,
   evaluateStrategyMode,
@@ -240,16 +236,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     // Risk/delay gates OFF — ignore saved oneTradeOnly / cooldown
     const autoExit = modeAutoExit(mode);
     const cooldownMs = 0;
-    // Per-mode default score bar; SCALPING always uses domain bar (ignore stale high saved minScore)
-    let minScore = config.minScore ?? modeMinScore(mode);
-    if (config.minScore == null || mode === StrategyMode.SCALPING) {
-      minScore = modeMinScore(mode);
-    }
-    const sessionFilter =
-      config.sessionFilter === true || mode === StrategyMode.SESSION;
+    const minScore = 0;
+    const sessionFilter = false;
     const oneTradeOnly = false;
     // Allow BUY↔SELL flip by default (close opposite then open new)
-    const closeOnlyNoFlip = config.closeOnlyNoFlip === true;
+    const closeOnlyNoFlip = false;
     // Default OFF — aggressive EMA fallback was deadly on micro accounts
     const _autoAggressive = config.autoAggressive === true;
     void _autoAggressive;
@@ -259,7 +250,13 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       2,
       Math.min(10, Math.floor(Number(config.multiTpCount ?? 3))),
     );
-    const newsFilterEnabled = config.newsFilterEnabled === true;
+    const newsFilterEnabled = false;
+    void newsFilterEnabled;
+    void config.sessionFilter;
+    void config.newsFilterEnabled;
+    void config.oneTradeOnly;
+    void config.closeOnlyNoFlip;
+    void config.minScore;
     let lastStatus: Record<string, unknown> = {
       oneTradeOnly,
       closeOnlyNoFlip,
@@ -271,8 +268,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       newsFilterEnabled,
       engine: "VS_PRO_V10",
       minScore,
-      candleDirectionFilter: true,
-      midRangeFilter: true,
+      candleDirectionFilter: false,
+      midRangeFilter: false,
+      protectiveGatesOff: true,
     };
 
     for (const symbol of symbols) {
@@ -563,54 +561,18 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         !isClassicScalping &&
         (m1Source === "sim" || m1Source === "unknown");
       if (badTf || badM1) {
+        // Risk OFF: do not refuse entries — warn only
         lastStatus = {
           ...lastStatus,
           signal: scored.signal,
-          skip: "sim_candles",
-          reason: "Capital history missing — refusing LIVE/sim entries",
           candleSource: effectiveCandleSource,
+          warn: "sim_candles",
+          reason: "Capital history weak — trading anyway (risk gates off)",
         };
-        continue;
       }
 
       if (scored.signal === "BUY" || scored.signal === "SELL") {
-        if (mode === StrategyMode.NEWS) {
-          // NEWS mode: only trade inside High-impact calendar window
-          const window = await this.news.isBlocked({
-            symbol: brokerSymbol,
-            enabled: true,
-            minutesBefore: config.newsMinutesBefore ?? 30,
-            minutesAfter: config.newsMinutesAfter ?? 15,
-            minImpact: config.newsMinImpact ?? "High",
-          });
-          if (!window.blocked) {
-            lastStatus = {
-              ...lastStatus,
-              signal: scored.signal,
-              skip: "no_news_window",
-              reason: "NEWS mode waits for High-impact calendar window",
-            };
-            continue;
-          }
-        } else if (newsFilterEnabled) {
-          const block = await this.news.isBlocked({
-            symbol: brokerSymbol,
-            enabled: true,
-            minutesBefore: config.newsMinutesBefore ?? 30,
-            minutesAfter: config.newsMinutesAfter ?? 15,
-            minImpact: config.newsMinImpact ?? "High",
-          });
-          if (block.blocked) {
-            lastStatus = {
-              ...lastStatus,
-              signal: scored.signal,
-              skip: "news_filter",
-              reason: block.reason ?? "High-impact news window",
-              newsEvent: block.event ?? null,
-            };
-            continue;
-          }
-        }
+        // News filter / NEWS window — disabled (operator owns risk)
       }
 
       if (scored.signal === "HOLD") {
@@ -669,110 +631,19 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // Candle filter — skipped for micro scalp (SCALPING + EMA): no candle-close wait
-      let signal: "BUY" | "SELL" = scored.signal;
-      if (!isEmaTickScalp && !isClassicScalping) {
-        const microBias =
-          micro.signal === "BUY"
-            ? ("bull" as const)
-            : micro.signal === "SELL"
-              ? ("bear" as const)
-              : ("flat" as const);
+      // Candle filter OFF — use engine signal as-is
+      const signal: "BUY" | "SELL" = scored.signal;
+      lastStatus = {
+        ...lastStatus,
+        signal,
+        gate: scored.gate,
+        candleDirectionFilter: false,
+        reason: "protective_gates_off",
+        buyScore: scored.buyScore,
+        sellScore: scored.sellScore,
+      };
 
-        const resolved = resolveEntryWithCandleFlip(
-          scored.signal,
-          tfBias.bias,
-          microBias,
-        );
-        if (!resolved.signal) {
-          lastStatus = {
-            ...lastStatus,
-            signal: scored.signal,
-            skip: resolved.skip ?? "candle_filter",
-            reason: resolved.reason,
-            gate: resolved.skip ?? "candle_filter",
-          };
-          continue;
-        }
-
-        // Flip only if opposite side independently clears mode minScore
-        if (resolved.flipped) {
-          const oppScore =
-            resolved.signal === "BUY" ? scored.buyScore : scored.sellScore;
-          if (oppScore < minScore) {
-            lastStatus = {
-              ...lastStatus,
-              signal: scored.signal,
-              skip: resolved.skip ?? "candle_filter",
-              reason: `flip_blocked_opp_score_${oppScore}<${minScore}`,
-              gate: "flip_no_confluence",
-              buyScore: scored.buyScore,
-              sellScore: scored.sellScore,
-            };
-            continue;
-          }
-        }
-
-        signal = resolved.signal;
-        lastStatus = {
-          ...lastStatus,
-          signal,
-          gate: scored.gate,
-          microGate: micro.gate,
-          tfGate: tfBias.gate,
-          flipped: resolved.flipped,
-          flippedFrom: resolved.from,
-          reason: resolved.flipped ? resolved.reason : undefined,
-          buyScore: scored.buyScore,
-          sellScore: scored.sellScore,
-        };
-      } else {
-        lastStatus = {
-          ...lastStatus,
-          signal,
-          gate: scored.gate,
-          candleDirectionFilter: false,
-          reason: isClassicScalping
-            ? "scalping_fast_no_candle_wait"
-            : "ema_tick_scalp_no_candle_wait",
-          buyScore: scored.buyScore,
-          sellScore: scored.sellScore,
-        };
-      }
-
-      // EMA: one entry per cross generation (forming or last closed bar) — no re-chop
-      if (isEmaTickScalp) {
-        const crossKey = `${strategy.id}:${brokerSymbol}`;
-        if (scored.gate === "ema13_wait_fresh_cross" || scored.gate === "ema13_wait_cross") {
-          // Left the cross window — next real cross may fire
-          this.emaCrossConsumed.delete(crossKey);
-        } else if (signal === "BUY" || signal === "SELL") {
-          const barT = String(
-            (lastBar?.openTime as string | Date | undefined) ??
-              (lastBar?.closeTime as string | Date | undefined) ??
-              "",
-          );
-          const gen = `${signal}:${barT}:${scored.gate}`;
-          if (this.emaCrossConsumed.get(crossKey) === gen) {
-            lastStatus = {
-              ...lastStatus,
-              signal: "HOLD",
-              skip: "quality_wait",
-              gate: "ema13_cross_consumed",
-              reason: "Šis EMA1×EMA3 krustojums jau izmantots — gaida nākamo",
-              buyScore: 0,
-              sellScore: 0,
-              score: 0,
-            };
-            continue;
-          }
-          // Mark consumed only after successful place — set tentatively; clear if all accounts fail
-          this.emaCrossConsumed.set(crossKey, gen);
-        }
-      }
-
-      // NOTE: do NOT early-return on any open trade — that blocked BUY↔SELL flips
-      // (oneTradeOnly still enforced below: close opposite, then open; wait if same side).
+      // EMA anti-chop disabled (protective gates off)
 
       lastStatus = {
         ...lastStatus,
@@ -831,29 +702,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           };
           continue;
         }
-        if (this.lastFingerprint.get(key) === fingerprint) {
-          const openSame = await this.prisma.position.count({
-            where: {
-              organizationId: strategy.organizationId,
-              accountId,
-              status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
-              direction: signal,
-              OR: [{ symbol: brokerSymbol }, { symbol }],
-            },
-          });
-          lastStatus = {
-            ...lastStatus,
-            symbol: brokerSymbol,
-            signal,
-            skip: openSame > 0 ? "waiting_open_close" : "same_signal",
-            reason: openSame > 0 ? "same_side_open" : undefined,
-            openTrades: openSame > 0 ? openSame : undefined,
-            accountId,
-          };
-          continue;
-        }
+        // Fingerprint / same-signal / same-side / oneTradeOnly waits OFF
 
-        // Account-wide open positions (not only this strategyId) — avoid double entries
         const openOnAccount = await this.prisma.position.findMany({
           where: {
             organizationId: strategy.organizationId,
@@ -864,23 +714,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const openOnSymbol = openOnAccount.filter(
           (p) => p.symbol === brokerSymbol || p.symbol === symbol,
         );
-        const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
-
-        const hasOtherSymbolOpen =
-          oneTradeOnly &&
-          openAnywhere.some(
-            (p) => p.symbol !== brokerSymbol && p.symbol !== symbol,
-          );
-
-        if (hasOtherSymbolOpen) {
-          lastStatus = {
-            ...lastStatus,
-            skip: "waiting_open_close",
-            reason: "other_symbol_open",
-            openTrades: openAnywhere.length,
-          };
-          continue;
-        }
 
         const opposite = openOnSymbol.filter((p) => p.direction !== signal);
         if (opposite.length > 0) {
@@ -894,38 +727,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             );
             _acted = true;
           }
-          if (closeOnlyNoFlip) {
-            lastStatus = {
-              ...lastStatus,
-              skip: "closed_opposite_no_flip",
-              openTrades: openAnywhere.length,
-            };
-            continue;
-          }
-          // Close opposite then open flip immediately — no artificial margin wait
-        }
-
-        const sameSide = openOnSymbol.filter((p) => p.direction === signal);
-        if (sameSide.length > 0) {
-          lastStatus = {
-            ...lastStatus,
-            skip: "waiting_open_close",
-            reason: "same_side_open",
-            openTrades: openAnywhere.length,
-            positionId: sameSide[0]?.id,
-          };
-          continue;
-        }
-
-        if (oneTradeOnly && openAnywhere.length > 0 && opposite.length === 0) {
-          lastStatus = {
-            ...lastStatus,
-            skip: "waiting_open_close",
-            reason: "one_trade_only",
-            openTrades: openAnywhere.length,
-            positionId: openAnywhere[0]?.id,
-          };
-          continue;
         }
 
         const tick = this.market.getTick(brokerSymbol);

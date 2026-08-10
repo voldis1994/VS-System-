@@ -32,8 +32,8 @@ describe("mode-auto-exit", () => {
     expect(SCALPING_AUTO_EXIT.cooldownSeconds).toBe(0);
   });
 
-  it("modeMinScore aligns SCALPING FAST at 28", () => {
-    expect(modeMinScore(StrategyMode.SCALPING)).toBe(28);
-    expect(modeMinScore(StrategyMode.EMA_TICK_SCALP)).toBe(50);
+  it("modeMinScore is 0 when protective gates off", () => {
+    expect(modeMinScore(StrategyMode.SCALPING)).toBe(0);
+    expect(modeMinScore(StrategyMode.EMA_TICK_SCALP)).toBe(0);
   });
 });
