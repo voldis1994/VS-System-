@@ -8,14 +8,15 @@ import {
 } from "./index";
 
 describe("mode-auto-exit", () => {
-  it("SCALPING forces pip-based tight trail auto exit", () => {
+  it("SCALPING RAZOR forces immediate tight trail", () => {
     const e = modeAutoExit(StrategyMode.SCALPING)!;
     expect(e.trailingEnabled).toBe(true);
     expect(e.takeProfitEnabled).toBe(false);
     expect(e.trailArmImmediate).toBe(true);
     expect(e.priceOffsetMode).toBe(false);
-    expect(e.trailingDistancePips).toBeGreaterThanOrEqual(8);
-    expect(e.stopDistancePips).toBeGreaterThanOrEqual(10);
+    expect(e.trailingDistancePips).toBe(6);
+    expect(e.breakEvenActivationPips).toBe(5);
+    expect(e.stopDistancePips).toBeGreaterThanOrEqual(15);
     expect(modeHidesExitPickers(StrategyMode.SCALPING)).toBe(true);
   });
 

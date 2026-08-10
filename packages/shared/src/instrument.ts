@@ -97,6 +97,21 @@ export function isFxLikeSymbol(symbol: string): boolean {
   return /^[A-Z]{6}$/.test(s);
 }
 
+/** Soft floor for *trailing* SL (tighter than initial Capital min-stop). */
+export function minTrailDistance(symbol: string, entryPrice: number): number {
+  const pip = instrumentPipSize(symbol);
+  const s = String(symbol ?? "").toUpperCase();
+  void entryPrice;
+  // GOLD: ~12 pts (0.12) — initial SL still uses harder Capital floor
+  if (/XAU|GOLD/.test(s)) return Math.max(pip * 12, pip * 2);
+  if (/XAG|SILVER/.test(s)) return Math.max(pip * 10, pip * 2);
+  if (/BTC|ETH|BITCOIN/.test(s)) return Math.max(pip * 5, pip * 2);
+  if (/US100|US500|US30|NASDAQ|NDX|SPX|GER40|DE40|UK100|DOW/.test(s)) {
+    return Math.max(pip * 4, pip * 2);
+  }
+  return Math.max(pip * 5, pip * 2);
+}
+
 /**
  * Resolve SCALPING protective distance for any CFD.
  * Configured values are **pip counts** (not raw price). Always floors to Capital min.
@@ -121,6 +136,30 @@ export function resolveScalpDistance(
     raw = pip * pips;
   }
   return Math.max(minDist, raw);
+}
+
+/**
+ * Tight SCALPING trail / BE distance — pip counts with soft floor.
+ * Do NOT use initial Capital min-stop (50 GOLD pts) or trail feels dead.
+ */
+export function resolveScalpTrailDistance(
+  symbol: string,
+  entry: number,
+  configuredPips: number,
+): number {
+  const pip = instrumentPipSize(symbol);
+  const softMin = minTrailDistance(symbol, entry);
+  const n = Number(configuredPips);
+  const pips = Number.isFinite(n) && n > 0 ? n : 6;
+  let raw: number;
+  if (isFxLikeSymbol(symbol)) {
+    raw = pip * (pips < 1 ? 6 : pips);
+  } else if (pips > 0 && pips < 1) {
+    raw = pips;
+  } else {
+    raw = pip * pips;
+  }
+  return Math.max(softMin, raw);
 }
 
 /**

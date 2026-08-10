@@ -13,7 +13,7 @@ import {
   tfMinutes,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpDistance } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -1058,10 +1058,10 @@ export class StrategiesService {
       const beOff = priceOffset
         ? Math.max(beOffPips, pip)
         : Math.max(pip * Math.max(beOffPips, 0), pip);
-      // Pip-based trail (resolveScalpDistance) — 10 pips ≠ price 10
+      // Pip-based tight trail (SCALP RAZOR) — soft floor, not Capital initial min-stop
       const trail = priceOffset
         ? Math.max(trailPips, minDist)
-        : resolveScalpDistance(pos.symbol, entry, trailPips);
+        : resolveScalpTrailDistance(pos.symbol, entry, trailPips);
 
       await this.prisma.position.update({
         where: { id: pos.id },

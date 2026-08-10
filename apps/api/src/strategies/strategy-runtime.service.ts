@@ -18,6 +18,7 @@ import {
   formatInstrumentPrice,
   buildEqualMultiTpPlan,
   resolveScalpDistance,
+  resolveScalpTrailDistance,
   isMarginOrFundsError,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -42,6 +43,7 @@ type Signal = "BUY" | "SELL" | "CLOSE" | "HOLD";
 export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(StrategyRuntimeService.name);
   private timer?: NodeJS.Timeout;
+  private trailTimer?: NodeJS.Timeout;
   private readonly lastSignalAt = new Map<string, number>();
   private readonly lastFingerprint = new Map<string, string>();
   /** EMA_TICK_SCALP: last price side vs EMA3 per strategy:symbol — fresh-cross edge only */
@@ -49,6 +51,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   /** EMA_TICK_SCALP: which cross generation already taken (anti-chop on same window) */
   private readonly emaCrossConsumed = new Map<string, string>();
   private ticking = false;
+  private trailing = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -79,11 +82,31 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.timer = setInterval(() => void this.tickAll(), 3000);
-    this.log.log("VS System strategy runtime started (professional engine, 3s tick)");
+    // SCALP RAZOR: trail/BE every 1s so SL chases price tightly
+    this.trailTimer = setInterval(() => void this.tickTrailsOnly(), 1000);
+    this.log.log(
+      "VS System strategy runtime started (3s signal + 1s SCALP trail)",
+    );
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
+    if (this.trailTimer) clearInterval(this.trailTimer);
+  }
+
+  /** Fast path: only BE/trail (no signal entries). */
+  private async tickTrailsOnly() {
+    if (this.trailing || this.ticking) return;
+    this.trailing = true;
+    try {
+      await this.manageExitProtections();
+    } catch (err) {
+      this.log.warn(
+        `Trail tick: ${err instanceof Error ? err.message : err}`,
+      );
+    } finally {
+      this.trailing = false;
+    }
   }
 
   private async tickAll() {
@@ -886,14 +909,18 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           beOffDist = pip;
           trailDist = 0;
         } else if (isClassicScalping || timeframe === "10s") {
-          // Always pip-based for 10s / SCALPING — never raw priceOffset of 10
-          beActDist = resolveScalpDistance(
+          // Soft trail/BE floors — initial SL still uses resolveScalpDistance (Capital min)
+          beActDist = resolveScalpTrailDistance(
             brokerSymbol,
             entry,
             beActivationPips,
           );
           beOffDist = Math.max(pip * Math.max(beOffsetPips, 1), pip);
-          trailDist = resolveScalpDistance(brokerSymbol, entry, trailPips);
+          trailDist = resolveScalpTrailDistance(
+            brokerSymbol,
+            entry,
+            trailPips,
+          );
         } else {
           beActDist =
             beActivationPips > 0 && beActivationPips < 1

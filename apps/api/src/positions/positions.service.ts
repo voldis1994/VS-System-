@@ -18,6 +18,7 @@ import {
   parseVolume,
   newId,
   resolveScalpDistance,
+  resolveScalpTrailDistance,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { modeAutoExit, StrategyMode } from "@nexus/domain";
@@ -816,7 +817,7 @@ export class PositionsService {
             if (!priceOffset && Number.isFinite(trailPips) && trailPips > 0) {
               const entry = Number(fresh.averageEntry);
               if (Number.isFinite(entry) && entry > 0) {
-                distance = resolveScalpDistance(
+                distance = resolveScalpTrailDistance(
                   position.symbol,
                   entry,
                   trailPips,

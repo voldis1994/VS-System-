@@ -28,19 +28,22 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** Classic SCALPING FAST — pip-based tight trail, immediate arm, no fixed TP. */
+/** SCALP RAZOR — immediate tight trail for 10s style (GOLD/US100). */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
-  breakEvenActivationPips: 8,
+  /** Lock BE after ~5 pips in favor */
+  breakEvenActivationPips: 5,
   breakEvenOffsetPips: 1,
   trailingEnabled: true,
-  trailingDistancePips: 10,
+  /** Tight chase — 6 pips (GOLD ~0.12–0.15 soft floor; US100 ~0.6) */
+  trailingDistancePips: 6,
   trailingActivationPips: 1,
   trailArmImmediate: true,
-  atrStopMult: 0.55,
+  atrStopMult: 0.45,
   atrTpMult: 1.0,
-  stopDistancePips: 12,
+  /** Wider initial SL — trail is the real exit */
+  stopDistancePips: 18,
   cooldownSeconds: 0,
   exitVersion: "SCALP",
   priceOffsetMode: false,
