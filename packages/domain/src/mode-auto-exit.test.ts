@@ -15,7 +15,7 @@ describe("mode-auto-exit", () => {
     expect(e.trailArmImmediate).toBe(false);
     expect(e.breakEvenActivationPips).toBe(1);
     expect(e.trailingActivationPips).toBe(1);
-    expect(e.trailingDistancePips).toBe(8);
+    expect(e.trailingDistancePips).toBe(3);
     expect(e.priceOffsetMode).toBe(false);
     expect(e.stopDistancePips).toBeGreaterThanOrEqual(15);
     expect(modeHidesExitPickers(StrategyMode.SCALPING)).toBe(true);

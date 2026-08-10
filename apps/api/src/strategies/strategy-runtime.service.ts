@@ -893,7 +893,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               config.breakEvenOffsetPips ?? scalpAuto?.breakEvenOffsetPips ?? 1,
             );
         const trailPips = isClassicScalping
-          ? Number(scalpAuto?.trailingDistancePips ?? 8)
+          ? Number(scalpAuto?.trailingDistancePips ?? 3)
           : Number(
               config.trailingDistancePips ??
                 scalpAuto?.trailingDistancePips ??

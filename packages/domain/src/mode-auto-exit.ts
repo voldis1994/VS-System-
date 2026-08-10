@@ -37,8 +37,8 @@ export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   /** Lock SL at entry + 1 pip */
   breakEvenOffsetPips: 1,
   trailingEnabled: true,
-  /** Normal 10s chase distance (pip count → soft trail floor at runtime) */
-  trailingDistancePips: 8,
+  /** Normal 10s chase — 3 pips */
+  trailingDistancePips: 3,
   /** Start trailing once already in plus (same bar as BE) */
   trailingActivationPips: 1,
   trailArmImmediate: false,

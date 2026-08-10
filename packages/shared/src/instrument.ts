@@ -102,14 +102,14 @@ export function minTrailDistance(symbol: string, entryPrice: number): number {
   const pip = instrumentPipSize(symbol);
   const s = String(symbol ?? "").toUpperCase();
   void entryPrice;
-  // GOLD: ~12 pts (0.12) — initial SL still uses harder Capital floor
-  if (/XAU|GOLD/.test(s)) return Math.max(pip * 12, pip * 2);
-  if (/XAG|SILVER/.test(s)) return Math.max(pip * 10, pip * 2);
-  if (/BTC|ETH|BITCOIN/.test(s)) return Math.max(pip * 5, pip * 2);
+  // Allow 3-pip SCALPING trails — do not floor to 12 GOLD pts
+  if (/XAU|GOLD/.test(s)) return Math.max(pip * 3, pip);
+  if (/XAG|SILVER/.test(s)) return Math.max(pip * 3, pip);
+  if (/BTC|ETH|BITCOIN/.test(s)) return Math.max(pip * 3, pip);
   if (/US100|US500|US30|NASDAQ|NDX|SPX|GER40|DE40|UK100|DOW/.test(s)) {
-    return Math.max(pip * 4, pip * 2);
+    return Math.max(pip * 3, pip);
   }
-  return Math.max(pip * 5, pip * 2);
+  return Math.max(pip * 3, pip);
 }
 
 /**

@@ -53,17 +53,14 @@ describe("resolveScalpActivationDistance", () => {
 });
 
 describe("resolveScalpTrailDistance", () => {
-  it("GOLD trail stays tight (~0.12) not stuck at 0.50 min-stop", () => {
-    const trail = resolveScalpTrailDistance("GOLD", 4200, 6);
-    expect(trail).toBeLessThan(0.25);
-    expect(trail).toBeGreaterThanOrEqual(0.12);
-    expect(trail).toBeLessThan(minProtectiveDistance("GOLD", 4200));
+  it("GOLD 3-pip trail is ~0.03 (not stuck at 0.12 soft floor)", () => {
+    const trail = resolveScalpTrailDistance("GOLD", 4200, 3);
+    expect(trail).toBeCloseTo(0.03, 8);
   });
 
-  it("US100 trail is sub-point for 6 pips", () => {
-    const trail = resolveScalpTrailDistance("US100", 20000, 6);
-    expect(trail).toBeLessThanOrEqual(0.6 + 1e-9);
-    expect(trail).toBeGreaterThan(0);
+  it("US100 3-pip trail is 3 index points", () => {
+    const trail = resolveScalpTrailDistance("US100", 20000, 3);
+    expect(trail).toBeCloseTo(3, 8);
   });
 });
 
