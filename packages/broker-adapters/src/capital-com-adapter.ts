@@ -1255,30 +1255,50 @@ export class CapitalComAdapter implements BrokerAdapter {
     }
 
     this.invalidatePositionsCache();
+    const wantSl =
+      request.stopLoss !== undefined && request.stopLoss !== null
+        ? Number(request.stopLoss)
+        : NaN;
+    const tol =
+      Number.isFinite(wantSl)
+        ? Math.max(0.02, Math.abs(wantSl) * 1e-6) // GOLD 2dp ≈ 0.02
+        : 0.02;
+
     let found: BrokerPosition | undefined;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    let confirmedSl: string | undefined;
+    let confirmedTp: string | undefined;
+    // Capital often ACK's PUT before stopLevel is visible / updated.
+    // Poll until the requested SL is on the broker — never fabricate success.
+    for (let attempt = 0; attempt < 8; attempt++) {
       if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, 150 * attempt));
+        await new Promise((r) => setTimeout(r, 120 + 80 * attempt));
         this.invalidatePositionsCache();
       }
       const positions = await this.getOpenPositionsLocked({ force: true });
       found = positions.find(
         (p) => p.brokerPositionId === request.brokerPositionId,
       );
-      if (found) break;
+      if (!found) continue;
+
+      confirmedSl =
+        found.stopLoss != null && String(found.stopLoss).length > 0
+          ? String(found.stopLoss)
+          : undefined;
+      confirmedTp =
+        found.takeProfit != null && String(found.takeProfit).length > 0
+          ? String(found.takeProfit)
+          : undefined;
+
+      if (request.stopLoss === undefined || request.stopLoss === null) break;
+      if (!confirmedSl) continue;
+      if (!Number.isFinite(wantSl)) break;
+      const got = Number(confirmedSl);
+      if (Number.isFinite(got) && Math.abs(got - wantSl) <= tol) break;
+      // keep polling — stale readback is common right after ACK
     }
     if (!found) throw new Error("Position not found after modify");
 
     // NEVER fabricate SL/TP — Capital chart is source of truth
-    const confirmedSl =
-      found.stopLoss != null && String(found.stopLoss).length > 0
-        ? String(found.stopLoss)
-        : undefined;
-    const confirmedTp =
-      found.takeProfit != null && String(found.takeProfit).length > 0
-        ? String(found.takeProfit)
-        : undefined;
-
     if (
       request.stopLoss !== undefined &&
       request.stopLoss !== null &&
@@ -1287,6 +1307,22 @@ export class CapitalComAdapter implements BrokerAdapter {
       throw new Error(
         "Capital modify: stopLevel not visible on broker after PUT (min-stop / reject)",
       );
+    }
+
+    // CRITICAL: Capital often ACK's the PUT but leaves the old stopLevel.
+    // If we treat that as success, trail "runs" forever while the chart SL is frozen.
+    if (
+      request.stopLoss !== undefined &&
+      request.stopLoss !== null &&
+      confirmedSl &&
+      Number.isFinite(wantSl)
+    ) {
+      const got = Number(confirmedSl);
+      if (Number.isFinite(got) && Math.abs(got - wantSl) > tol) {
+        throw new Error(
+          `Capital SL not moved: requested ${wantSl}, broker still ${got}`,
+        );
+      }
     }
 
     return {

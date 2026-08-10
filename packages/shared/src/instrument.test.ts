@@ -344,4 +344,20 @@ describe("capitalSafeTrailingStop", () => {
     });
     expect(Number(sl) - 2650.119).toBeGreaterThanOrEqual(0.5 - 1e-9);
   });
+
+  it("SELL chase pulls stuck SL from 4394 down to mark+0.50", () => {
+    // Production screenshot: SELL SL frozen at 4394 while mark ran to 4388
+    const mark = 4388;
+    const stuckSl = "4394";
+    const sl = capitalSafeTrailingStop({
+      symbol: "GOLD",
+      direction: "SELL",
+      mark,
+      distance: 0.03, // soft 3-pip floored to Capital min
+      existingSl: stuckSl,
+    });
+    expect(Number(sl)).toBeLessThan(Number(stuckSl));
+    expect(Number(sl)).toBeCloseTo(mark + 0.5, 1);
+    expect(Number(sl) - mark).toBeGreaterThanOrEqual(0.5 - 1e-9);
+  });
 });
