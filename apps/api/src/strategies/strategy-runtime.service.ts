@@ -21,6 +21,7 @@ import {
   resolveScalpTrailDistance,
   resolveScalpActivationDistance,
   capitalSafeInitialStop,
+  capitalMinStopDistance,
   isMarginOrFundsError,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -1260,59 +1261,66 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 breakEvenOffset: useBe ? beOffDist.toFixed(8) : null,
                 trailingEnabled: useDistTrail,
                 trailingDistance: useDistTrail ? trailDist.toFixed(8) : null,
-                // Trail arms after +move (trailingActivationPips) — not at entry
-                ...(useDistTrail && trailArmImmediate
-                  ? { trailingActivatedAt: new Date() }
-                  : useDistTrail
-                    ? { trailingActivatedAt: null }
-                    : {}),
+                // Arm in autoManage after Capital stopLevel is visible — not on fill
+                trailingActivatedAt: null,
               },
             });
-            // Static SL/TP on fill — Capital-safe distance (GOLD min-stop ~0.50).
-            // Trail arms after BE in autoManage — not at entry.
+            // Static SL on fill — Capital-safe ONLY.
+            // NEVER push soft 3-pip trail here: GOLD min-stop ~0.50 rejects it and
+            // the chart stays naked (no SL line = no trailing either).
             try {
+              const fillMark =
+                Number(
+                  (
+                    await this.prisma.position.findFirst({
+                      where: { id: positionId },
+                      select: { currentPrice: true, averageEntry: true },
+                    })
+                  )?.currentPrice ?? entry,
+                ) || entry;
               const safeSl = capitalSafeInitialStop({
                 symbol: brokerSymbol,
                 direction: signal,
                 entry,
-                distance: stopDist,
-                mark: entry,
+                distance: Math.max(stopDist, capitalMinStopDistance(brokerSymbol)),
+                mark: fillMark,
               });
-              await this.positions.modifySlTp(
+              const after = await this.positions.modifySlTp(
                 strategy.organizationId,
                 actorId,
                 positionId,
-                {
-                  stopLoss: safeSl,
-                  ...(takeProfit ? { takeProfit } : {}),
-                },
+                { stopLoss: safeSl, ...(takeProfit ? { takeProfit } : {}) },
                 correlationId,
                 { silent: true },
               );
-              // Optional: only if explicitly immediate-arm (legacy)
-              if (useDistTrail && trailArmImmediate) {
-                const dir = signal;
-                const trailSl =
-                  dir === "BUY"
-                    ? formatInstrumentPrice(brokerSymbol, entry - trailDist)
-                    : formatInstrumentPrice(brokerSymbol, entry + trailDist);
-                await this.positions.modifySlTp(
-                  strategy.organizationId,
-                  actorId,
-                  positionId,
-                  { stopLoss: trailSl },
-                  correlationId,
-                  { silent: true },
+              const liveSl =
+                after &&
+                typeof after === "object" &&
+                "stopLoss" in after &&
+                (after as { stopLoss?: string | null }).stopLoss
+                  ? String((after as { stopLoss?: string | null }).stopLoss)
+                  : "";
+              if (!liveSl) {
+                throw new Error(
+                  `Capital chart still has no stopLevel after attach (${safeSl})`,
                 );
               }
+              await this.notifications.create({
+                organizationId: strategy.organizationId,
+                userId: actorId === "system" ? null : actorId,
+                title: "SL ON Capital",
+                body: `${brokerSymbol} stopLevel ${liveSl} — trail will chase`,
+                severity: "SUCCESS",
+              });
             } catch (attachErr) {
-              // Widen once and retry — borderline min-stop / spread rejects
+              // Widen and retry — then native Capital trailingStop as last resort
               try {
                 const wider = capitalSafeInitialStop({
                   symbol: brokerSymbol,
                   direction: signal,
                   entry,
-                  distance: Math.max(stopDist, minDist) * 1.25,
+                  distance:
+                    Math.max(stopDist, capitalMinStopDistance(brokerSymbol)) * 2,
                   mark: entry,
                 });
                 await this.positions.modifySlTp(
@@ -1324,22 +1332,46 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                   { silent: true },
                 );
               } catch (retryErr) {
-                this.log.warn(
-                  `Post-fill SL/TP attach failed: ${
-                    retryErr instanceof Error ? retryErr.message : retryErr
-                  } (first: ${
-                    attachErr instanceof Error ? attachErr.message : attachErr
-                  })`,
-                );
-                await this.notifications.create({
-                  organizationId: strategy.organizationId,
-                  userId: actorId === "system" ? null : actorId,
-                  title: "SL/TP attach failed",
-                  body: `${brokerSymbol}: ${
-                    retryErr instanceof Error ? retryErr.message : "modify failed"
-                  } — recovery tick will retry`,
-                  severity: "WARNING",
-                });
+                try {
+                  const minD = capitalMinStopDistance(brokerSymbol);
+                  await this.positions.modifySlTp(
+                    strategy.organizationId,
+                    actorId,
+                    positionId,
+                    {
+                      trailingStop: true,
+                      stopDistance: String(minD),
+                    },
+                    correlationId,
+                    { silent: true },
+                  );
+                  await this.notifications.create({
+                    organizationId: strategy.organizationId,
+                    userId: actorId === "system" ? null : actorId,
+                    title: "Native trail ON",
+                    body: `${brokerSymbol} Capital trailingStop @ ${minD} (fixed SL failed)`,
+                    severity: "WARNING",
+                  });
+                } catch (nativeErr) {
+                  this.log.error(
+                    `Post-fill SL FAILED — chart naked: ${
+                      nativeErr instanceof Error
+                        ? nativeErr.message
+                        : nativeErr
+                    }`,
+                  );
+                  await this.notifications.create({
+                    organizationId: strategy.organizationId,
+                    userId: actorId === "system" ? null : actorId,
+                    title: "NO SL ON CAPITAL",
+                    body: `${brokerSymbol}: ${
+                      retryErr instanceof Error
+                        ? retryErr.message
+                        : "modify failed"
+                    } — recovery will keep trying`,
+                    severity: "CRITICAL",
+                  });
+                }
               }
             }
             await this.notifications.create({

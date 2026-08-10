@@ -964,45 +964,117 @@ export class PositionsService {
           }
         }
 
-        // Recovery: if Capital chart has no stopLevel, push Capital-safe SL.
-        // modifySlTp now throws unless broker readback confirms stopLevel.
+        // Recovery: if Capital chart has no stopLevel, FORCE one on every tick.
+        // Soft/illegal SL attempts left the chart naked — escalate until visible.
         const hasBrokerSl = brokerStopLoss.has(position.id);
         if (!hasBrokerSl) {
+          const minD = capitalMinStopDistance(position.symbol);
           const preferredDist =
             position.stopLoss != null
               ? Math.abs(entry - Number(position.stopLoss))
               : NaN;
-          const recoverySl = capitalSafeInitialStop({
-            symbol: position.symbol,
-            direction: dir,
-            entry,
-            distance: Number.isFinite(preferredDist) ? preferredDist : null,
-            mark,
-          });
-          try {
-            const after = await this.modifySlTp(
-              position.organizationId,
-              "system",
-              position.id,
-              { stopLoss: recoverySl },
-              correlationId,
-              { silent: true },
-            );
-            const liveSl =
-              after && typeof after === "object" && "stopLoss" in after
-                ? String((after as { stopLoss?: string | null }).stopLoss ?? "")
-                : "";
-            if (liveSl) {
-              brokerStopLoss.set(position.id, liveSl);
+          const attempts = [
+            Math.max(
+              Number.isFinite(preferredDist) ? preferredDist : 0,
+              minD,
+            ),
+            minD * 2,
+            minD * 3,
+            minD * 5,
+          ];
+          let attached = false;
+          for (const dist of attempts) {
+            const recoverySl = capitalSafeInitialStop({
+              symbol: position.symbol,
+              direction: dir,
+              entry,
+              distance: dist,
+              mark,
+            });
+            try {
+              const after = await this.modifySlTp(
+                position.organizationId,
+                "system",
+                position.id,
+                { stopLoss: recoverySl },
+                correlationId,
+                { silent: true },
+              );
+              const liveSl =
+                after && typeof after === "object" && "stopLoss" in after
+                  ? String(
+                      (after as { stopLoss?: string | null }).stopLoss ?? "",
+                    )
+                  : "";
+              if (liveSl) {
+                brokerStopLoss.set(position.id, liveSl);
+                attached = true;
+                await this.notifications.create({
+                  organizationId: position.organizationId,
+                  userId: null,
+                  title: "SL recovered on Capital",
+                  body: `${position.symbol} stopLevel ${liveSl}`,
+                  severity: "SUCCESS",
+                });
+                break;
+              }
+            } catch {
+              // try wider
             }
-          } catch (attachErr) {
-            const msg =
-              attachErr instanceof Error ? attachErr.message : String(attachErr);
-            console.warn(
-              `autoManageProtections ${position.id} recovery SL:`,
-              msg,
-            );
           }
+          if (!attached) {
+            // Last resort: Capital native trailingStop (shows as trail on chart)
+            try {
+              await this.modifySlTp(
+                position.organizationId,
+                "system",
+                position.id,
+                {
+                  trailingStop: true,
+                  stopDistance: String(minD),
+                },
+                correlationId,
+                { silent: true },
+              );
+              // Re-read broker
+              const adapter = this.brokers.get(position.accountId);
+              if (adapter && position.brokerPositionId) {
+                const live = await adapter.getOpenPositions({ force: true });
+                const match = live.find(
+                  (x) => x.brokerPositionId === position.brokerPositionId,
+                );
+                if (
+                  match?.stopLoss != null &&
+                  String(match.stopLoss).length > 0
+                ) {
+                  brokerStopLoss.set(position.id, String(match.stopLoss));
+                  attached = true;
+                }
+              }
+              if (attached) {
+                await this.notifications.create({
+                  organizationId: position.organizationId,
+                  userId: null,
+                  title: "Native Capital trail ON",
+                  body: `${position.symbol} trailingStop distance ${minD}`,
+                  severity: "WARNING",
+                });
+              }
+            } catch (nativeErr) {
+              console.warn(
+                `autoManageProtections ${position.id} NAKED — no SL:`,
+                nativeErr instanceof Error ? nativeErr.message : nativeErr,
+              );
+              await this.notifications.create({
+                organizationId: position.organizationId,
+                userId: null,
+                title: "NO SL ON CHART",
+                body: `${position.symbol}: Capital rejected stopLevel — check CFD account / funds`,
+                severity: "CRITICAL",
+              });
+            }
+          }
+          // Fall through — trail path will also try capitalSafe stopLevel
         }
 
         // Money BE threshold (£0.05) — used for BE + to unlock Capital-safe trail
