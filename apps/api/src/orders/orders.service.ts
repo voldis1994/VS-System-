@@ -212,13 +212,19 @@ export class OrdersService implements OnModuleInit {
         },
       });
     } else if (account.provider === "CAPITAL") {
-      // Heal: volumePrecision 2 turns 0.001 → "0.00" (Capital size reject).
-      // Also unwind prior wrong index min 0.1 fallback.
+      // Heal poisoned Capital symbol rows (lotSize=1 stored as min/step → 0.13 becomes 1).
       const rules = capitalDealRulesFallback(symbol.brokerSymbol);
       const volPrec = volumePrecisionForStep(rules.step);
       const curMin = Number(symbol.minVolume);
+      const curStep = Number(symbol.volumeStep);
       const needsHeal =
         Number(symbol.volumePrecision) < volPrec ||
+        !Number.isFinite(curMin) ||
+        curMin <= 0 ||
+        curMin > rules.minSize * 5 + 1e-12 ||
+        !Number.isFinite(curStep) ||
+        curStep <= 0 ||
+        curStep > rules.step * 5 + 1e-12 ||
         (rules.minSize <= 0.001 + 1e-12 && curMin >= 0.01 - 1e-12);
       if (needsHeal) {
         symbol = await this.prisma.symbol.update({
@@ -232,6 +238,24 @@ export class OrdersService implements OnModuleInit {
         });
       }
     }
+
+    // Capital: size against retail fallback — never trust poisoned DB min=1
+    const capitalRules =
+      account.provider === "CAPITAL"
+        ? capitalDealRulesFallback(symbol.brokerSymbol)
+        : null;
+    const effectiveMin = capitalRules
+      ? capitalRules.minSize
+      : Number(symbol.minVolume);
+    const effectiveStep = capitalRules
+      ? capitalRules.step
+      : Number(symbol.volumeStep);
+    const effectivePrec = capitalRules
+      ? volumePrecisionForStep(capitalRules.step)
+      : Math.max(0, Number(symbol.volumePrecision));
+    const effectiveMax = capitalRules
+      ? capitalRules.maxSize
+      : Number(symbol.maxVolume);
 
     let adapter = this.brokers.get(accountId);
     if (!adapter) {
@@ -265,14 +289,14 @@ export class OrdersService implements OnModuleInit {
         stopLoss: input.stopLoss,
         tickSize: String(symbol.tickSize),
         tickValue: String(symbol.tickValue),
-        volumeStep: String(symbol.volumeStep),
-        minVolume: String(symbol.minVolume),
-        maxVolume: String(symbol.maxVolume),
+        volumeStep: String(effectiveStep),
+        minVolume: String(effectiveMin),
+        maxVolume: String(effectiveMax),
       });
       volume = d(sized.volume);
       // Small LIVE accounts: fall back to minimum lot instead of failing
       if (volume.lte(0)) {
-        volume = d(String(symbol.minVolume));
+        volume = d(String(effectiveMin));
       }
     }
 
@@ -280,11 +304,11 @@ export class OrdersService implements OnModuleInit {
       throw new AppError(ErrorCodes.ORDER_INVALID_VOLUME, "Volume required");
     }
     if (volume.lte(0)) {
-      volume = d(String(symbol.minVolume));
+      volume = d(String(effectiveMin));
     }
-    // Capital indices reject FX-style lots — bump to instrument min before broker call
-    if (volume.gt(0) && volume.lt(d(String(symbol.minVolume)))) {
-      volume = d(String(symbol.minVolume));
+    // Only bump to instrument min — never to poisoned min=1
+    if (volume.gt(0) && volume.lt(d(String(effectiveMin)))) {
+      volume = d(String(effectiveMin));
     }
 
     const openTrades = await this.prisma.position.count({
@@ -373,7 +397,7 @@ export class OrdersService implements OnModuleInit {
         symbol: symbol.brokerSymbol,
         type: input.type,
         direction: input.direction,
-        volume: volume.toFixed(symbol.volumePrecision),
+        volume: volume.toFixed(effectivePrec),
         price: input.entryPrice,
         stopLoss: input.stopLoss,
         takeProfit: input.takeProfit,
@@ -407,7 +431,7 @@ export class OrdersService implements OnModuleInit {
         rejectionCode = "CAPITAL_SIZE_INVALID";
         rejectionMessage = capitalSizeErrorHint(
           symbol.brokerSymbol,
-          volume.toFixed(symbol.volumePrecision),
+          volume.toFixed(effectivePrec),
         );
       }
       const rejected = await this.prisma.order.update({

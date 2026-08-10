@@ -1,8 +1,10 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import {
   CapitalComAdapter,
+  capitalDealRulesFallback,
   formatMarketCode,
   resolveCapitalEpic,
+  volumePrecisionForStep,
   type CapitalMarketInfo,
 } from "@nexus/broker-adapters";
 import { d, newId, roundToPrecision } from "@nexus/shared";
@@ -334,6 +336,8 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     let saved = 0;
     for (const m of markets.slice(0, 2000)) {
       const fx = /^[A-Z]{6}$/.test(m.epic);
+      const rules = capitalDealRulesFallback(m.epic);
+      const volPrec = volumePrecisionForStep(rules.step);
       try {
         await this.prisma.symbol.upsert({
           where: {
@@ -352,10 +356,10 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
             baseAsset: fx ? m.epic.slice(0, 3) : m.epic,
             quoteAsset: fx ? m.epic.slice(3) : "USD",
             pricePrecision: fx ? 5 : 2,
-            volumePrecision: 2,
-            minVolume: "0.01",
-            maxVolume: "500",
-            volumeStep: "0.01",
+            volumePrecision: volPrec,
+            minVolume: String(rules.minSize),
+            maxVolume: String(rules.maxSize),
+            volumeStep: String(rules.step),
             tickSize: fx ? "0.00001" : "0.01",
             tickValue: "1",
             contractSize: "1",
@@ -369,6 +373,11 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
           update: {
             canonicalSymbol: m.epic,
             assetClass: m.instrumentType ?? "CFD",
+            // Always heal volume rules — poisoned min=1 / step=1 breaks 0.12→1
+            volumePrecision: volPrec,
+            minVolume: String(rules.minSize),
+            maxVolume: String(rules.maxSize),
+            volumeStep: String(rules.step),
             tradingHoursJson: {
               name: m.name,
               marketStatus: m.marketStatus,
