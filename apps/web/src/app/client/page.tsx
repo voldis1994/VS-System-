@@ -54,7 +54,7 @@ const MODES = [
   StrategyMode.RANGE,
 ] as const;
 
-const LOTS = ["0.001", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5"] as const;
+const LOTS = ["0.001", "0.01", "0.02", "0.05", "0.1", "0.12", "0.2", "0.5"] as const;
 
 const EXITS: Record<
   ExitVersion,
@@ -230,11 +230,11 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "BUY un SELL · bots sūta Capital API (nevis app). Statusa rinda rāda score/skip — ja HOLD, vēl gaida setup.",
+    tip: "FIXED lot · bots sūta Capital API. Lot izvēlies pats — VS neriskē/nemazina.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
-    tip: "Gaida svaigu EMA1×EMA3 cross — bieži kluss. Labāk SCALPING FAST ikdienas tirdzniecībai",
+    tip: "Ieeja uz EMA1×EMA3 cross. Lot FIXED — operatora izvēle.",
   },
   [StrategyMode.TREND]: {
     label: "TREND",
@@ -766,7 +766,7 @@ export default function ClientPortalPage() {
               <span className="block font-[family-name:var(--font-display)] text-[11px] tracking-wide">
                 SCALPING FAST
               </span>
-              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">10s · ātrs exit</span>
+              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">fixed lot</span>
             </button>
             <button
               type="button"
@@ -780,7 +780,7 @@ export default function ClientPortalPage() {
               <span className="block font-[family-name:var(--font-display)] text-[11px] tracking-wide">
                 EMA 1/3 TICK
               </span>
-              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">gaida cross</span>
+              <span className="mt-0.5 block text-[10px] text-[#5f7a90]">cross entry</span>
             </button>
           </div>
           <select
@@ -803,7 +803,7 @@ export default function ClientPortalPage() {
           <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">
             LOT
           </p>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-4 gap-1.5">
             {LOTS.map((l) => (
               <button
                 key={l}
@@ -819,6 +819,16 @@ export default function ClientPortalPage() {
               </button>
             ))}
           </div>
+          <input
+            className="mt-2 w-full border border-[#1a2a3a] bg-[#04080e] px-3 py-2.5 font-mono text-[13px] outline-none focus:border-[#00f0ff]"
+            inputMode="decimal"
+            placeholder="Custom lot (piem. 0.13)"
+            value={LOTS.includes(lotSize as (typeof LOTS)[number]) ? "" : lotSize}
+            onChange={(e) => {
+              const v = e.target.value.trim().replace(",", ".");
+              if (v === "" || /^\d*\.?\d*$/.test(v)) setLotSize(v || "0.01");
+            }}
+          />
         </section>
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
@@ -829,16 +839,14 @@ export default function ClientPortalPage() {
                 <>
                   <p className="text-[#7af6ff]">AUTO · SCALPING FAST</p>
                   <p>
-                    BUY + SELL. Bez fiksēta TP — pēc entry uzreiz ciešs trailing + BE.
-                    Ja nav treidu: skaties statusa rindu (score / skip). Mode/tirgu maini → SAVE / START.
+                    Ciešs trailing + BE pēc entry. Lot no LOT sekcijas — SAVE / START.
                   </p>
                 </>
               ) : (
                 <>
                   <p className="text-[#7af6ff]">AUTO · EMA 1/3 TICK</p>
                   <p>
-                    SL/trail no EMA3, BE pie 1R, close uz pretējo krustojumu — manuāls exit
-                    nav vajadzīgs.
+                    Trail EMA3 / BE 1R / close uz pretējo cross. Lot FIXED.
                   </p>
                 </>
               )}

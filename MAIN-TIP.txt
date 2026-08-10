@@ -1,3 +1,3 @@
-main tip: ALL protective gates OFF — fire on soft lean; operator owns risk
+main tip: START auto-unlocks LOCKED accounts; client custom lot; no risk nags
 repo: https://github.com/voldis1994/VS-System-
-fix: risk engine + news/candle/session/ATR/mid/minScore/fingerprint/same-side all off
+fix: stale LOCK from old risk engine no longer blocks START

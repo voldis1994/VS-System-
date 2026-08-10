@@ -39,15 +39,13 @@ export type DeploymentState = {
 
 export function deploymentHint(d: DeploymentState): string | null {
   if (d.skip === "insufficient_margin" || /insufficient|margin|funds|RISK_CHECK/i.test(String(d.error ?? ""))) {
-    return "Capital RISK_CHECK — pārbaudi Accounts CFD bind (tas pats konts, kur APP treido).";
+    return "Capital RISK_CHECK — Accounts → Connect/Bind tam pašam CFD, kur APP treido.";
   }
   if (d.candleSource1m === "sim" || d.candleSource === "sim" || d.skip === "sim_candles") {
-    return "SIM sveces — orderi BLOĶĒTI. Desk → Accounts → Connect Capital, tad STOP/START.";
+    return "Vājas sveces (sim) — Connect Capital. Risk gates OFF: mēģina treidot tik un tā.";
   }
   if (d.skip === "news_filter") {
-    return `News filtra blackout${d.newsEvent ? ` — ${d.newsEvent}` : ""}${
-      d.newsCountry ? ` (${d.newsCountry})` : ""
-    }.`;
+    return null; // news gate off
   }
   if (d.skip === "multi_tp_lot_too_small") {
     return "Multi TP: lot pārāk mazs šim TP skaitam (min step 0.01).";
@@ -56,89 +54,68 @@ export function deploymentHint(d: DeploymentState): string | null {
     typeof d.reason === "string" &&
     d.reason.startsWith("multi_tp_fallback_single")
   ) {
-    return "Multi TP nav iespējams ar šo lot — izmanto Single TP (vajag ≥ TP×0.01 lot).";
+    return "Multi TP → Single TP (lot < TP×0.01).";
   }
-  if (d.skip === "buy_vs_bearish") {
-    return `BUY bloķēts pret bearish — ja SELL arī neder, gaida.`;
-  }
-  if (d.skip === "sell_vs_bullish") {
-    return `SELL bloķēts pret bullish — ja BUY arī neder, gaida.`;
+  if (d.skip === "buy_vs_bearish" || d.skip === "sell_vs_bullish") {
+    return null;
   }
   if (d.gate === "flip_no_confluence") {
-    return "Flip bloķēts — pretējai pusei nav mode confluence.";
+    return null;
   }
   if (
     d.gate === "ema13_wait_fresh_cross" ||
     d.gate === "ema13_wait_cross" ||
     d.gate === "ema13_wait_edge"
   ) {
-    return "EMA 1/3: gaida svaigu EMA1×EMA3 krustojumu (tagad jau vienā pusē — bez jauna cross neieies). Labāk SCALPING FAST.";
+    return "EMA 1/3: gaida svaigu EMA1×EMA3 cross.";
   }
   if (d.gate === "scalp_fast_long" || d.gate === "scalp_fast_short") {
-    if (d.skip === "quality_wait" || d.signal === "HOLD") {
-      const bar = d.minScore && d.minScore > 0 ? d.minScore : 28;
-      return `SCALPING FAST gaida — score ${d.score ?? 0}/${bar}+ (B${d.buyScore ?? "?"} S${d.sellScore ?? "?"}). Nav tas pats kas manuāli Capital app.`;
-    }
-    return `SCALPING FAST: momentum → ${d.gate === "scalp_fast_long" ? "BUY" : "SELL"} (ciešs trail exit).`;
+    return `SCALPING FAST → ${d.gate === "scalp_fast_long" ? "BUY" : "SELL"}.`;
   }
   if (d.gate === "scalp_quiet") {
-    return "SCALPING FAST: pagaidām nav momentum — gaida EMA9/MACD virzienu.";
+    return "SCALPING FAST: pagaidām kluss.";
   }
   if (d.gate === "ema13_cross_consumed") {
-    return "EMA 1/3: šis krustojums jau izmantots — gaida nākamo svaigo cross.";
+    return null;
   }
   if (d.gate === "ema13_trail_long" || d.gate === "ema13_trail_short") {
-    return "EMA 1/3: pozīcija atvērta — trail uz EMA3, exit pretējā cross / caur EMA3.";
+    return "EMA 1/3: open — trail EMA3.";
   }
   if (d.gate === "ema13_cross_up" || d.gate === "ema13_cross_down") {
-    return `EMA 1/3: svaigs krustojums → ${d.gate === "ema13_cross_up" ? "BUY" : "SELL"}.`;
+    return `EMA 1/3 cross → ${d.gate === "ema13_cross_up" ? "BUY" : "SELL"}.`;
+  }
+  if (d.gate === "soft_lean") {
+    return `Soft lean → ${d.signal ?? "…"} (risk gates OFF).`;
   }
   if (d.flipped && (d.signal === "BUY" || d.signal === "SELL")) {
-    return `Flip ${d.flippedFrom ?? "?"}→${d.signal} (sveces bloķēja ${d.flippedFrom ?? "?"}).`;
+    return `Flip → ${d.signal}.`;
   }
   if (d.gate === "breakout" || d.gate === "adx_high") {
-    return `MM risk-off — tirgus pārāk trendo/breakout (score ${d.score ?? 0}). Gaida klusu zonu.`;
+    return null;
   }
-  if (d.skip === "quality_wait" || d.gate === "score_low") {
-    const bar = d.minScore && d.minScore > 0 ? d.minScore : 55;
-    return `Stratēģija gaida setup — score ${d.score ?? 0}/${bar}+ (${d.gate ?? "…"}).`;
+  if (d.skip === "quality_wait" || d.gate === "score_low" || d.gate === "mid_range") {
+    return null;
   }
-  if (d.gate === "mid_range") {
-    return "Mid-range zona — HOLD (mazāk trokšņa).";
-  }
-  if (d.skip === "micro_timing") {
-    return `Gaida 1m×5 / TF bias (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
-  }
-  if (d.skip === "micro_conflict" || d.gate === "micro_conflict") {
-    return `Konflikt svecēs — abas puses bloķētas.`;
-  }
-  if (d.skip === "micro_flat" || d.gate === "micro_flat") {
-    return `1m×5 flat (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
+  if (d.skip === "micro_timing" || d.skip === "micro_conflict" || d.skip === "micro_flat") {
+    return null;
   }
   if (d.gate === "micro_1m5_buy" || d.gate === "micro_1m5_sell") {
-    const side = d.gate === "micro_1m5_buy" ? "BUY" : "SELL";
-    return `1m×5 apstiprina ${side} (🟢${d.microBull ?? "?"} 🔴${d.microBear ?? "?"}).`;
+    return null;
   }
   if (d.skip === "live_trading_off") {
-    return "LIVE trading OFF — STOP tad START vēlreiz (auto ieslēdz) vai desk Accounts → LIVE ON.";
+    return "LIVE routing — START vēlreiz (auto ieslēdz).";
   }
   if (d.skip === "waiting_open_close") {
-    if (d.signal === "BUY" || d.signal === "SELL") {
-      return `Signāls ${d.signal} — aizver pretējo / gaida close (${d.openTrades ?? 1} open).`;
-    }
-    return `Gaida close — kontā ${d.openTrades ?? 1} atvērts treids.`;
+    return null;
   }
   if (d.skip === "closed_opposite_no_flip") {
-    return "Aizvēra pretējo — flip OFF, jaunu neatver.";
+    return null;
   }
-  if (d.skip === "cooldown") {
-    return `Cooldown ${d.cooldownSec ?? "…"}s — tad mēģinās vēlreiz.`;
-  }
-  if (d.skip === "same_signal") {
-    return "Tas pats signāls jau apstrādāts — gaida jaunu / flat.";
+  if (d.skip === "cooldown" || d.skip === "same_signal") {
+    return null;
   }
   if (d.gate === "session_off" || d.skip === "session_off") {
-    return "Ārpus London/NY sesijas.";
+    return null;
   }
   if (
     d.gate === "atr_dead" ||
@@ -146,26 +123,25 @@ export function deploymentHint(d: DeploymentState): string | null {
     d.skip === "atr_dead" ||
     d.skip === "atr_spike"
   ) {
-    return "Volatilitāte nav piemērota.";
+    return null;
   }
   if (d.skip === "not_enough_candles") {
-    return "Maz market data — Sync / uzgaidi.";
+    return "Maz market data — Connect / uzgaidi.";
   }
   if (d.skip === "account_locked_or_missing") {
-    return "Konts locked vai nav pieejams.";
+    return "Konts trūkst — START vēlreiz (auto unlock).";
   }
-  if (d.error) return `Order kļūda: ${d.error}`;
+  if (d.error) return `Order: ${d.error}`;
   if (d.placed) {
     return `Order nosūtīts${d.direction ? ` · ${d.direction}` : ""}${
       d.entry != null ? ` @ ${d.entry}` : ""
     }.`;
   }
   if (d.signal === "BUY" || d.signal === "SELL") {
-    return `Signāls ${d.signal} — gatavojas / izpilda.`;
+    return `Signāls ${d.signal} — izpilda.`;
   }
   if (d.signal === "HOLD" && typeof d.score === "number") {
-    const bar = d.minScore && d.minScore > 0 ? d.minScore : 55;
-    return `HOLD · score ${d.score}/${bar}+.`;
+    return `HOLD · ${d.gate ?? "…"}`;
   }
   if (d.signal === "CLOSE") return "Close signāls.";
   return null;

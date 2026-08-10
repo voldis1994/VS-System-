@@ -913,10 +913,13 @@ export class StrategiesService {
       );
     }
     if (account.status === "LOCKED") {
-      throw new AppError(
-        ErrorCodes.ACCOUNT_LOCKED,
-        "Konts LOCKED — desk → unlock, tad START",
-        HttpStatus.FORBIDDEN,
+      // Risk engine is hard-OFF — never strand operator on a stale LOCK
+      await this.prisma.tradingAccount.update({
+        where: { id: accountId },
+        data: { status: "ACTIVE" },
+      });
+      this.log.warn(
+        `START auto-unlocked LOCKED account ${accountId} (${correlationId})`,
       );
     }
 

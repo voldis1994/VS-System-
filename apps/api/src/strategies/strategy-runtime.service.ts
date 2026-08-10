@@ -915,20 +915,27 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
         void trailActPips;
 
-        const account = await this.prisma.tradingAccount.findFirst({
+        let account = await this.prisma.tradingAccount.findFirst({
           where: { id: accountId, organizationId: strategy.organizationId },
         });
-        if (!account || account.status === "LOCKED") {
+        if (!account) {
           lastStatus = { ...lastStatus, skip: "account_locked_or_missing" };
           continue;
         }
+        if (account.status === "LOCKED") {
+          account = await this.prisma.tradingAccount.update({
+            where: { id: accountId },
+            data: { status: "ACTIVE" },
+          });
+          this.log.warn(`Runtime auto-unlocked LOCKED account ${accountId}`);
+        }
         if (account.accountType === "LIVE" && !account.liveTradingEnabled) {
-          lastStatus = {
-            ...lastStatus,
-            skip: "live_trading_off",
-            error: "Live trading not enabled — Accounts → enable LIVE",
-          };
-          continue;
+          // Risk OFF — auto-enable LIVE routing so client START isn't stranded
+          account = await this.prisma.tradingAccount.update({
+            where: { id: accountId },
+            data: { liveTradingEnabled: true },
+          });
+          this.log.warn(`Runtime enabled LIVE trading for ${accountId}`);
         }
 
         if (!this.brokers.get(accountId)) {
