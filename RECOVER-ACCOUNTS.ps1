@@ -254,7 +254,7 @@ if ($bestVol -and $bestVol.Accounts -gt 0) {
   }
 } elseif ($bestSql -and $bestSql.Accounts -gt 0) {
   $mode = "sql"
-} elseif ($bestVol -and $bestVol.Name -ne $target) {
+} else {
   # no account rows found but another volume exists — still try largest non-target
   $fallback = $volHits | Where-Object { $_.Name -ne $target } | Sort-Object SizeKb -Descending | Select-Object -First 1
   if ($fallback) {

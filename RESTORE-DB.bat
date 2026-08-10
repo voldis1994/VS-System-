@@ -51,6 +51,11 @@ if not exist "%FILE%" (
 )
 
 echo.
+echo [0/3] Apturu API/WEB (lai DB nav rakstita restore laika)...
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3000 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":4000 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
+timeout /t 2 /nobreak >nul
+
 echo [1/3] Postgres up...
 docker compose up -d postgres
 timeout /t 5 /nobreak >nul

@@ -208,14 +208,14 @@ export class AccountsService {
       const health = await adapter.healthCheck();
       let state = await adapter.getAccountState();
 
-      // If pinned CFD is a leftover micro account but another CFD has real balance
-      // (user trades manually on the big one), auto-switch to the richest CFD.
+      // Auto-switch to richest CFD only when none pinned yet (never steal another desk bind)
       let boundExternal =
         (health.details?.externalAccountId as string | undefined) ??
         account.externalAccountId ??
         null;
       if (
         account.provider === "CAPITAL" &&
+        !account.externalAccountId &&
         typeof adapter.listCapitalAccounts === "function" &&
         typeof adapter.bindCapitalAccount === "function"
       ) {

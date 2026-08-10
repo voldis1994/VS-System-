@@ -1272,11 +1272,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         },
       });
       for (const pos of opens) {
-        const entry = Number(pos.averageEntry);
         const curSl = pos.stopLoss != null ? Number(pos.stopLoss) : null;
         let nextSl: number | null = null;
         if (pos.direction === "BUY") {
-          // Only move SL up toward EMA3 (and never above entry until BE logic moves it)
+          // Only move SL up toward EMA3
           if (curSl == null || input.ema3 > curSl) {
             nextSl = input.ema3;
           }
@@ -1286,12 +1285,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           }
         }
         if (nextSl == null || !Number.isFinite(nextSl)) continue;
-        // Don't trail past a locked BE past entry in the wrong direction
-        if (pos.direction === "BUY" && nextSl >= entry) {
-          // allow at/above entry (BE+) — EMA3 can lock profit
-        }
-        if (pos.direction === "SELL" && nextSl <= entry) {
-          // allow at/below entry
+        // Never place SL on the wrong side of market (instant stop / Capital reject)
+        const mark = Number(pos.currentPrice ?? pos.averageEntry);
+        if (Number.isFinite(mark) && mark > 0) {
+          if (pos.direction === "BUY" && nextSl >= mark) continue;
+          if (pos.direction === "SELL" && nextSl <= mark) continue;
         }
         const formatted = formatInstrumentPrice(input.brokerSymbol, nextSl);
         if (curSl != null && formatted === formatInstrumentPrice(input.brokerSymbol, curSl)) {

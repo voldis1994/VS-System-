@@ -1024,31 +1024,29 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
-    // RISK_CHECK: do NOT shrink operator lot. Re-pin richest CFD once, retry SAME size.
+    // RISK_CHECK: do NOT shrink operator lot. Only re-pin when CFD not yet bound.
     if (
       !accepted &&
       isCapitalRiskCheckError(String(confirm.reason ?? ""))
     ) {
       try {
-        const subs = await this.listCapitalAccounts();
-        const richest = pickBestCapitalSubAccount(subs);
-        const richestAvail = Number(
-          richest?.available ?? richest?.balance ?? 0,
-        );
-        const curId = this.targetExternalAccountId || this.externalAccountId;
-        if (
-          richest?.accountId &&
-          richest.accountId !== curId &&
-          richestAvail > 0
-        ) {
-          await this.bindCapitalAccount(richest.accountId);
-          await new Promise((r) => setTimeout(r, 400));
-          const attempt = await postMarket(usedSize);
-          res = attempt.res;
-          confirm = attempt.confirm;
-          dealId = confirm.dealId;
-          fillLevel = confirm.level;
-          accepted = isCapitalConfirmAccepted(confirm);
+        const pinned = String(this.targetExternalAccountId ?? "").trim();
+        if (!pinned) {
+          const subs = await this.listCapitalAccounts();
+          const richest = pickBestCapitalSubAccount(subs);
+          const richestAvail = Number(
+            richest?.available ?? richest?.balance ?? 0,
+          );
+          if (richest?.accountId && richestAvail > 0) {
+            await this.bindCapitalAccount(richest.accountId);
+            await new Promise((r) => setTimeout(r, 400));
+            const attempt = await postMarket(usedSize);
+            res = attempt.res;
+            confirm = attempt.confirm;
+            dealId = confirm.dealId;
+            fillLevel = confirm.level;
+            accepted = isCapitalConfirmAccepted(confirm);
+          }
         }
       } catch {
         // keep original reject
@@ -1176,6 +1174,7 @@ export class CapitalComAdapter implements BrokerAdapter {
 
   async modifyPosition(request: BrokerModifyPositionRequest): Promise<BrokerPosition> {
     await this.ensureSession();
+    await this.ensureActiveAccount();
     const body: Record<string, unknown> = {};
     const trailDist =
       request.stopDistance != null ? Number(request.stopDistance) : NaN;
@@ -1247,6 +1246,7 @@ export class CapitalComAdapter implements BrokerAdapter {
 
   async closePosition(request: BrokerClosePositionRequest): Promise<BrokerCloseResult> {
     await this.ensureSession();
+    await this.ensureActiveAccount();
     const positions = await this.getOpenPositions({ force: true });
     const pos = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
     if (!pos) throw new Error("Position not found");
@@ -1289,6 +1289,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     request: BrokerPartialCloseRequest,
   ): Promise<BrokerCloseResult> {
     await this.ensureSession();
+    await this.ensureActiveAccount();
     const positions = await this.getOpenPositions();
     const pos = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
     if (!pos) throw new Error("Position not found");
@@ -1319,9 +1320,13 @@ export class CapitalComAdapter implements BrokerAdapter {
     const still = await this.getOpenPositions({ force: true });
     const after = still.find((p) => p.brokerPositionId === request.brokerPositionId);
     const remaining = after ? Number(after.volume) : 0;
+    // Never force 2dp — GOLD/crypto micro lots use 0.001 steps
+    const volPrec = volumePrecisionForStep(
+      closeSize < 0.01 || remaining < 0.01 || current < 0.01 ? 0.001 : 0.01,
+    );
     return {
-      closedVolume: String(closeSize),
-      remainingVolume: remaining.toFixed(2),
+      closedVolume: closeSize.toFixed(volPrec),
+      remainingVolume: remaining.toFixed(volPrec),
       averageClosePrice:
         confirm.level != null ? String(confirm.level) : pos.currentPrice,
       realizedPnl: confirm.profit != null ? String(confirm.profit) : "0",

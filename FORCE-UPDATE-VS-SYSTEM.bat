@@ -58,7 +58,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-git clean -fd -e tools -e node_modules -e .env -e "apps\api\.env" -e client-url.txt -e remote-client-url.txt >nul 2>&1
+git clean -fd -e tools -e node_modules -e .env -e "apps\api\.env" -e client-url.txt -e remote-client-url.txt -e backups -e VERSION.txt >nul 2>&1
 
 for /f "delims=" %%h in ('git rev-parse --short HEAD 2^>nul') do set "VS_AFTER=%%h"
 for /f "delims=" %%f in ('git rev-parse HEAD 2^>nul') do set "VS_FULL=%%f"

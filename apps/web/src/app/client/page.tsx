@@ -372,11 +372,17 @@ export default function ClientPortalPage() {
     setTesting(true);
     setError(null);
     try {
-      const base = apiBaseFromConfig(serverDraft);
+      // Manual CONNECT always uses host:apiPort (not same-origin), otherwise
+      // the form's IP/ports are ignored and health keeps hitting the phone page origin.
+      const draft: ClientServerConfig = {
+        ...serverDraft,
+        sameOrigin: false,
+      };
+      const base = apiBaseFromConfig(draft);
       const res = await fetch(`${base}/api/health`);
       if (!res.ok) throw new Error(`Serveris neatbild (${res.status})`);
-      saveServerConfig(serverDraft);
-      setServer(serverDraft);
+      saveServerConfig(draft);
+      setServer(draft);
       setShowServer(false);
     } catch (e) {
       setError(

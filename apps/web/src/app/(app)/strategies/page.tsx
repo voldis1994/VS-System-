@@ -874,48 +874,11 @@ export default function StrategiesPage() {
                       className="font-mono"
                     />
                   </Field>
-                  <Toggle
-                    checked={draft.newsFilterEnabled}
-                    onChange={(v) =>
-                      patchDraft(account.id, {
-                        newsFilterEnabled: v,
-                        exitVersion: "CUSTOM",
-                      })
-                    }
-                    label={
-                      draft.newsFilterEnabled
-                        ? "News filter ON"
-                        : "News filter OFF"
-                    }
-                  />
-                  {draft.newsFilterEnabled ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      <Field label="Min before">
-                        <Input
-                          value={draft.newsMinutesBefore}
-                          onChange={(e) =>
-                            patchDraft(account.id, {
-                              newsMinutesBefore: e.target.value,
-                              exitVersion: "CUSTOM",
-                            })
-                          }
-                          className="font-mono"
-                        />
-                      </Field>
-                      <Field label="Min after">
-                        <Input
-                          value={draft.newsMinutesAfter}
-                          onChange={(e) =>
-                            patchDraft(account.id, {
-                              newsMinutesAfter: e.target.value,
-                              exitVersion: "CUSTOM",
-                            })
-                          }
-                          className="font-mono"
-                        />
-                      </Field>
-                    </div>
-                  ) : null}
+                  <div className="rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[11px] text-white/45">
+                    News filter:{" "}
+                    <span className="text-white/70">forced OFF</span> — protective
+                    entry gates disabled (operator lot / signal only).
+                  </div>
                   <p className="text-[11px] text-zinc-500">
                     News = Forex Factory high-impact blackout. Multi TP = reāli
                     partial close, ne tikai UI.

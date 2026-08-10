@@ -260,16 +260,20 @@ export class OrdersService implements OnModuleInit {
     let adapter = this.brokers.get(accountId);
     if (!adapter) {
       adapter = await this.brokers.connectAccount(account);
-      await this.prisma.tradingAccount.update({
-        where: { id: accountId },
-        data: { connectionStatus: "CONNECTED" },
-      });
     }
 
     const health = await adapter.healthCheck();
     if (!health.healthy) {
+      await this.prisma.tradingAccount.update({
+        where: { id: accountId },
+        data: { connectionStatus: "ERROR" },
+      });
       throw new AppError(ErrorCodes.BROKER_UNHEALTHY, "Broker connection unhealthy");
     }
+    await this.prisma.tradingAccount.update({
+      where: { id: accountId },
+      data: { connectionStatus: "CONNECTED" },
+    });
 
     const brokerState = await adapter.getAccountState();
     let volume = input.volume ? d(input.volume) : d(0);

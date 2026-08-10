@@ -1,0 +1,30 @@
+# Full audit snapshot — 2026-08-10
+# Repo tip after fixes: see git log
+
+FIXED THIS PASS
+- API tsc already clean (prior duplicate-key fix)
+- Failing modeMinScore unit test (expected old bars, gates are OFF → 0)
+- Capital modify/close/partialClose missing ensureActiveAccount (wrong CFD session)
+- Partial close remainingVolume toFixed(2) wiping 0.001 lots
+- RISK_CHECK no longer steals another pinned CFD
+- Connect richest-CFD switch only when externalAccountId empty
+- Orders set CONNECTED only after healthy healthCheck
+- EMA3 trail skips SL on wrong side of mark
+- FORCE-UPDATE preserves backups/ + VERSION.txt
+- RECOVER largest-volume fallback actually runs
+- Client manual CONNECT uses host:apiPort (sameOrigin false)
+- News filter UI no longer pretends ON works
+- .env.example no longer forces NEXT_PUBLIC_API_URL localhost:4000
+- RESTORE kills :3000/:4000 before SQL load
+- .gitattributes CRLF for *.bat/*.ps1
+
+INTENTIONAL (operator request — NOT bugs)
+- Risk engine hard-OFF
+- Protective entry gates OFF (cooldown 0, minScore 0, news/session off)
+- Same-side stacking allowed (no oneTradeOnly)
+
+STILL KNOWN / NOT CHANGED
+- Trail soft floor can sit under Capital min-stop (attach may warn; hard SL still set)
+- Trail/BE uses mid not bid/ask
+- maxTotalRiskPercent unused when engine on
+- START still git reset --hard on main (by design for operator sync)
