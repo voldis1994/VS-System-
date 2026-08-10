@@ -1129,7 +1129,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 positionId,
                 {
                   stopLoss: safeSl,
-                  takeProfit: takeProfit ?? null,
+                  ...(takeProfit ? { takeProfit } : {}),
                 },
                 correlationId,
                 { silent: true },
@@ -1164,7 +1164,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                   strategy.organizationId,
                   actorId,
                   positionId,
-                  { stopLoss: wider, takeProfit: takeProfit ?? null },
+                  { stopLoss: wider, ...(takeProfit ? { takeProfit } : {}) },
                   correlationId,
                   { silent: true },
                 );

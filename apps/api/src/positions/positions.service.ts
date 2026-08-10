@@ -305,15 +305,37 @@ export class PositionsService {
         input.trailingStop === true ? input.stopDistance : undefined,
     });
 
+    // Broker readback is source of truth — never stamp DB with requested SL
+    // that Capital never applied (chart stays naked while VS shows SL).
+    if (
+      input.stopLoss !== undefined &&
+      input.stopLoss !== null &&
+      !(brokerPos.stopLoss != null && String(brokerPos.stopLoss).length > 0)
+    ) {
+      throw new AppError(
+        ErrorCodes.BROKER_ORDER_REJECTED,
+        "Capital did not accept stopLoss (check min-stop / CFD account)",
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+
     const nextSl =
       input.stopLoss !== undefined
-        ? input.stopLoss
+        ? brokerPos.stopLoss != null && String(brokerPos.stopLoss).length > 0
+          ? String(brokerPos.stopLoss)
+          : input.stopLoss === null
+            ? null
+            : position.stopLoss
         : brokerPos.stopLoss != null
           ? brokerPos.stopLoss
           : position.stopLoss;
     const nextTp =
       input.takeProfit !== undefined
-        ? input.takeProfit
+        ? input.takeProfit === null
+          ? null
+          : brokerPos.takeProfit != null && String(brokerPos.takeProfit).length > 0
+            ? String(brokerPos.takeProfit)
+            : input.takeProfit
         : brokerPos.takeProfit != null
           ? brokerPos.takeProfit
           : position.takeProfit;
@@ -324,7 +346,11 @@ export class PositionsService {
         stopLoss: nextSl,
         takeProfit: nextTp,
         currentPrice: brokerPos.currentPrice ?? position.currentPrice,
-        unrealizedPnl: brokerPos.unrealizedPnl ?? position.unrealizedPnl,
+        unrealizedPnl:
+          brokerPos.unrealizedPnl != null &&
+          String(brokerPos.unrealizedPnl).length > 0
+            ? brokerPos.unrealizedPnl
+            : position.unrealizedPnl,
       },
     });
 
@@ -706,33 +732,26 @@ export class PositionsService {
     const brokerMarks = new Map<string, number>();
     const brokerStopLoss = new Map<string, string>();
     const brokerUpl = new Map<string, number>();
-    const missingOnBroker = new Set<string>();
+    // Do NOT ghost-close on a single miss (wrong CFD session under shared login).
+    // Reconcile handles real closes with stronger guards.
     for (const [accountId, positions] of byAccount) {
       const adapter = this.brokers.get(accountId);
       if (!adapter) continue;
       try {
         const live = await adapter.getOpenPositions({ force: true });
-        // Empty list is ambiguous — don't mark everything missing
         if (live.length === 0 && positions.length > 0) continue;
-        const liveIds = new Set(
-          live.map((x) => x.brokerPositionId).filter(Boolean),
-        );
         for (const p of positions) {
           const match = live.find((x) => x.brokerPositionId === p.brokerPositionId);
-          if (!match) {
-            if (p.brokerPositionId && !liveIds.has(p.brokerPositionId)) {
-              missingOnBroker.add(p.id);
-            }
-            continue;
-          }
+          if (!match) continue;
           const mark = Number(match.currentPrice);
           if (Number.isFinite(mark) && mark > 0) {
             brokerMarks.set(p.id, mark);
             brokerMarks.set(p.symbol, mark);
           }
-          const upl = Number(match.unrealizedPnl);
-          if (Number.isFinite(upl)) {
-            brokerUpl.set(p.id, upl);
+          const uplRaw = match.unrealizedPnl;
+          if (uplRaw != null && String(uplRaw).length > 0) {
+            const upl = Number(uplRaw);
+            if (Number.isFinite(upl)) brokerUpl.set(p.id, upl);
           }
           if (match.stopLoss != null && String(match.stopLoss).length > 0) {
             brokerStopLoss.set(p.id, String(match.stopLoss));
@@ -743,20 +762,7 @@ export class PositionsService {
       }
     }
 
-    for (const positionId of missingOnBroker) {
-      await this.prisma.position.update({
-        where: { id: positionId },
-        data: {
-          status: "CLOSED",
-          closedAt: new Date(),
-          unrealizedPnl: "0",
-          volume: "0",
-        },
-      });
-    }
-
     for (const position of open) {
-      if (missingOnBroker.has(position.id)) continue;
       try {
         const mark =
           brokerMarks.get(position.id) ??
@@ -789,19 +795,15 @@ export class PositionsService {
         const dir = position.direction as "BUY" | "SELL";
         const favorable =
           dir === "BUY" ? mark - entry : entry - mark;
-        const moneyPnl =
-          brokerUpl.get(position.id) ??
-          (() => {
-            const fromDb = Number(position.unrealizedPnl);
-            if (Number.isFinite(fromDb)) return fromDb;
-            return instrumentMoneyPnl({
+        const moneyPnl = brokerUpl.has(position.id)
+          ? brokerUpl.get(position.id)!
+          : instrumentMoneyPnl({
               symbol: position.symbol,
               direction: dir,
               entry,
               exit: mark,
               volumeLots: Number(position.volume),
             });
-          })();
         if (Number.isFinite(moneyPnl)) {
           await this.prisma.position.update({
             where: { id: position.id },
@@ -809,11 +811,10 @@ export class PositionsService {
           });
         }
 
-        // Recovery: post-fill SL attach often fails silently on Capital (min-stop /
-        // account race). If broker has no stopLevel, push a Capital-safe SL now
-        // so the chart shows protection before BE is legal.
+        // Recovery: if Capital chart has no stopLevel, push Capital-safe SL.
+        // modifySlTp now throws unless broker readback confirms stopLevel.
         const hasBrokerSl = brokerStopLoss.has(position.id);
-        if (!hasBrokerSl && !position.breakEvenActivatedAt) {
+        if (!hasBrokerSl) {
           const preferredDist =
             position.stopLoss != null
               ? Math.abs(entry - Number(position.stopLoss))
@@ -826,7 +827,7 @@ export class PositionsService {
             mark,
           });
           try {
-            await this.modifySlTp(
+            const after = await this.modifySlTp(
               position.organizationId,
               "system",
               position.id,
@@ -834,11 +835,13 @@ export class PositionsService {
               correlationId,
               { silent: true },
             );
-            brokerStopLoss.set(position.id, recoverySl);
-            await this.prisma.position.update({
-              where: { id: position.id },
-              data: { stopLoss: recoverySl, currentPrice: mark },
-            });
+            const liveSl =
+              after && typeof after === "object" && "stopLoss" in after
+                ? String((after as { stopLoss?: string | null }).stopLoss ?? "")
+                : "";
+            if (liveSl) {
+              brokerStopLoss.set(position.id, liveSl);
+            }
           } catch (attachErr) {
             const msg =
               attachErr instanceof Error ? attachErr.message : String(attachErr);

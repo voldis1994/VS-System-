@@ -3,7 +3,7 @@ import {
   OrderStatus,
   OrderType,
 } from "@nexus/domain";
-import { d, toUtcIso } from "@nexus/shared";
+import { d, toUtcIso, capitalSafeInitialStop } from "@nexus/shared";
 import {
   CAPITAL_SEARCH_SEEDS,
   resolveCapitalEpic,
@@ -794,6 +794,12 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async getOpenPositions(opts?: { force?: boolean }): Promise<BrokerPosition[]> {
+    return this.withLoginLock(async () => this.getOpenPositionsLocked(opts));
+  }
+
+  private async getOpenPositionsLocked(opts?: {
+    force?: boolean;
+  }): Promise<BrokerPosition[]> {
     const cached = this.positionsCache;
     if (
       !opts?.force &&
@@ -841,6 +847,7 @@ export class CapitalComAdapter implements BrokerAdapter {
           p.direction === "BUY"
             ? row.market?.bid ?? p.level
             : row.market?.offer ?? p.level;
+        const hasUpl = p.upl != null && Number.isFinite(Number(p.upl));
         return {
           brokerPositionId: p.dealId,
           symbol,
@@ -851,7 +858,8 @@ export class CapitalComAdapter implements BrokerAdapter {
           currentPrice: String(current),
           stopLoss: p.stopLevel != null ? String(p.stopLevel) : undefined,
           takeProfit: p.profitLevel != null ? String(p.profitLevel) : undefined,
-          unrealizedPnl: String(p.upl ?? 0),
+          // Prefer real upl; empty string means "unknown" (not zero)
+          unrealizedPnl: hasUpl ? String(p.upl) : "",
           realizedPnl: "0",
           commission: "0",
           swap: "0",
@@ -1075,7 +1083,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
-    // Optional post-fill SL/TP (best-effort — never undo an accepted fill)
+    // Optional post-fill SL/TP — Capital-safe only; never fabricate levels
     if (
       accepted &&
       dealId &&
@@ -1083,13 +1091,29 @@ export class CapitalComAdapter implements BrokerAdapter {
       (request.stopLoss || request.takeProfit)
     ) {
       try {
+        const fillPx =
+          fillLevel != null && Number.isFinite(Number(fillLevel))
+            ? Number(fillLevel)
+            : Number(request.price ?? 0);
+        const safeSl = request.stopLoss
+          ? capitalSafeInitialStop({
+              symbol: epic,
+              direction: request.direction,
+              entry: fillPx > 0 ? fillPx : Number(request.stopLoss),
+              distance:
+                fillPx > 0
+                  ? Math.abs(fillPx - Number(request.stopLoss))
+                  : undefined,
+              mark: fillPx > 0 ? fillPx : undefined,
+            })
+          : undefined;
         await this.modifyPosition({
           brokerPositionId: dealId,
-          stopLoss: request.stopLoss,
-          takeProfit: request.takeProfit,
+          ...(safeSl ? { stopLoss: safeSl } : {}),
+          ...(request.takeProfit ? { takeProfit: request.takeProfit } : {}),
         });
       } catch {
-        // Strategy / orders layer may retry attach
+        // Strategy / 1s recovery will retry with verified broker readback
       }
     }
 
@@ -1181,6 +1205,12 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   async modifyPosition(request: BrokerModifyPositionRequest): Promise<BrokerPosition> {
+    return this.withLoginLock(async () => this.modifyPositionLocked(request));
+  }
+
+  private async modifyPositionLocked(
+    request: BrokerModifyPositionRequest,
+  ): Promise<BrokerPosition> {
     await this.ensureSession();
     await this.ensureActiveAccount();
     const body: Record<string, unknown> = {};
@@ -1198,9 +1228,9 @@ export class CapitalComAdapter implements BrokerAdapter {
     if (request.takeProfit !== undefined && request.takeProfit !== null) {
       body.profitLevel = Number(request.takeProfit);
     }
-    // Capital allows clearing via null
-    if (request.stopLoss === null) body.stopLevel = null;
+    // Only clear TP when explicitly null — never send null on every SCALPING attach
     if (request.takeProfit === null) body.profitLevel = null;
+    if (request.stopLoss === null) body.stopLevel = null;
 
     const res = await this.request<{ dealReference?: string }>(
       "PUT",
@@ -1222,25 +1252,24 @@ export class CapitalComAdapter implements BrokerAdapter {
           `Capital modify rejected: ${confirm.reason ?? confirm.dealStatus ?? "unknown"}`,
         );
       }
-      // UNKNOWN after timeout — still re-fetch; may have applied
     }
 
     this.invalidatePositionsCache();
     let found: BrokerPosition | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, 120 * attempt));
+        await new Promise((r) => setTimeout(r, 150 * attempt));
         this.invalidatePositionsCache();
       }
-      const positions = await this.getOpenPositions({ force: true });
-      found = positions.find((p) => p.brokerPositionId === request.brokerPositionId);
+      const positions = await this.getOpenPositionsLocked({ force: true });
+      found = positions.find(
+        (p) => p.brokerPositionId === request.brokerPositionId,
+      );
       if (found) break;
     }
     if (!found) throw new Error("Position not found after modify");
 
-    // Prefer requested levels when broker readback omits them (common race),
-    // BUT never claim a stop that Capital rejected — rejection already threw.
-    // For UNKNOWN confirms: only trust readback when present.
+    // NEVER fabricate SL/TP — Capital chart is source of truth
     const confirmedSl =
       found.stopLoss != null && String(found.stopLoss).length > 0
         ? String(found.stopLoss)
@@ -1249,18 +1278,24 @@ export class CapitalComAdapter implements BrokerAdapter {
       found.takeProfit != null && String(found.takeProfit).length > 0
         ? String(found.takeProfit)
         : undefined;
+
+    if (
+      request.stopLoss !== undefined &&
+      request.stopLoss !== null &&
+      !confirmedSl
+    ) {
+      throw new Error(
+        "Capital modify: stopLevel not visible on broker after PUT (min-stop / reject)",
+      );
+    }
+
     return {
       ...found,
-      stopLoss:
-        confirmedSl ??
-        (request.stopLoss !== undefined && request.stopLoss !== null
-          ? String(request.stopLoss)
-          : found.stopLoss),
+      stopLoss: confirmedSl,
       takeProfit:
-        confirmedTp ??
-        (request.takeProfit !== undefined && request.takeProfit !== null
-          ? String(request.takeProfit)
-          : found.takeProfit),
+        request.takeProfit === null
+          ? undefined
+          : (confirmedTp ?? found.takeProfit),
     };
   }
 
