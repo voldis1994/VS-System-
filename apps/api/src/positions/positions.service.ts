@@ -876,6 +876,8 @@ export class PositionsService {
     moneyPnl: number;
     correlationId: string;
     brokerStopLoss: Map<string, string>;
+    mode?: string | null;
+    timeframe?: string | null;
   }): Promise<void> {
     const {
       position,
@@ -884,6 +886,8 @@ export class PositionsService {
       moneyPnl,
       correlationId,
       brokerStopLoss,
+      mode,
+      timeframe,
     } = input;
     let mark = input.mark;
 
@@ -894,6 +898,15 @@ export class PositionsService {
         ? String(position.stopLoss)
         : null);
     const adapter = this.brokers.get(position.accountId);
+    if (!adapter) {
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=missing_adapter positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} accountId=${position.accountId}`,
+      );
+    } else if (!position.brokerPositionId) {
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=missing_broker_position_id positionId=${position.id} symbol=${position.symbol} (live refresh skipped; modify may still fail)`,
+      );
+    }
     if (adapter && position.brokerPositionId) {
       try {
         const live = await adapter.getOpenPositions({ force: true });
@@ -927,7 +940,17 @@ export class PositionsService {
         moneyPnl >= PositionsService.SCALP_MONEY_ARM
       )
     ) {
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=not_armed positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} pnl=${moneyPnl} moneyArm=${PositionsService.SCALP_MONEY_ARM}`,
+      );
       return;
+    }
+
+    if (!Number.isFinite(mark) || mark <= 0) {
+      // Diagnostic only — do not change control flow vs prior chase behavior
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=missing_price positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} mark=${mark}`,
+      );
     }
 
     const prevPeak = this.peakFavorable.get(position.id);
@@ -936,6 +959,15 @@ export class PositionsService {
     this.peakFavorable.set(position.id, peak);
     const exitLevel = scalpSoftExitLevel(dir, peak, softTrailDistance);
     const brokerSlBefore = liveSl;
+    const trailCandidatePreview = formatScalpBrokerStopLevel(
+      position.symbol,
+      dir === "BUY" ? peak - softTrailDistance : peak + softTrailDistance,
+    );
+
+    // Diagnostic: every chase invocation after £0.05 gate (math unchanged)
+    console.log(
+      `[SCALP MODIFY FLOW] positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} mode=${mode ?? "SCALPING"} timeframe=${timeframe ?? "10s"} pnl=${Number.isFinite(moneyPnl) ? moneyPnl.toFixed(4) : String(moneyPnl)} armed=${!firstArm} currentPrice=${mark} entry=${entry} currentBrokerSL=${liveSl ?? "none"} peak=${peak} candidateSL=${trailCandidatePreview}`,
+    );
 
     if (firstArm) {
       await this.prisma.position.update({
@@ -981,6 +1013,12 @@ export class PositionsService {
           reason: "BE",
         });
         liveSl = brokerStopLoss.get(position.id) ?? liveSl;
+      } else {
+        const equal =
+          Number.isFinite(curBe) && Number.isFinite(beN) && beN === curBe;
+        console.warn(
+          `[SCALP BROKER SL SKIP] reason=${equal ? "no_change" : "candidate_not_better"} phase=BE positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} side=${dir} requestedBESL=${requestedBe} beN=${beN} currentBrokerSL=${liveSl ?? "none"} curBe=${curBe} compare=${dir === "BUY" ? "need_beN>curBe" : "need_beN<curBe"}`,
+        );
       }
     } else if (
       oldPeak != null &&
@@ -997,10 +1035,7 @@ export class PositionsService {
     }
 
     // Chase Capital SL to peak ± 0.3 pip (NOT capitalSafeTrailDistance)
-    const trailCandidate = formatScalpBrokerStopLevel(
-      position.symbol,
-      dir === "BUY" ? peak - softTrailDistance : peak + softTrailDistance,
-    );
+    const trailCandidate = trailCandidatePreview;
     const curN = liveSl != null ? Number(liveSl) : NaN;
     const candN = Number(trailCandidate);
     const improvesBroker =
@@ -1019,6 +1054,17 @@ export class PositionsService {
         brokerStopLoss,
         reason: "TRAIL",
       });
+    } else {
+      const equal =
+        Number.isFinite(curN) && Number.isFinite(candN) && candN === curN;
+      const reason = !Number.isFinite(candN)
+        ? "candidate_invalid"
+        : equal
+          ? "no_change"
+          : "candidate_not_better";
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=${reason} phase=CHASE positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} side=${dir} candidateSL=${trailCandidate} candN=${candN} currentBrokerSL=${liveSl ?? "none"} curN=${curN} compare=${dir === "BUY" ? "need_candN>curN" : "need_candN<curN"}`,
+      );
     }
 
     // Soft exit remains primary (even if broker SL is lagging)
@@ -1078,6 +1124,7 @@ export class PositionsService {
     position: {
       id: string;
       organizationId: string;
+      accountId: string;
       symbol: string;
       brokerPositionId: string | null;
     };
@@ -1101,7 +1148,35 @@ export class PositionsService {
       brokerStopLoss,
       reason,
     } = input;
+    const chaseReason = reason === "BE" ? "BE" : "CHASE";
+    const reqN = Number(requestedSl);
+
+    if (!position.brokerPositionId) {
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=missing_broker_position_id positionId=${position.id} symbol=${position.symbol} side=${dir} requestedSL=${requestedSl} phase=${chaseReason}`,
+      );
+      return;
+    }
+    if (!this.brokers.get(position.accountId)) {
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=missing_adapter positionId=${position.id} brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} accountId=${position.accountId} phase=${chaseReason}`,
+      );
+      return;
+    }
+    if (!Number.isFinite(reqN)) {
+      console.warn(
+        `[SCALP BROKER SL SKIP] reason=candidate_invalid positionId=${position.id} brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} requestedSL=${requestedSl} phase=${chaseReason}`,
+      );
+      return;
+    }
+
+    console.log(
+      `[SCALP BROKER SL REQUEST] brokerPositionId=${position.brokerPositionId} positionId=${position.id} symbol=${position.symbol} side=${dir} currentSL=${previousSl ?? "none"} requestedSL=${requestedSl} currentPrice=${mark} reason=${chaseReason} peak=${peak}`,
+    );
+
     try {
+      // modifySlTp → adapter.modifyPosition({ brokerPositionId, stopLoss })
+      // Capital PUT /api/v1/positions/{brokerPositionId} with stopLevel
       const after = await this.modifySlTp(
         position.organizationId,
         "system",
@@ -1124,10 +1199,26 @@ export class PositionsService {
         },
       });
       console.log(
+        `[SCALP BROKER SL RESPONSE] accepted=true httpStatus=200 errorReason=none brokerReturnedSL=${returned} brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} requestedSL=${requestedSl} reason=${chaseReason}`,
+      );
+      console.log(
         `[SCALP BROKER SL MOVE] symbol=${position.symbol} side=${dir} currentPrice=${mark} peak=${peak} requestedSL=${requestedSl} previousSL=${previousSl ?? "none"} brokerReturnedSL=${returned} accepted=true reason=${reason}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const httpStatus =
+        err instanceof AppError
+          ? err.getStatus()
+          : err &&
+              typeof err === "object" &&
+              "getStatus" in err &&
+              typeof (err as { getStatus: () => number }).getStatus ===
+                "function"
+            ? (err as { getStatus: () => number }).getStatus()
+            : "unknown";
+      console.warn(
+        `[SCALP BROKER SL RESPONSE] accepted=false httpStatus=${httpStatus} errorReason=${msg} brokerReturnedSL=none brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} requestedSL=${requestedSl} reason=${chaseReason}`,
+      );
       console.warn(
         `[SCALP BROKER SL REJECTED] symbol=${position.symbol} side=${dir} requestedSL=${requestedSl} currentPrice=${mark} previousSL=${previousSl ?? "none"} errorReason=${msg}`,
       );
@@ -1723,7 +1814,13 @@ export class PositionsService {
                 moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
                 correlationId,
                 brokerStopLoss,
+                mode,
+                timeframe,
               });
+            } else {
+              console.warn(
+                `[SCALP BROKER SL SKIP] reason=not_armed positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} mode=${mode ?? "null"} timeframe=${timeframe ?? "null"} pnl=${Number.isFinite(moneyPnl) ? moneyPnl : "NaN"} decisionReason=${decision.reason}`,
+              );
             }
             // CRITICAL: never fall into generic broker trail (Capital 0.50 floor)
             continue;
