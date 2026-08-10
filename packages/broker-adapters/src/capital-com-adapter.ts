@@ -687,7 +687,7 @@ export class CapitalComAdapter implements BrokerAdapter {
   private async resolveDealRules(epic: string): Promise<CapitalDealRules> {
     const key = epic.toUpperCase();
     const hit = this.dealRulesCache.get(key);
-    if (hit && Date.now() - hit.at < 5 * 60_000) return hit.rules;
+    if (hit && Date.now() - hit.at < 30_000) return hit.rules;
     let rules = capitalDealRulesFallback(epic);
     try {
       const res = await this.request<{
