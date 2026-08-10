@@ -366,6 +366,22 @@ export function scalpSoftTrailDistancePrice(
   return pip * count;
 }
 
+/**
+ * Format a 10s SCALPING broker stopLevel string.
+ * Must NOT use formatInstrumentPrice (GOLD 2dp would wipe 0.3-pip = 0.003).
+ */
+export function formatScalpBrokerStopLevel(
+  symbol: string,
+  level: number,
+): string {
+  const pip = instrumentPipSize(symbol);
+  let decimals = 2;
+  if (pip <= 0.0001) decimals = 5;
+  else if (pip <= 0.01) decimals = 3; // GOLD: keep 0.003 trail precision
+  else if (pip <= 0.1) decimals = 2;
+  return Number(level).toFixed(decimals);
+}
+
 /** Absolute peak price for soft trail (BUY=high watermark, SELL=low). */
 export function updateScalpSoftPeakPrice(
   direction: "BUY" | "SELL",

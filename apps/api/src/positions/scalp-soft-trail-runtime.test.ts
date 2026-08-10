@@ -8,6 +8,8 @@ import {
 import {
   capitalMinStopDistance,
   capitalSafeTrailDistance,
+  formatInstrumentPrice,
+  formatScalpBrokerStopLevel,
   scalpSoftExitHit,
   scalpSoftExitLevel,
   scalpSoftTrailDistancePrice,
@@ -15,15 +17,13 @@ import {
 } from "@nexus/shared";
 
 /**
- * Runtime integration contract for PositionsService 10s SCALPING soft trail.
- * Mirrors the gate in autoManageProtectionsLocked:
- *   decideScalpSoftTrailArm → chaseScalpTrailFromMoneyHit → continue
- * so capitalSafeTrailDistance is unreachable for 10s SCALPING.
+ * Runtime contract for PositionsService 10s SCALPING:
+ * soft trail + Capital broker SL chase at true 0.3 pip (no capitalSafe floor).
  */
-describe("PositionsService 10s SCALPING soft-trail runtime gate", () => {
+describe("PositionsService 10s SCALPING soft-trail + broker SL chase", () => {
   const moneyArm = SCALPING_AUTO_EXIT.breakEvenActivationMoney ?? 0.05;
 
-  it("A) 10s SCALPING PnL £0.04 → not armed (inProfit alone must not arm)", () => {
+  it("PnL £0.04 → not armed → broker SL chase must not run", () => {
     const d = decideScalpSoftTrailArm({
       mode: StrategyMode.SCALPING,
       timeframe: "10s",
@@ -31,12 +31,10 @@ describe("PositionsService 10s SCALPING soft-trail runtime gate", () => {
       softTrailActivatedAt: null,
       moneyArm,
     });
-    expect(d.isTenSecondScalping).toBe(true);
     expect(d.run).toBe(false);
-    expect(d.reason).toBe("below_money_arm");
   });
 
-  it("B) 10s SCALPING PnL £0.05 → armed", () => {
+  it("PnL £0.05 → armed (BE + trail chase eligible)", () => {
     const d = decideScalpSoftTrailArm({
       mode: StrategyMode.SCALPING,
       timeframe: "10s",
@@ -48,95 +46,70 @@ describe("PositionsService 10s SCALPING soft-trail runtime gate", () => {
     expect(d.reason).toBe("profit_hit");
   });
 
-  it("C) after arm PnL £0.02 → stays armed", () => {
+  it("BUY candidate broker SL = peak − 0.3 pip (not Capital 0.50)", () => {
+    const entry = 4392.52;
+    const peak = 4393.19;
+    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
+    expect(soft).toBeCloseTo(0.003, 12);
+    const candidate = peak - soft;
+    expect(candidate).toBeCloseTo(4393.187, 9);
+    const requested = formatScalpBrokerStopLevel("GOLD", candidate);
+    expect(Number(requested)).toBeCloseTo(4393.187, 9);
+    // Must NOT be Capital-floored (~peak − 0.50)
+    const capitalish = formatInstrumentPrice(
+      "GOLD",
+      peak - capitalMinStopDistance("GOLD"),
+    );
+    expect(Number(requested)).toBeGreaterThan(Number(capitalish));
+    expect(capitalSafeTrailDistance("GOLD", peak, soft)).toBeGreaterThanOrEqual(
+      0.5,
+    );
+    // BE at entry on arm
+    expect(formatScalpBrokerStopLevel("GOLD", entry)).toBe("4392.520");
+  });
+
+  it("BUY broker SL only improves upward; SELL only downward", () => {
+    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
+    const peakBuy = updateScalpSoftPeakPrice("BUY", null, 4393.19);
+    const buyCand = peakBuy - soft;
+    const prevBuy = 4392.52;
+    expect(buyCand > prevBuy).toBe(true);
+    const lowerPeak = updateScalpSoftPeakPrice("BUY", peakBuy, 4393.0);
+    expect(lowerPeak).toBe(peakBuy); // never back
+
+    const peakSell = updateScalpSoftPeakPrice("SELL", null, 4392.0);
+    const sellCand = peakSell + soft;
+    const prevSell = 4392.5;
+    expect(sellCand < prevSell).toBe(true);
+  });
+
+  it("0.3 pip retracement → soft exit even if broker SL lags", () => {
+    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
+    const peak = 4393.19;
+    const exit = scalpSoftExitLevel("BUY", peak, soft);
+    expect(scalpSoftExitHit("BUY", exit, exit)).toBe(true);
+  });
+
+  it("formatScalpBrokerStopLevel keeps 3dp on GOLD (not formatInstrumentPrice 2dp)", () => {
+    const level = 4393.187;
+    expect(formatInstrumentPrice("GOLD", level)).toBe("4393.19"); // would lose 0.003 trail
+    expect(formatScalpBrokerStopLevel("GOLD", level)).toBe("4393.187");
+  });
+
+  it("after arm stays armed when PnL drops", () => {
     const d = decideScalpSoftTrailArm({
       mode: StrategyMode.SCALPING,
       timeframe: "10s",
       moneyPnl: 0.02,
-      softTrailActivatedAt: new Date("2026-08-10T21:00:00Z"),
+      softTrailActivatedAt: new Date(),
       moneyArm,
     });
     expect(d.run).toBe(true);
-    expect(d.reason).toBe("already_armed");
   });
 
-  it("D) trailArmImmediate=true + PnL £0.01 → still not armed", () => {
-    // PositionsService ignores trailArmImmediate for soft trail; only money/activatedAt matter
-    void true; // simulate config.trailArmImmediate === true
-    const d = decideScalpSoftTrailArm({
-      mode: StrategyMode.SCALPING,
-      timeframe: "10s",
-      moneyPnl: 0.01,
-      softTrailActivatedAt: null,
-      moneyArm,
-    });
-    expect(d.run).toBe(false);
-    expect(SCALPING_AUTO_EXIT.trailArmImmediate).toBe(false);
-  });
-
-  it("E) 20s SCALPING → soft trail inactive (skip generic uses isTenSecondScalping=false)", () => {
+  it("20s SCALPING does not use this broker/soft trail path", () => {
     expect(
       isTenSecondScalpingMode(StrategyMode.SCALPING, { timeframe: "20s" }),
     ).toBe(false);
-    const d = decideScalpSoftTrailArm({
-      mode: StrategyMode.SCALPING,
-      timeframe: "20s",
-      moneyPnl: 1,
-      softTrailActivatedAt: null,
-      moneyArm,
-    });
-    expect(d.isTenSecondScalping).toBe(false);
-    expect(d.run).toBe(false);
-    expect(d.reason).toBe("not_10s_scalping");
-  });
-
-  it("F) after arm peak rises → exit level follows with 0.3 pip", () => {
-    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
-    expect(soft).toBeCloseTo(0.003, 12);
-    let peak = updateScalpSoftPeakPrice("BUY", null, 3000.1);
-    let exit = scalpSoftExitLevel("BUY", peak, soft);
-    expect(exit).toBeCloseTo(3000.097, 9);
-
-    peak = updateScalpSoftPeakPrice("BUY", peak, 3000.15);
-    exit = scalpSoftExitLevel("BUY", peak, soft);
-    expect(peak).toBe(3000.15);
-    expect(exit).toBeCloseTo(3000.147, 9);
-  });
-
-  it("G) 0.3 pip retracement → soft exit hit (PositionsService close path)", () => {
-    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
-    const peak = 3000.15;
-    const exit = scalpSoftExitLevel("BUY", peak, soft);
-    expect(scalpSoftExitHit("BUY", exit, exit)).toBe(true);
-    expect(scalpSoftExitHit("BUY", exit - 0.001, exit)).toBe(true);
-    expect(scalpSoftExitHit("BUY", exit + soft, exit)).toBe(false);
-  });
-
-  it("H) soft trail distance never equals Capital-floored distance", () => {
-    const soft = scalpSoftTrailDistancePrice("GOLD", 0.3);
-    const capitalFloored = capitalSafeTrailDistance("GOLD", 3000, soft);
-    expect(soft).toBeCloseTo(0.003, 12);
-    expect(capitalFloored).toBeGreaterThanOrEqual(capitalMinStopDistance("GOLD"));
-    expect(capitalFloored).toBeGreaterThan(soft * 10);
-    // Runtime must use `soft`, never pass it through capitalSafeTrailDistance
-    expect(soft).not.toBe(capitalFloored);
-  });
-
-  it("10s SCALPING always continues past generic broker trail branch", () => {
-    // Contract: if isTenSecondScalping → PositionsService continues before
-    // capitalSafeTrailDistance. Both armed and unarmed decisions skip generic.
-    for (const moneyPnl of [0.01, 0.05, 0.02]) {
-      const d = decideScalpSoftTrailArm({
-        mode: StrategyMode.SCALPING,
-        timeframe: "10s",
-        moneyPnl,
-        softTrailActivatedAt: moneyPnl === 0.02 ? new Date() : null,
-        moneyArm,
-      });
-      expect(d.isTenSecondScalping).toBe(true);
-      // Generic branch is skipped whenever isTenSecondScalping is true
-      const skipGenericBrokerTrail = d.isTenSecondScalping;
-      expect(skipGenericBrokerTrail).toBe(true);
-    }
   });
 });

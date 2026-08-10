@@ -31,6 +31,7 @@ import {
   closeAllowedByStopLoss,
   instrumentPipSize,
   scalpSoftTrailDistancePrice,
+  formatScalpBrokerStopLevel,
   updateScalpSoftPeakPrice,
   scalpSoftExitLevel,
   scalpSoftExitHit,
@@ -843,18 +844,16 @@ export class PositionsService {
   }
 
   /**
-   * 10s SCALPING only — software soft trail after floating PnL ≥ £0.05.
+   * 10s SCALPING — soft trail (0.3 pip) + live Capital broker SL chase.
    *
-   * Conflict (old): resolveScalpTrailDistance → capitalSafeTrailDistance
-   * turned 0.3/3 pip into Capital ~0.50 GOLD, so "trail" chased broker SL
-   * instead of a tight app exit.
+   * After floating PnL ≥ £0.05:
+   *   1) arm soft trail / peakFavorable
+   *   2) move Capital SL to BE (entry) once
+   *   3) each tick chase Capital SL to peak ± softTrailDistance (improve only)
+   *   4) soft exit via close() on 0.3 pip retrace (primary exit)
    *
-   * New:
-   *   softTrailDistance = instrumentPipSize(symbol) * 0.3
-   *   peak = absolute highest (BUY) / lowest (SELL) after arm
-   *   exit when mark hits peak ± softTrailDistance
-   * Broker Capital SL is left alone as emergency failsafe
-   * (brokerStopDistance ≠ softTrailDistance).
+   * NEVER run candidate through capitalSafeTrailDistance / capitalMinStopDistance
+   * for this path — send the true 0.3-pip level; on Capital reject keep soft trail.
    */
   private async chaseScalpTrailFromMoneyHit(input: {
     position: {
@@ -884,12 +883,16 @@ export class PositionsService {
       dir,
       moneyPnl,
       correlationId,
+      brokerStopLoss,
     } = input;
-    void entry;
-    void input.brokerStopLoss;
     let mark = input.mark;
 
-    // Prefer live broker mark for soft exit (bid/offer)
+    // Prefer live broker mark + SL
+    let liveSl =
+      brokerStopLoss.get(position.id) ??
+      (position.stopLoss != null && String(position.stopLoss).length > 0
+        ? String(position.stopLoss)
+        : null);
     const adapter = this.brokers.get(position.accountId);
     if (adapter && position.brokerPositionId) {
       try {
@@ -899,8 +902,12 @@ export class PositionsService {
         );
         const liveMark = Number(match?.currentPrice);
         if (Number.isFinite(liveMark) && liveMark > 0) mark = liveMark;
+        if (match?.stopLoss != null && String(match.stopLoss).length > 0) {
+          liveSl = String(match.stopLoss);
+          brokerStopLoss.set(position.id, liveSl);
+        }
       } catch {
-        // caller mark
+        // caller mark / cached SL
       }
     }
 
@@ -910,12 +917,9 @@ export class PositionsService {
       position.symbol,
       softPips,
     );
-    // Broker failsafe distance stays Capital-safe — never mixed into soft trail
-    const brokerStopDistance = capitalMinStopDistance(position.symbol);
-    void brokerStopDistance;
 
     const firstArm = !position.trailingActivatedAt;
-    // Hard gate: never stamp soft-trail armed without £0.05 (trailArmImmediate cannot bypass)
+    // Hard gate: never arm without £0.05
     if (
       firstArm &&
       !(
@@ -931,6 +935,7 @@ export class PositionsService {
     const oldPeak = prevPeak;
     this.peakFavorable.set(position.id, peak);
     const exitLevel = scalpSoftExitLevel(dir, peak, softTrailDistance);
+    const brokerSlBefore = liveSl;
 
     if (firstArm) {
       await this.prisma.position.update({
@@ -944,16 +949,39 @@ export class PositionsService {
           currentPrice: mark,
         },
       });
+      const requestedBe = formatScalpBrokerStopLevel(position.symbol, entry);
       console.log(
-        `[SCALP TRAIL ARMED] symbol=${position.symbol} side=${dir} pnl=${moneyPnl.toFixed(4)} price=${mark} softTrailDistance=${softTrailDistance} peak=${peak}`,
+        `[SCALP TRAIL ARMED] symbol=${position.symbol} side=${dir} pnl=${moneyPnl.toFixed(4)} entry=${entry} currentPrice=${mark} peak=${peak} softTrailDistance=${softTrailDistance} brokerSLBefore=${brokerSlBefore ?? "none"} requestedBESL=${requestedBe}`,
       );
       await this.notifications.create({
         organizationId: position.organizationId,
         userId: null,
         title: "SCALP TRAIL ARMED",
-        body: `${position.symbol} ${dir} softTrail=${softTrailDistance} peak=${peak} (broker SL failsafe untouched)`,
+        body: `${position.symbol} ${dir} soft=${softTrailDistance} peak=${peak} → Capital BE ${requestedBe}`,
         severity: "SUCCESS",
       });
+
+      // First Capital move: Break Even at entry (improve-only)
+      const beN = Number(requestedBe);
+      const curBe = liveSl != null ? Number(liveSl) : NaN;
+      const beImproves =
+        !Number.isFinite(curBe) ||
+        curBe === 0 ||
+        (dir === "BUY" ? beN > curBe : beN < curBe);
+      if (beImproves) {
+        await this.pushScalpBrokerStop({
+          position,
+          dir,
+          mark,
+          peak,
+          requestedSl: requestedBe,
+          previousSl: liveSl,
+          correlationId,
+          brokerStopLoss,
+          reason: "BE",
+        });
+        liveSl = brokerStopLoss.get(position.id) ?? liveSl;
+      }
     } else if (
       oldPeak != null &&
       Number.isFinite(oldPeak) &&
@@ -968,6 +996,32 @@ export class PositionsService {
       });
     }
 
+    // Chase Capital SL to peak ± 0.3 pip (NOT capitalSafeTrailDistance)
+    const trailCandidate = formatScalpBrokerStopLevel(
+      position.symbol,
+      dir === "BUY" ? peak - softTrailDistance : peak + softTrailDistance,
+    );
+    const curN = liveSl != null ? Number(liveSl) : NaN;
+    const candN = Number(trailCandidate);
+    const improvesBroker =
+      !Number.isFinite(curN) ||
+      curN === 0 ||
+      (dir === "BUY" ? candN > curN : candN < curN);
+    if (improvesBroker && Number.isFinite(candN)) {
+      await this.pushScalpBrokerStop({
+        position,
+        dir,
+        mark,
+        peak,
+        requestedSl: trailCandidate,
+        previousSl: liveSl,
+        correlationId,
+        brokerStopLoss,
+        reason: "TRAIL",
+      });
+    }
+
+    // Soft exit remains primary (even if broker SL is lagging)
     if (
       !scalpSoftExitHit(dir, mark, exitLevel) ||
       this.softExitBusy.has(position.id)
@@ -977,14 +1031,15 @@ export class PositionsService {
 
     this.softExitBusy.add(position.id);
     try {
+      const retrace = Math.abs(peak - mark);
       console.log(
-        `[SCALP TRAIL EXIT] symbol=${position.symbol} side=${dir} peak=${peak} currentPrice=${mark} exitLevel=${exitLevel} reason=soft_trail_retrace`,
+        `[SCALP TRAIL EXIT] symbol=${position.symbol} side=${dir} peak=${peak} currentPrice=${mark} softExitLevel=${exitLevel} retracement=${retrace} reason=SCALP_10S_SOFT_TRAIL`,
       );
       await this.notifications.create({
         organizationId: position.organizationId,
         userId: null,
         title: "SCALP TRAIL EXIT",
-        body: `${position.symbol} ${dir}: mark ${mark} hit exit ${exitLevel} (peak ${peak}, soft ${softTrailDistance})`,
+        body: `${position.symbol} ${dir}: mark ${mark} hit softExit ${exitLevel} (peak ${peak})`,
         severity: "WARNING",
       });
       await this.close(
@@ -1012,6 +1067,71 @@ export class PositionsService {
       });
     } finally {
       this.softExitBusy.delete(position.id);
+    }
+  }
+
+  /**
+   * Push Capital stopLevel for 10s SCALPING — raw soft level, no Capital floor.
+   * On reject: log and keep previous SL; soft trail continues.
+   */
+  private async pushScalpBrokerStop(input: {
+    position: {
+      id: string;
+      organizationId: string;
+      symbol: string;
+      brokerPositionId: string | null;
+    };
+    dir: "BUY" | "SELL";
+    mark: number;
+    peak: number;
+    requestedSl: string;
+    previousSl: string | null;
+    correlationId: string;
+    brokerStopLoss: Map<string, string>;
+    reason: "BE" | "TRAIL";
+  }): Promise<void> {
+    const {
+      position,
+      dir,
+      mark,
+      peak,
+      requestedSl,
+      previousSl,
+      correlationId,
+      brokerStopLoss,
+      reason,
+    } = input;
+    try {
+      const after = await this.modifySlTp(
+        position.organizationId,
+        "system",
+        position.id,
+        { stopLoss: requestedSl },
+        correlationId,
+        { silent: true },
+      );
+      const returned =
+        after?.stopLoss != null && String(after.stopLoss).length > 0
+          ? String(after.stopLoss)
+          : requestedSl;
+      brokerStopLoss.set(position.id, returned);
+      await this.prisma.position.update({
+        where: { id: position.id },
+        data: {
+          stopLoss: returned,
+          currentPrice: mark,
+          ...(reason === "BE" ? { breakEvenActivatedAt: new Date() } : {}),
+        },
+      });
+      console.log(
+        `[SCALP BROKER SL MOVE] symbol=${position.symbol} side=${dir} currentPrice=${mark} peak=${peak} requestedSL=${requestedSl} previousSL=${previousSl ?? "none"} brokerReturnedSL=${returned} accepted=true reason=${reason}`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[SCALP BROKER SL REJECTED] symbol=${position.symbol} side=${dir} requestedSL=${requestedSl} currentPrice=${mark} previousSL=${previousSl ?? "none"} errorReason=${msg}`,
+      );
+      // Soft trail keeps running; do not widen soft distance to Capital min
     }
   }
 
@@ -1422,6 +1542,7 @@ export class PositionsService {
         // even before true BE SL is legal (GOLD needs ~0.50 price move).
         let moneyMode = false;
         let moneyTrigger = Number(position.breakEvenActivation ?? 0.05);
+        let skipGenericBe = false;
         if (position.strategyId) {
           const st = await this.prisma.strategy.findFirst({
             where: { id: position.strategyId },
@@ -1431,6 +1552,7 @@ export class PositionsService {
             breakEvenMoneyMode?: boolean;
             breakEvenActivationMoney?: number;
             exitVersion?: string;
+            timeframe?: string;
           };
           const auto = st?.mode
             ? modeAutoExit(st.mode as StrategyMode)
@@ -1452,6 +1574,8 @@ export class PositionsService {
           ) {
             moneyTrigger = cfg.breakEvenActivationMoney;
           }
+          // 10s SCALPING BE is inside chaseScalpTrailFromMoneyHit (no Capital floor)
+          skipGenericBe = isTenSecondScalpingMode(st?.mode, cfg);
         }
         const moneyHit =
           moneyMode &&
@@ -1460,6 +1584,7 @@ export class PositionsService {
           moneyPnl >= moneyTrigger;
 
         if (
+          !skipGenericBe &&
           position.breakEvenEnabled &&
           !position.breakEvenActivatedAt &&
           (position.breakEvenActivation != null || moneyMode)
