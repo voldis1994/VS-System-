@@ -17,8 +17,8 @@ export default function AccountsPage() {
   const token = useAuthStore((s) => s.accessToken);
   const { data: accounts, isLoading } = useAccounts();
   const qc = useQueryClient();
-  const [provider, setProvider] = useState<"PAPER" | "CAPITAL">("PAPER");
-  const [name, setName] = useState("Paper Account");
+  const [provider, setProvider] = useState<"PAPER" | "CAPITAL">("CAPITAL");
+  const [name, setName] = useState("Capital.com LIVE");
   const [startingBalance, setStartingBalance] = useState("100000");
   const [leverage, setLeverage] = useState("100");
   const [apiKey, setApiKey] = useState("");
@@ -371,6 +371,16 @@ export default function AccountsPage() {
             value={String((accounts ?? []).filter((a) => a.status === "LOCKED").length)}
           />
         </div>
+        {!isLoading && (accounts?.length ?? 0) === 0 ? (
+          <div className="mt-4 rounded-md border border-accent/30 bg-accent/10 px-3 py-3 text-[12px] leading-relaxed text-white/80">
+            <p className="font-medium text-accent">0 konti lokālajā DB</p>
+            <p className="mt-1 text-white/55">
+              Capital.com konti netika dzēsti brokerī. VS System glabā API keys tikai Docker
+              Postgres. Ja <span className="font-mono text-white/70">RECOVER-ACCOUNTS.bat</span>{" "}
+              arī rāda 0 — pievieno Capital no jauna labajā formā (API key + email + API password).
+            </p>
+          </div>
+        ) : null}
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -510,6 +520,11 @@ export default function AccountsPage() {
           ) : null}
           {isLoading ? (
             <div className="py-8 text-center text-sm text-white/35">Loading…</div>
+          ) : (accounts ?? []).length === 0 ? (
+            <div className="py-8 text-center text-sm text-white/45">
+              Nav kontu. Izmanto <span className="text-white/70">Add Account</span> → Capital.com
+              (API key no Capital Settings → API).
+            </div>
           ) : (
             <div className="space-y-3">
               {(accounts ?? []).map((a) => (

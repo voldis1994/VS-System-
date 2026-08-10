@@ -1,3 +1,3 @@
 main tip: accounts live in Docker volume vs-system_nexus_pg — UPDATE never deletes them
 repo: https://github.com/voldis1994/VS-System-
-fix: if accounts missing run RECOVER-ACCOUNTS.bat (or BACKUP/RESTORE/FIND-OLD-DB); auto-backup on START
+fix: 0 accounts → RECOVER-ACCOUNTS.bat (probes ALL volumes+SQL). If still 0 → re-add Capital in Accounts. DIAGNOSE-DB.bat

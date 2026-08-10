@@ -127,14 +127,18 @@ if errorlevel 1 (
 echo Waiting for Postgres...
 timeout /t 8 /nobreak >nul
 
-REM Auto-backup before migrate (keeps last accounts safe)
+REM Auto-backup before migrate — TIKAI ja DB jau satur kontus (tukši dumpi bojā RECOVER)
 if not exist "backups" mkdir backups
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss" 2^>nul') do set "VS_BTS=%%i"
-if defined VS_BTS (
+set "VS_ACC_N="
+for /f %%c in ('docker exec nexus-postgres psql -U nexus -d nexus_pro -tAc "SELECT count(*) FROM \"TradingAccount\";" 2^>nul') do set "VS_ACC_N=%%c"
+if defined VS_BTS if defined VS_ACC_N if not "%VS_ACC_N%"=="0" (
   docker exec nexus-postgres pg_dump -U nexus -d nexus_pro --clean --if-exists > "backups\auto-%VS_BTS%.sql" 2>nul
   if exist "backups\auto-%VS_BTS%.sql" (
-    for %%A in ("backups\auto-%VS_BTS%.sql") do if %%~zA GTR 100 echo   Auto-backup: backups\auto-%VS_BTS%.sql
+    for %%A in ("backups\auto-%VS_BTS%.sql") do if %%~zA GTR 1000 echo   Auto-backup: backups\auto-%VS_BTS%.sql  ^(konti=%VS_ACC_N%^)
   )
+) else (
+  echo   Auto-backup skip — TradingAccount=0 ^(nesaglabaju tuksu dump^)
 )
 
 echo.
@@ -222,9 +226,9 @@ echo   Login: owner@nexus.pro / NexusOwner123!
 echo   PIN:   123456
 echo.
 echo   Konti pazuda?:  RECOVER-ACCOUNTS.bat
+echo   DB diagnostika: DIAGNOSE-DB.bat
 echo   Kontu backup:   BACKUP-DB.bat
 echo   Kontu restore:  RESTORE-DB.bat
-echo   Veca DB:        FIND-OLD-DB.bat
 echo.
 echo   Apturet:  STOP-VS-SYSTEM.bat
 echo   Update:   UPDATE-VS-SYSTEM.bat
