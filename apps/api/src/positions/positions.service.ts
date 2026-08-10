@@ -826,16 +826,14 @@ export class PositionsService {
             }
             armThreshold = trailingArmThreshold(position.symbol, {
               trailingDistance: distance,
-              trailingActivationPips: cfg.trailingActivationPips,
+              trailingActivationPips: cfg.trailingActivationPips ?? auto?.trailingActivationPips,
               trailingDistancePips: cfg.trailingDistancePips ?? auto?.trailingDistancePips,
               priceOffsetMode: priceOffset,
             });
-            // Immediate-arm modes (SCALPING): treat as already past threshold
+            // Only force arm-at-entry when operator explicitly set trailArmImmediate
             if (
               cfg.trailArmImmediate === true ||
-              auto?.trailArmImmediate === true ||
-              cfg.exitVersion === "SCALP" ||
-              strategy?.mode === StrategyMode.SCALPING
+              (auto?.trailArmImmediate === true && cfg.trailArmImmediate !== false)
             ) {
               armThreshold = 0;
             }

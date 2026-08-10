@@ -14,7 +14,7 @@ export type ModeAutoExitConfig = {
   trailingEnabled: boolean;
   trailingDistancePips: number;
   trailingActivationPips: number;
-  /** When true, trail arms immediately on fill (SCALPING). */
+  /** When true, trail arms immediately on fill. Prefer false — arm from profit (+). */
   trailArmImmediate: boolean;
   atrStopMult: number;
   atrTpMult: number;
@@ -28,7 +28,7 @@ export type ModeAutoExitConfig = {
   priceOffsetMode: boolean;
 };
 
-/** SCALP RAZOR — immediate tight trail for 10s style (GOLD/US100). */
+/** SCALP RAZOR — tight trail that arms only after price is in profit (not at entry). */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
@@ -38,11 +38,12 @@ export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   trailingEnabled: true,
   /** Tight chase — 6 pips (GOLD ~0.12–0.15 soft floor; US100 ~0.6) */
   trailingDistancePips: 6,
+  /** Arm trail only once favorable ≥ 1 pip (no trailing from entry / at a loss) */
   trailingActivationPips: 1,
-  trailArmImmediate: true,
+  trailArmImmediate: false,
   atrStopMult: 0.45,
   atrTpMult: 1.0,
-  /** Wider initial SL — trail is the real exit */
+  /** Wider initial SL — trail is the real exit after +move */
   stopDistancePips: 18,
   cooldownSeconds: 0,
   exitVersion: "SCALP",

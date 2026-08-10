@@ -903,7 +903,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             ? true
             : trailingEnabled;
         const trailArmImmediate =
-          isClassicScalping && (scalpAuto?.trailArmImmediate ?? true);
+          isClassicScalping && (scalpAuto?.trailArmImmediate ?? false);
         if (isEmaTickScalp) {
           beActDist = Math.max(stopDist, pip * 0.1);
           beOffDist = pip;
@@ -1081,13 +1081,15 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 breakEvenOffset: useBe ? beOffDist.toFixed(8) : null,
                 trailingEnabled: useDistTrail,
                 trailingDistance: useDistTrail ? trailDist.toFixed(8) : null,
-                // SCALPING: arm trail immediately on fill ("sāk iet + sākas trailing")
+                // Trail arms after +move (trailingActivationPips) — not at entry
                 ...(useDistTrail && trailArmImmediate
                   ? { trailingActivatedAt: new Date() }
-                  : {}),
+                  : useDistTrail
+                    ? { trailingActivatedAt: null }
+                    : {}),
               },
             });
-            // Static SL/TP on fill — trail arms after activation (or immediately if SCALPING)
+            // Static SL/TP on fill — trail arms after activation in profit
             try {
               await this.positions.modifySlTp(
                 strategy.organizationId,
@@ -1100,7 +1102,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 correlationId,
                 { silent: true },
               );
-              // Immediate tight trail for classic SCALPING
+              // Optional: only if explicitly immediate-arm (legacy)
               if (useDistTrail && trailArmImmediate) {
                 const dir = signal;
                 const trailSl =

@@ -1040,8 +1040,8 @@ export class StrategiesService {
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
     // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
     const priceOffset = config.priceOffsetMode === true;
-    const trailImmediate =
-      config.trailArmImmediate === true || config.exitVersion === "SCALP";
+    // Arm at entry only when explicitly requested — SCALP default is from profit (+)
+    const trailImmediate = config.trailArmImmediate === true;
 
     for (const pos of open) {
       // Never overwrite manual trades that belong to another strategy
@@ -1070,11 +1070,9 @@ export class StrategiesService {
           breakEvenOffset: beEnabled ? beOff.toFixed(8) : null,
           trailingEnabled: trailEnabled,
           trailingDistance: trailEnabled ? trail.toFixed(8) : null,
-          ...(trailEnabled && trailImmediate
-            ? { trailingActivatedAt: new Date() }
-            : trailEnabled
-              ? {}
-              : { trailingActivatedAt: null }),
+          // Clear stale "armed at entry" so trail waits for +move
+          trailingActivatedAt:
+            trailEnabled && trailImmediate ? new Date() : null,
         },
       });
 
