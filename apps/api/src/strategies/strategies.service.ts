@@ -801,6 +801,13 @@ export class StrategiesService {
     const configuration = {
       ...cfgIn,
       useRiskPercent: false,
+      volume: String(cfgIn.volume ?? "0.01"),
+      oneTradeOnly: false,
+      closeOnlyNoFlip: false,
+      newsFilterEnabled: false,
+      sessionFilter: false,
+      cooldownSeconds: 0,
+      minScore: 0,
       ...(auto
         ? {
             takeProfitEnabled: auto.takeProfitEnabled,
@@ -815,16 +822,15 @@ export class StrategiesService {
             atrStopMult: auto.atrStopMult,
             atrTpMult: auto.atrTpMult,
             stopDistancePips: auto.stopDistancePips,
-            cooldownSeconds: auto.cooldownSeconds,
+            // Never re-apply auto cooldown — protective gates stay OFF
+            cooldownSeconds: 0,
             exitVersion: auto.exitVersion,
             timeframe: modePreferredTimeframe(input.mode),
           }
         : {}),
-      oneTradeOnly: cfgIn.oneTradeOnly === true,
-      // Flip BUY↔SELL allowed unless explicitly disabled
-      closeOnlyNoFlip: cfgIn.closeOnlyNoFlip === true,
-      autoAggressive: cfgIn.autoAggressive === true,
+      autoAggressive: false,
     };
+    delete (configuration as Record<string, unknown>).riskPercent;
 
     if (!strategy) {
       try {

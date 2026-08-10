@@ -1,3 +1,3 @@
-main tip: GOLD 0.13 was bumped to 1.00 via poisoned DB minVolume — heal + never bump
+main tip: client portal — FIXED lot exact; no risk mgmt / cooldown / minScore
 repo: https://github.com/voldis1994/VS-System-
-fix: orders use Capital retail fallback mins; Sync heals symbol volume rules
+fix: normalizeFixedLot strips all protective gates; 0.12/0.13 kept as-is

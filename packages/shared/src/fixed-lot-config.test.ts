@@ -22,4 +22,23 @@ describe("normalizeFixedLotStrategyConfig", () => {
     expect(normalizeFixedLotStrategyConfig({ volume: "abc" }).volume).toBe("0.01");
     expect(normalizeFixedLotStrategyConfig({ volume: 0 }).volume).toBe("0.01");
   });
+
+  it("keeps operator lots 0.12 / 0.13 exactly and kills protective gates", () => {
+    const out = normalizeFixedLotStrategyConfig({
+      volume: "0.13",
+      oneTradeOnly: true,
+      newsFilterEnabled: true,
+      cooldownSeconds: 30,
+      minScore: 55,
+      riskPercent: 5,
+    });
+    expect(out.volume).toBe("0.13");
+    expect(out.oneTradeOnly).toBe(false);
+    expect(out.newsFilterEnabled).toBe(false);
+    expect(out.cooldownSeconds).toBe(0);
+    expect(out.minScore).toBe(0);
+    expect(out.useRiskPercent).toBe(false);
+    expect(out.riskPercent).toBeUndefined();
+    expect(normalizeFixedLotStrategyConfig({ volume: "0.12" }).volume).toBe("0.12");
+  });
 });

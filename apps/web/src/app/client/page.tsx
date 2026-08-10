@@ -171,15 +171,22 @@ async function portalApi<T>(
 function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }) {
   const e = EXITS[input.exit];
   const auto = modeAutoExit(input.mode);
+  const lot = String(input.lotSize || "0.01").trim();
+  const base = {
+    useRiskPercent: false as const,
+    volume: lot,
+    oneTradeOnly: false as const,
+    closeOnlyNoFlip: false as const,
+    autoAggressive: false as const,
+    minScore: 0,
+    newsFilterEnabled: false as const,
+    sessionFilter: false as const,
+    cooldownSeconds: 0,
+  };
   if (auto) {
     return {
+      ...base,
       timeframe: modePreferredTimeframe(input.mode),
-      useRiskPercent: false,
-      volume: input.lotSize,
-      oneTradeOnly: false,
-      closeOnlyNoFlip: false,
-      autoAggressive: false,
-      minScore: modeMinScore(input.mode),
       atrStopMult: auto.atrStopMult,
       atrTpMult: auto.atrTpMult,
       takeProfitEnabled: auto.takeProfitEnabled,
@@ -195,18 +202,11 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
       priceOffsetMode: auto.priceOffsetMode,
       stopDistancePips: auto.stopDistancePips,
       exitVersion: auto.exitVersion,
-      newsFilterEnabled: false,
-      cooldownSeconds: 0,
     };
   }
   return {
+    ...base,
     timeframe: modePreferredTimeframe(input.mode),
-    useRiskPercent: false,
-    volume: input.lotSize,
-    oneTradeOnly: false,
-    closeOnlyNoFlip: false,
-    autoAggressive: false,
-    minScore: modeMinScore(input.mode),
     atrStopMult: Number(e.atrStopMult),
     atrTpMult: Number(e.atrTpMult),
     takeProfitEnabled: e.tpEnabled,
@@ -219,8 +219,6 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
     trailingDistancePips: Number(e.trailPips),
     trailingActivationPips: Number(e.trailActPips),
     exitVersion: input.exit,
-    newsFilterEnabled: false,
-    cooldownSeconds: 0,
   };
 }
 
@@ -230,11 +228,11 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "FIXED lot · bots sūta Capital API. Lot izvēlies pats — VS neriskē/nemazina.",
+    tip: "Lot = tas, ko izvēlies. Nav risk %, nav lot clamp.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
-    tip: "Ieeja uz EMA1×EMA3 cross. Lot FIXED — operatora izvēle.",
+    tip: "Cross entry. Lot FIXED — bez riska management.",
   },
   [StrategyMode.TREND]: {
     label: "TREND",
@@ -801,7 +799,7 @@ export default function ClientPortalPage() {
 
         <section className="border border-[#00f0ff]/25 bg-[#070d16]/90 p-3.5 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
           <p className="mb-2 text-[9px] tracking-[0.28em] text-[#00f0ff]/80">
-            LOT
+            LOT · exact size
           </p>
           <div className="grid grid-cols-4 gap-1.5">
             {LOTS.map((l) => (
