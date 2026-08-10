@@ -235,8 +235,9 @@ export function capitalSafeTrailDistance(
 }
 
 /**
- * Trail SL that stays Capital-legal AFTER instrument price formatting
- * (GOLD 2dp can shrink mark−0.50 → 0.49 and get rejected / skipped).
+ * Trail SL that stays Capital-legal AFTER instrument price formatting.
+ * GOLD 2dp rounding can turn mark−0.50 into mark−0.49 → Capital reject /
+ * our own skip forever. Always round the SL *away* from mark until legal.
  * Only tightens vs existing SL.
  */
 export function capitalSafeTrailingStop(input: {
@@ -249,31 +250,34 @@ export function capitalSafeTrailingStop(input: {
   const mark = Number(input.mark);
   const minDist = capitalMinStopDistance(input.symbol);
   const dist = Math.max(Number(input.distance) || 0, minDist);
-  let raw =
-    input.direction === "BUY" ? mark - dist : mark + dist;
+  const pip = instrumentPipSize(input.symbol);
+  const tick = Math.max(pip, 1e-8);
 
-  // Re-apply min-stop after rounding (toFixed on GOLD/indices)
-  let formatted = formatInstrumentPrice(input.symbol, raw);
   if (input.direction === "BUY") {
-    if (mark - Number(formatted) < minDist - 1e-12) {
-      formatted = formatInstrumentPrice(input.symbol, mark - minDist);
+    // SL must sit ≤ mark − minDist
+    let sl = mark - dist;
+    let formatted = formatInstrumentPrice(input.symbol, sl);
+    for (let i = 0; i < 10 && mark - Number(formatted) < minDist - 1e-12; i++) {
+      sl = Number(formatted) - tick;
+      formatted = formatInstrumentPrice(input.symbol, sl);
     }
     const existing = Number(input.existingSl);
-    if (Number.isFinite(existing) && existing < mark) {
-      if (Number(formatted) < existing) {
-        formatted = formatInstrumentPrice(input.symbol, existing);
-      }
+    if (Number.isFinite(existing) && existing < mark && Number(formatted) < existing) {
+      formatted = formatInstrumentPrice(input.symbol, existing);
     }
-  } else {
-    if (Number(formatted) - mark < minDist - 1e-12) {
-      formatted = formatInstrumentPrice(input.symbol, mark + minDist);
-    }
-    const existing = Number(input.existingSl);
-    if (Number.isFinite(existing) && existing > mark) {
-      if (Number(formatted) > existing) {
-        formatted = formatInstrumentPrice(input.symbol, existing);
-      }
-    }
+    return formatted;
+  }
+
+  // SELL: SL must sit ≥ mark + minDist
+  let sl = mark + dist;
+  let formatted = formatInstrumentPrice(input.symbol, sl);
+  for (let i = 0; i < 10 && Number(formatted) - mark < minDist - 1e-12; i++) {
+    sl = Number(formatted) + tick;
+    formatted = formatInstrumentPrice(input.symbol, sl);
+  }
+  const existing = Number(input.existingSl);
+  if (Number.isFinite(existing) && existing > mark && Number(formatted) > existing) {
+    formatted = formatInstrumentPrice(input.symbol, existing);
   }
   return formatted;
 }

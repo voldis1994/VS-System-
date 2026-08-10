@@ -48,9 +48,9 @@ export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   trailingEnabled: true,
   /** Chase distance after BE */
   trailingDistancePips: 3,
-  /** After BE locks, trail arms immediately (threshold unused when BE-gated) */
+  /** Runtime arms Capital-safe trail immediately; threshold unused */
   trailingActivationPips: 0,
-  trailArmImmediate: false,
+  trailArmImmediate: true,
   atrStopMult: 0.45,
   atrTpMult: 1.0,
   /** Initial protective SL until BE/trail take over */

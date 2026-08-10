@@ -293,6 +293,18 @@ describe("capitalSafeTrailingStop", () => {
     expect(Number(sl)).toBeGreaterThanOrEqual(2649.5);
   });
 
+  it("rounds BUY SL away from mark when 2dp would violate min-stop", () => {
+    // mark−0.50 = 2649.619 → toFixed(2)=2649.62 → dist 0.499 < 0.50 (old bug: forever skip)
+    const sl = capitalSafeTrailingStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      mark: 2650.119,
+      distance: 0.5,
+      existingSl: null,
+    });
+    expect(2650.119 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+  });
+
   it("only tightens SELL trail", () => {
     const sl = capitalSafeTrailingStop({
       symbol: "GOLD",
@@ -303,5 +315,16 @@ describe("capitalSafeTrailingStop", () => {
     });
     expect(Number(sl)).toBeLessThanOrEqual(2650.6);
     expect(Number(sl) - 2650).toBeGreaterThanOrEqual(0.5 - 1e-9);
+  });
+
+  it("rounds SELL SL away from mark when 2dp would violate min-stop", () => {
+    const sl = capitalSafeTrailingStop({
+      symbol: "GOLD",
+      direction: "SELL",
+      mark: 2650.119,
+      distance: 0.5,
+      existingSl: null,
+    });
+    expect(Number(sl) - 2650.119).toBeGreaterThanOrEqual(0.5 - 1e-9);
   });
 });

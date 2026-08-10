@@ -101,7 +101,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
 
   /** Fast path: only BE/trail (no signal entries). */
   private async tickTrailsOnly() {
-    if (this.trailing || this.ticking) return;
+    // Do NOT skip when tickAll is running — that blocked trail for entire
+    // multi-second strategy ticks and made SL look frozen.
+    if (this.trailing) return;
     this.trailing = true;
     try {
       await this.manageExitProtections();
@@ -265,6 +267,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           { trailingEnabled: true },
           { takeProfitsJson: { not: Prisma.DbNull } },
           { stopLoss: null },
+          { source: "STRATEGY" },
         ],
       },
       select: { symbol: true },

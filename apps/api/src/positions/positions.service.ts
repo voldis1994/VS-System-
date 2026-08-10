@@ -1081,8 +1081,34 @@ export class PositionsService {
         }
 
         // Re-read after possible BE
-        const fresh = await this.get(position.organizationId, position.id);
+        let fresh = await this.get(position.organizationId, position.id);
         if (fresh.status === "CLOSED") continue;
+
+        // Force SCALPING trail on even if flags were lost
+        if (
+          (!fresh.trailingEnabled || fresh.trailingDistance == null) &&
+          fresh.strategyId
+        ) {
+          const stForce = await this.prisma.strategy.findFirst({
+            where: { id: fresh.strategyId },
+            select: { mode: true },
+          });
+          if (stForce?.mode === StrategyMode.SCALPING) {
+            const autoF = modeAutoExit(StrategyMode.SCALPING)!;
+            const td = resolveScalpTrailDistance(
+              position.symbol,
+              entry,
+              autoF.trailingDistancePips,
+            );
+            fresh = await this.prisma.position.update({
+              where: { id: position.id },
+              data: {
+                trailingEnabled: true,
+                trailingDistance: td.toFixed(8),
+              },
+            });
+          }
+        }
 
         if (fresh.trailingEnabled && fresh.trailingDistance != null) {
           let distance = String(fresh.trailingDistance);
@@ -1137,20 +1163,10 @@ export class PositionsService {
             ) {
               armThreshold = 0;
             }
-            // SCALPING: trail after £ money trigger OR true BE OR any profit move
-            // that already clears money via computed PnL (broker upl=0 was blocking).
-            if (
-              strategy?.mode === StrategyMode.SCALPING &&
-              auto?.breakEvenEnabled !== false
-            ) {
-              if (
-                !fresh.breakEvenActivatedAt &&
-                !fresh.trailingActivatedAt &&
-                !moneyHit &&
-                !(favorable > 0 && moneyPnl >= (auto?.breakEvenActivationMoney ?? 0.05))
-              ) {
-                continue;
-              }
+            // SCALPING: always arm Capital-safe trail immediately (chase every 1s).
+            // Money £0.05 still drives BE; do NOT gate trail on moneyHit — that
+            // froze SL whenever upl/flags lagged.
+            if (strategy?.mode === StrategyMode.SCALPING) {
               armThreshold = 0;
             }
           }
@@ -1196,9 +1212,14 @@ export class PositionsService {
 
           if (existing && d(candidate).eq(d(existing))) continue;
 
-          // Skip if candidate still inside Capital min-stop of mark (safety)
+          // Skip only if still illegal after capitalSafeTrailingStop (should be rare)
           const minDist = capitalMinStopDistance(position.symbol);
-          if (Math.abs(mark - Number(candidate)) + 1e-9 < minDist) continue;
+          if (Math.abs(mark - Number(candidate)) + 1e-9 < minDist) {
+            console.warn(
+              `trail skip ${position.id}: candidate ${candidate} still < minDist ${minDist} from mark ${mark}`,
+            );
+            continue;
+          }
 
           const firstArm = !fresh.trailingActivatedAt;
           try {
@@ -1211,11 +1232,43 @@ export class PositionsService {
               { silent: !firstArm },
             );
           } catch (trailErr) {
-            console.warn(
-              `autoManageProtections ${position.id} trail:`,
-              trailErr instanceof Error ? trailErr.message : trailErr,
-            );
-            continue;
+            // Retry once with an extra pip of distance (Capital sometimes picky)
+            try {
+              const wider = capitalSafeTrailingStop({
+                symbol: position.symbol,
+                direction: dir,
+                mark,
+                distance: brokerTrailDist + capitalMinStopDistance(position.symbol) * 0.02,
+                existingSl: existing,
+              });
+              if (existing && d(wider).eq(d(existing))) throw trailErr;
+              await this.modifySlTp(
+                position.organizationId,
+                "system",
+                position.id,
+                { stopLoss: wider },
+                correlationId,
+                { silent: true },
+              );
+              await this.prisma.position.update({
+                where: { id: position.id },
+                data: {
+                  trailingEnabled: true,
+                  trailingDistance: distance,
+                  trailingActivatedAt: fresh.trailingActivatedAt ?? new Date(),
+                  stopLoss: wider,
+                  currentPrice: mark,
+                },
+              });
+              brokerStopLoss.set(position.id, wider);
+              continue;
+            } catch {
+              console.warn(
+                `autoManageProtections ${position.id} trail:`,
+                trailErr instanceof Error ? trailErr.message : trailErr,
+              );
+              continue;
+            }
           }
           await this.prisma.position.update({
             where: { id: position.id },
