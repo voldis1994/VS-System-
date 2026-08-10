@@ -1285,44 +1285,6 @@ export class PositionsService {
           }
         }
 
-        // ═══════════════════════════════════════════════════════════
-        // 10s SCALPING ONLY: software 0.3-pip soft trail after £0.05.
-        // Explicit timeframe check — other SCALPING TFs do not enter.
-        // trailArmImmediate cannot arm this path.
-        // ═══════════════════════════════════════════════════════════
-        {
-          let mode: string | null = null;
-          let timeframe: string | undefined;
-          if (position.strategyId) {
-            const stTrail = await this.prisma.strategy.findFirst({
-              where: { id: position.strategyId },
-              select: { mode: true, configurationJson: true },
-            });
-            mode = stTrail?.mode ?? null;
-            timeframe = (stTrail?.configurationJson as { timeframe?: string } | null)
-              ?.timeframe;
-          }
-          const decision = decideScalpSoftTrailArm({
-            mode,
-            timeframe,
-            moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
-            softTrailActivatedAt: position.trailingActivatedAt,
-            moneyArm: PositionsService.SCALP_MONEY_ARM,
-          });
-          if (decision.run) {
-            await this.chaseScalpTrailFromMoneyHit({
-              position,
-              mark,
-              entry,
-              dir,
-              moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
-              correlationId,
-              brokerStopLoss,
-            });
-            continue; // do not run Capital SL chase for 10s SCALPING
-          }
-        }
-
         // Resolve whether Capital (or DB) already has a stopLevel.
         // Never treat "broker map miss" as naked if DB has stopLoss — that
         // used to skip BE/trail forever while price ran in profit.
@@ -1590,6 +1552,59 @@ export class PositionsService {
           }
         }
 
+        // ═══════════════════════════════════════════════════════════
+        // 10s SCALPING soft trail — ONLY path that may arm/exit for this mode.
+        // Always continue afterward so capitalSafeTrailDistance is unreachable.
+        // inProfit / armThreshold=0 / trailArmImmediate cannot bypass £0.05.
+        // ═══════════════════════════════════════════════════════════
+        {
+          let mode: string | null = null;
+          let timeframe: string | undefined;
+          if (position.strategyId) {
+            const stTrail = await this.prisma.strategy.findFirst({
+              where: { id: position.strategyId },
+              select: { mode: true, configurationJson: true },
+            });
+            mode = stTrail?.mode ?? null;
+            timeframe = (
+              stTrail?.configurationJson as { timeframe?: string } | null
+            )?.timeframe;
+          }
+          // Re-read activation flag after heal/force (must not invent ActivatedAt)
+          const freshForArm = await this.prisma.position.findFirst({
+            where: { id: position.id },
+            select: { trailingActivatedAt: true },
+          });
+          const decision = decideScalpSoftTrailArm({
+            mode,
+            timeframe,
+            moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
+            softTrailActivatedAt:
+              freshForArm?.trailingActivatedAt ?? position.trailingActivatedAt,
+            moneyArm: PositionsService.SCALP_MONEY_ARM,
+          });
+          if (decision.isTenSecondScalping) {
+            if (decision.run) {
+              await this.chaseScalpTrailFromMoneyHit({
+                position: {
+                  ...position,
+                  trailingActivatedAt:
+                    freshForArm?.trailingActivatedAt ??
+                    position.trailingActivatedAt,
+                },
+                mark,
+                entry,
+                dir,
+                moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
+                correlationId,
+                brokerStopLoss,
+              });
+            }
+            // CRITICAL: never fall into generic broker trail (Capital 0.50 floor)
+            continue;
+          }
+        }
+
         if (fresh.trailingEnabled && fresh.trailingDistance != null) {
           let distance = String(fresh.trailingDistance);
           // Arm from user pips — never multiply floored broker distance (that made 1-pip start need ~8–18+ pips)
@@ -1610,7 +1625,7 @@ export class PositionsService {
             const auto = strategy?.mode
               ? modeAutoExit(strategy.mode as StrategyMode)
               : null;
-            // 10s SCALPING exit is software soft trail only — skip Capital chase
+            // Belt-and-suspenders: 10s SCALPING already continued above
             if (isTenSecondScalpingMode(strategy?.mode, cfg)) continue;
             const priceOffset = cfg.priceOffsetMode === true;
             const trailPips = Number(
