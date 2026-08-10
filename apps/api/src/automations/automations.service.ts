@@ -185,20 +185,16 @@ export class AutomationsService implements OnModuleInit {
             const match = live.find(
               (x) => x.brokerPositionId === p.brokerPositionId,
             );
-            const allowed = closeAllowedByStopLoss({
-              brokerFound: match ? true : live.length > 0 ? false : null,
-              brokerStopLoss: match?.stopLoss ?? null,
-              dbStopLoss: p.stopLoss != null ? String(p.stopLoss) : null,
-            });
-            // live empty + match missing is ambiguous — treat as unread (null) via live.length===0
-            const allowedSafe =
-              live.length === 0
-                ? closeAllowedByStopLoss({
-                    brokerFound: null,
-                    dbStopLoss: p.stopLoss != null ? String(p.stopLoss) : null,
-                  })
-                : allowed;
-            if (!allowedSafe) {
+            // Empty live list is ambiguous (API glitch) — require DB SL
+            const brokerFound: boolean | null =
+              live.length === 0 ? null : match ? true : false;
+            if (
+              !closeAllowedByStopLoss({
+                brokerFound,
+                brokerStopLoss: match?.stopLoss ?? null,
+                dbStopLoss: p.stopLoss != null ? String(p.stopLoss) : null,
+              })
+            ) {
               console.warn(
                 `automation close_all blocked ${p.id}: no stopLoss`,
               );
