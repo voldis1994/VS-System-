@@ -800,11 +800,6 @@ export default function AccountsPage() {
                   ) : null}
                 </div>
               ))}
-              {(accounts ?? []).length === 0 ? (
-                <div className="py-8 text-center text-sm text-white/35">
-                  Add Paper or Capital.com account
-                </div>
-              ) : null}
             </div>
           )}
         </Panel>
