@@ -1265,9 +1265,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 trailingActivatedAt: null,
               },
             });
-            // Static SL on fill — Capital-safe ONLY.
-            // NEVER push soft 3-pip trail here: GOLD min-stop ~0.50 rejects it and
-            // the chart stays naked (no SL line = no trailing either).
+            // Static SL on fill — Capital-safe ONLY (one attempt).
+            // NEVER push soft 3-pip trail here: GOLD min-stop ~0.50 rejects it.
+            // Widening / native trail is handled by throttled recovery ticks so
+            // we do not hold Capital login lock for 3× confirm (~30s) on fill.
             try {
               const fillMark =
                 Number(
@@ -1313,66 +1314,22 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 severity: "SUCCESS",
               });
             } catch (attachErr) {
-              // Widen and retry — then native Capital trailingStop as last resort
-              try {
-                const wider = capitalSafeInitialStop({
-                  symbol: brokerSymbol,
-                  direction: signal,
-                  entry,
-                  distance:
-                    Math.max(stopDist, capitalMinStopDistance(brokerSymbol)) * 2,
-                  mark: entry,
-                });
-                await this.positions.modifySlTp(
-                  strategy.organizationId,
-                  actorId,
-                  positionId,
-                  { stopLoss: wider, ...(takeProfit ? { takeProfit } : {}) },
-                  correlationId,
-                  { silent: true },
-                );
-              } catch (retryErr) {
-                try {
-                  const minD = capitalMinStopDistance(brokerSymbol);
-                  await this.positions.modifySlTp(
-                    strategy.organizationId,
-                    actorId,
-                    positionId,
-                    {
-                      trailingStop: true,
-                      stopDistance: String(minD),
-                    },
-                    correlationId,
-                    { silent: true },
-                  );
-                  await this.notifications.create({
-                    organizationId: strategy.organizationId,
-                    userId: actorId === "system" ? null : actorId,
-                    title: "Native trail ON",
-                    body: `${brokerSymbol} Capital trailingStop @ ${minD} (fixed SL failed)`,
-                    severity: "WARNING",
-                  });
-                } catch (nativeErr) {
-                  this.log.error(
-                    `Post-fill SL FAILED — chart naked: ${
-                      nativeErr instanceof Error
-                        ? nativeErr.message
-                        : nativeErr
-                    }`,
-                  );
-                  await this.notifications.create({
-                    organizationId: strategy.organizationId,
-                    userId: actorId === "system" ? null : actorId,
-                    title: "NO SL ON CAPITAL",
-                    body: `${brokerSymbol}: ${
-                      retryErr instanceof Error
-                        ? retryErr.message
-                        : "modify failed"
-                    } — recovery will keep trying`,
-                    severity: "CRITICAL",
-                  });
-                }
-              }
+              this.log.warn(
+                `Post-fill SL pending recovery: ${
+                  attachErr instanceof Error ? attachErr.message : attachErr
+                }`,
+              );
+              await this.notifications.create({
+                organizationId: strategy.organizationId,
+                userId: actorId === "system" ? null : actorId,
+                title: "SL attach deferred",
+                body: `${brokerSymbol}: ${
+                  attachErr instanceof Error
+                    ? attachErr.message
+                    : "modify failed"
+                } — recovery tick will retry (desk stays responsive)`,
+                severity: "WARNING",
+              });
             }
             await this.notifications.create({
               organizationId: strategy.organizationId,

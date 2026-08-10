@@ -1087,20 +1087,24 @@ export class StrategiesService {
         ? Math.max(trailPips, minDist)
         : resolveScalpTrailDistance(pos.symbol, entry, trailPips);
 
-      await this.prisma.position.update({
-        where: { id: pos.id },
-        data: {
-          strategyId: pos.strategyId ?? strategyId,
-          breakEvenEnabled: beEnabled,
-          breakEvenActivation: beEnabled ? beAct.toFixed(8) : null,
-          breakEvenOffset: beEnabled ? beOff.toFixed(8) : null,
-          trailingEnabled: trailEnabled,
-          trailingDistance: trailEnabled ? trail.toFixed(8) : null,
-          // Clear stale "armed at entry" so trail waits for +move
-          trailingActivatedAt:
-            trailEnabled && trailImmediate ? new Date() : null,
-        },
-      });
+    // Arm trail flags, but do NOT stamp trailingActivatedAt until Capital has
+    // a visible stopLevel — otherwise autoManage hammers soft trail modifies
+    // on a naked chart and starves the API (Internal Server Error toasts).
+    const hasBrokerSl =
+      pos.stopLoss != null && String(pos.stopLoss).trim().length > 0;
+    await this.prisma.position.update({
+      where: { id: pos.id },
+      data: {
+        strategyId: pos.strategyId ?? strategyId,
+        breakEvenEnabled: beEnabled,
+        breakEvenActivation: beEnabled ? beAct.toFixed(8) : null,
+        breakEvenOffset: beEnabled ? beOff.toFixed(8) : null,
+        trailingEnabled: trailEnabled,
+        trailingDistance: trailEnabled ? trail.toFixed(8) : null,
+        trailingActivatedAt:
+          trailEnabled && trailImmediate && hasBrokerSl ? new Date() : null,
+      },
+    });
 
       // Push fixed SL/TP only when missing — never rewrite existing levels with wrong formula
       try {

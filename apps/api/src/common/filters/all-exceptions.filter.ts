@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { Request, Response } from "express";
+import { ZodError } from "zod";
 import { ErrorCodes } from "@nexus/domain";
 import { toUtcIso } from "@nexus/shared";
 
@@ -37,6 +38,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
           code = ErrorCodes.VALIDATION_FAILED;
         }
       }
+    } else if (exception instanceof ZodError) {
+      status = HttpStatus.BAD_REQUEST;
+      code = ErrorCodes.VALIDATION_FAILED;
+      message = exception.issues
+        .slice(0, 5)
+        .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+        .join("; ");
+      details = { issues: exception.issues.slice(0, 12) };
     } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       if (exception.code === "P2002") {
         status = HttpStatus.CONFLICT;
@@ -55,6 +64,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     } else if (exception instanceof Error) {
       message = sanitizePublicError(exception.message);
+    }
+
+    // Never leave the desk with a blank / Title-Case Nest default — give a hint.
+    if (
+      !message ||
+      /^internal server error$/i.test(message.trim())
+    ) {
+      message =
+        "API kļūda (500). Ja tikko bija NO SL / trail recovery — pagaidi 15s un mēģini vēlreiz. FORCE-UPDATE → START, ja atkārtojas.";
     }
 
     response.status(status).json({

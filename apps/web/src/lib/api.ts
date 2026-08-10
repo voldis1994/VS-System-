@@ -109,6 +109,15 @@ export async function api<T>(
 
   if (!res.ok) {
     const body = (data ?? {}) as { message?: string; code?: string; details?: unknown };
+    let msg = body.message || "Request failed";
+    // Next.js rewrite / dead API often returns HTML or bare status text
+    if (typeof msg === "string" && /<!DOCTYPE|<html/i.test(msg)) {
+      msg =
+        "API neatbild (proxy 500). FORCE-UPDATE-VS-SYSTEM.bat → START, tad mēģini vēlreiz.";
+    } else if (/^internal server error$/i.test(String(msg).trim())) {
+      msg =
+        "API kļūda (500). Pagaidi 15s (SL recovery) vai FORCE-UPDATE → START.";
+    }
     const expired =
       res.status === 401 &&
       (body.code === "AUTH_SESSION_EXPIRED" ||
@@ -124,7 +133,7 @@ export async function api<T>(
       }
     }
 
-    const err: ApiError = Object.assign(new Error(body.message || "Request failed"), {
+    const err: ApiError = Object.assign(new Error(msg), {
       code: body.code,
       details: body.details,
       status: res.status,
