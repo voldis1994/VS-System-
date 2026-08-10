@@ -354,8 +354,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     const minScore = 0;
     const sessionFilter = false;
     const oneTradeOnly = true;
-    // Flip allowed: close opposite, then open new (still max 1 open)
-    const closeOnlyNoFlip = config.closeOnlyNoFlip === true;
+    // Flip NEVER for SCALPING — opposite signal must not close a live trade.
+    // Exit only via Capital SL / trail / BE / manual.
+    const closeOnlyNoFlip = true;
+    const scalpNoSignalExit = mode === StrategyMode.SCALPING;
     // Default OFF — aggressive EMA fallback was deadly on micro accounts
     const _autoAggressive = config.autoAggressive === true;
     void _autoAggressive;
@@ -370,10 +372,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     void config.sessionFilter;
     void config.newsFilterEnabled;
     void config.oneTradeOnly;
+    void config.closeOnlyNoFlip;
     void config.minScore;
     let lastStatus: Record<string, unknown> = {
       oneTradeOnly,
       closeOnlyNoFlip,
+      scalpNoSignalExit,
       takeProfitEnabled,
       takeProfitMode,
       multiTpCount: takeProfitMode === "MULTI" ? multiTpCount : undefined,
@@ -715,8 +719,18 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // Exhaust / soft close from strategy — close open, no micro needed
+      // Exhaust / soft close from strategy — close open, no micro needed.
+      // SCALPING: NEVER signal-exit. Only SL / trail / BE / manual may close.
       if (scored.signal === "CLOSE") {
+        if (isClassicScalping) {
+          lastStatus = {
+            ...lastStatus,
+            signal: "HOLD",
+            skip: "scalp_no_signal_exit",
+            reason: "SCALPING exits only via SL/trail — ignore CLOSE signal",
+          };
+          continue;
+        }
         lastStatus = { ...lastStatus, signal: "CLOSE", gate: scored.gate };
         for (const accountId of accountIds) {
           // After EMA exit, enforce cooldown before any new fresh-cross entry
@@ -906,6 +920,21 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           (p) => p.symbol === brokerSymbol || p.symbol === symbol,
         );
         const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
+
+        // SCALPING: while any trade is open on this symbol — do nothing.
+        // No flip, no opposite close, no second order. Trail/SL owns the exit.
+        if (scalpNoSignalExit && openOnSymbol.length > 0) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "waiting_sl_trail_exit",
+            reason: "scalp_one_trade_no_signal_exit",
+            openTrades: openOnSymbol.length,
+            positionId: openOnSymbol[0]?.id,
+            accountId,
+            signal,
+          };
+          continue;
+        }
 
         const hasOtherSymbolOpen =
           oneTradeOnly &&

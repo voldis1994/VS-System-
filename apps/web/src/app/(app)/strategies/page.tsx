@@ -512,7 +512,8 @@ export default function StrategiesPage() {
           <strong className="text-white">epic</strong>, režīms, lots. SCALPING / EMA 1/3 — exit AUTO
           (bez TP/Trail picker). Mode un tirgu vari mainīt jebkurā brīdī.
           <strong className="text-white"> One trade only:</strong> kamēr kontā ir atvērts treids,
-          jauni orderi netiek sūtīti (pēc close — nākamais signāls).
+          jauni orderi netiek sūtīti; SCALPING <strong className="text-white">neaizver</strong> ar
+          pretējo signālu — izeja tikai caur SL/trail (£0.05+).
           BOSS un Guntis var darboties <strong className="text-white">vienlaikus ar dažādiem</strong>{" "}
           iestatījumiem; viens otru nebloķē.
         </p>

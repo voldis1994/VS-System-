@@ -897,9 +897,68 @@ export class PositionsService {
       }
     }
 
-    // Arm Capital native trail — broker moves chart SL with price
-    if (!this.nativeTrailArmed.has(position.id)) {
-      let nativeOk = false;
+    // Prefer software stopLevel chase FIRST so Capital chart shows a hard SL line.
+    // Native trailingStop alone often leaves the chart looking "naked" (no dashed SL).
+    const existing =
+      brokerStopLoss.get(position.id) ??
+      (position.stopLoss != null && String(position.stopLoss).length > 0
+        ? String(position.stopLoss)
+        : null);
+    const candidate = capitalSafeTrailingStop({
+      symbol: position.symbol,
+      direction: dir,
+      mark,
+      distance: brokerDist,
+      existingSl: existing,
+    });
+    let softwareOk = false;
+    if (
+      (!existing || !d(candidate).eq(d(existing))) &&
+      Math.abs(mark - Number(candidate)) + 1e-9 >= minD
+    ) {
+      try {
+        await this.modifySlTp(
+          position.organizationId,
+          "system",
+          position.id,
+          { stopLoss: candidate },
+          correlationId,
+          { silent: !firstArm },
+        );
+        softwareOk = true;
+        brokerStopLoss.set(position.id, candidate);
+        await this.prisma.position.update({
+          where: { id: position.id },
+          data: {
+            stopLoss: candidate,
+            currentPrice: mark,
+            trailingEnabled: true,
+            trailingActivatedAt: new Date(),
+          },
+        });
+        // Fixed SL clears native — allow re-arm only if software fails later
+        this.nativeTrailArmed.delete(position.id);
+        if (firstArm) {
+          await this.notifications.create({
+            organizationId: position.organizationId,
+            userId: null,
+            title: "£0.05 — SL FOLLOWS",
+            body: `${position.symbol} ${dir} SL → ${candidate} (PnL £${moneyPnl.toFixed(2)})`,
+            severity: "SUCCESS",
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `£0.05 software trail ${position.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    } else if (existing) {
+      softwareOk = true; // already have a legal SL on chart
+    }
+
+    // If software stopLevel failed/missing — Capital native trailing as fallback
+    if (!softwareOk && !this.nativeTrailArmed.has(position.id)) {
       try {
         await this.modifySlTp(
           position.organizationId,
@@ -912,26 +971,25 @@ export class PositionsService {
           correlationId,
           { silent: true },
         );
-        nativeOk = true;
         this.nativeTrailArmed.add(position.id);
+        if (firstArm) {
+          await this.notifications.create({
+            organizationId: position.organizationId,
+            userId: null,
+            title: "£0.05 — TRAIL ON",
+            body: `${position.symbol} +£${moneyPnl.toFixed(2)} → Capital trailingStop ${brokerDist}`,
+            severity: "SUCCESS",
+          });
+        }
       } catch (err) {
         console.warn(
           `£0.05 native trail ${position.id}:`,
           err instanceof Error ? err.message : err,
         );
       }
-      if (nativeOk && firstArm) {
-        await this.notifications.create({
-          organizationId: position.organizationId,
-          userId: null,
-          title: "£0.05 — TRAIL ON",
-          body: `${position.symbol} +£${moneyPnl.toFixed(2)} → Capital trailingStop ${brokerDist} — SL follows price`,
-          severity: "SUCCESS",
-        });
-      }
     }
 
-    // Native armed: sync broker stopLevel into DB (Capital moves it)
+    // Sync live broker SL into DB when native is managing the chart
     if (this.nativeTrailArmed.has(position.id)) {
       const adapter = this.brokers.get(position.accountId);
       if (adapter && position.brokerPositionId) {
@@ -951,60 +1009,6 @@ export class PositionsService {
         } catch {
           // keep going
         }
-      }
-      return;
-    }
-
-    // Native failed — software chase: SL = mark ± min-stop every tick
-    const existing =
-      brokerStopLoss.get(position.id) ??
-      (position.stopLoss != null && String(position.stopLoss).length > 0
-        ? String(position.stopLoss)
-        : null);
-    const candidate = capitalSafeTrailingStop({
-      symbol: position.symbol,
-      direction: dir,
-      mark,
-      distance: brokerDist,
-      existingSl: existing,
-    });
-    if (
-      (!existing || !d(candidate).eq(d(existing))) &&
-      Math.abs(mark - Number(candidate)) + 1e-9 >= minD
-    ) {
-      try {
-        await this.modifySlTp(
-          position.organizationId,
-          "system",
-          position.id,
-          { stopLoss: candidate },
-          correlationId,
-          { silent: !firstArm },
-        );
-        brokerStopLoss.set(position.id, candidate);
-        await this.prisma.position.update({
-          where: { id: position.id },
-          data: {
-            stopLoss: candidate,
-            currentPrice: mark,
-            trailingEnabled: true,
-            trailingActivatedAt: new Date(),
-          },
-        });
-        if (firstArm) {
-          await this.notifications.create({
-            organizationId: position.organizationId,
-            userId: null,
-            title: "£0.05 — SL FOLLOWS",
-            body: `${position.symbol} ${dir} SL → ${candidate} (PnL £${moneyPnl.toFixed(2)})`,
-            severity: "SUCCESS",
-          });
-        }
-      } catch (err) {
-        console.warn(
-          `£0.05 software trail ${position.id}:`,
-          err instanceof Error ? err.message : err,
-        );
       }
     }
   }
@@ -1198,51 +1202,23 @@ export class PositionsService {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // SIMPLE OPERATOR RULE (SCALPING):
+        // SIMPLE RULE (all strategy/scalp positions):
         //   floating PnL ≥ £0.05  →  SL starts following price. NOW.
-        // No armThreshold / naked-continue / BE-first gates.
         // ═══════════════════════════════════════════════════════════
-        {
-          let isScalp = false;
-          if (position.strategyId) {
-            const stEarly = await this.prisma.strategy.findFirst({
-              where: { id: position.strategyId },
-              select: { mode: true, configurationJson: true },
-            });
-            const cfgEarly = (stEarly?.configurationJson ?? {}) as {
-              exitVersion?: string;
-              breakEvenMoneyMode?: boolean;
-            };
-            isScalp =
-              stEarly?.mode === StrategyMode.SCALPING ||
-              cfgEarly.exitVersion === "SCALP" ||
-              cfgEarly.breakEvenMoneyMode === true;
-          }
-          if (
-            !isScalp &&
-            position.breakEvenEnabled &&
-            Number(position.breakEvenActivation) > 0 &&
-            Number(position.breakEvenActivation) <= 1
-          ) {
-            // Money-style activation stored on the row (£0.05)
-            isScalp = true;
-          }
-          if (
-            isScalp &&
-            Number.isFinite(moneyPnl) &&
-            moneyPnl >= PositionsService.SCALP_MONEY_ARM
-          ) {
-            await this.chaseScalpTrailFromMoneyHit({
-              position,
-              mark,
-              entry,
-              dir,
-              moneyPnl,
-              correlationId,
-              brokerStopLoss,
-            });
-            continue;
-          }
+        if (
+          Number.isFinite(moneyPnl) &&
+          moneyPnl >= PositionsService.SCALP_MONEY_ARM
+        ) {
+          await this.chaseScalpTrailFromMoneyHit({
+            position,
+            mark,
+            entry,
+            dir,
+            moneyPnl,
+            correlationId,
+            brokerStopLoss,
+          });
+          continue;
         }
 
         // Resolve whether Capital (or DB) already has a stopLevel.
