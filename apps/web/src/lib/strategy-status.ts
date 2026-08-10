@@ -56,6 +56,9 @@ export function deploymentHint(d: DeploymentState): string | null {
   ) {
     return "Multi TP → Single TP (lot < TP×0.01).";
   }
+  if (d.skip === "no_sl_no_close" || /no stopLoss/i.test(String(d.reason ?? ""))) {
+    return "Aizvēršana bloķēta — nav SL. Vispirms uzliek stopLoss.";
+  }
   if (d.skip === "buy_vs_bearish") {
     return "SCALPING: BUY bloķēts — pēdējās sveces ir SELL/bear.";
   }

@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from "@nestjs/common";
 import { DomainEventType, ErrorCodes, OrderDirection, OrderType } from "@nexus/domain";
-import { d, newId } from "@nexus/shared";
+import { d, newId, closeAllowedByStopLoss } from "@nexus/shared";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -396,6 +396,32 @@ export class CopiersService implements OnModuleInit {
       const adapter = this.brokers.get(childPos.accountId);
       if (!adapter) continue;
       try {
+        let liveMatch: { stopLoss?: string } | undefined;
+        let brokerFound: boolean | null = null;
+        try {
+          const live = await adapter.getOpenPositions({ force: true });
+          const m = live.find(
+            (x) => x.brokerPositionId === childPos.brokerPositionId,
+          );
+          if (!m) brokerFound = false;
+          else {
+            brokerFound = true;
+            liveMatch = m;
+          }
+        } catch {
+          brokerFound = null;
+        }
+        if (
+          !closeAllowedByStopLoss({
+            brokerFound,
+            brokerStopLoss: liveMatch?.stopLoss ?? null,
+            dbStopLoss:
+              childPos.stopLoss != null ? String(childPos.stopLoss) : null,
+          })
+        ) {
+          console.warn(`copier close blocked ${childPos.id}: no stopLoss`);
+          continue;
+        }
         if (childClose.gte(d(String(childPos.volume)))) {
           await adapter.closePosition({
             brokerPositionId: childPos.brokerPositionId,

@@ -24,6 +24,7 @@ import {
   capitalSafeTrailingStop,
   capitalSafeInitialStop,
   capitalMinStopDistance,
+  closeAllowedByStopLoss,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { modeAutoExit, StrategyMode } from "@nexus/domain";
@@ -46,6 +47,76 @@ export class PositionsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  /**
+   * Hard rule: NEVER app-close (or partial-close) a trade with no stopLoss.
+   * Broker chart SL is source of truth. If the deal is already gone on broker
+   * (SL hit / external close), allow the local close bookkeeping.
+   */
+  private async assertStopLossBeforeClose(
+    position: {
+      id: string;
+      symbol: string;
+      stopLoss: unknown;
+      brokerPositionId: string | null;
+    },
+    adapter: {
+      getOpenPositions: (opts?: {
+        force?: boolean;
+      }) => Promise<
+        Array<{ brokerPositionId: string; stopLoss?: string }>
+      >;
+    },
+  ): Promise<void> {
+    if (!position.brokerPositionId) {
+      if (
+        closeAllowedByStopLoss({
+          brokerFound: null,
+          dbStopLoss: position.stopLoss as string | null,
+        })
+      ) {
+        return;
+      }
+      throw new AppError(
+        ErrorCodes.POSITION_CLOSE_REQUIRES_SL,
+        `Cannot close ${position.symbol}: no stopLoss — attach SL first`,
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    try {
+      const live = await adapter.getOpenPositions({ force: true });
+      const match = live.find(
+        (x) => x.brokerPositionId === position.brokerPositionId,
+      );
+      const allowed = closeAllowedByStopLoss({
+        brokerFound: match ? true : false,
+        brokerStopLoss: match?.stopLoss ?? null,
+        dbStopLoss: position.stopLoss as string | null,
+      });
+      if (allowed) return;
+      throw new AppError(
+        ErrorCodes.POSITION_CLOSE_REQUIRES_SL,
+        `Cannot close ${position.symbol}: no stopLoss on Capital chart — attach SL first`,
+        HttpStatus.CONFLICT,
+      );
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      if (
+        closeAllowedByStopLoss({
+          brokerFound: null,
+          dbStopLoss: position.stopLoss as string | null,
+        })
+      ) {
+        return;
+      }
+      throw new AppError(
+        ErrorCodes.POSITION_CLOSE_REQUIRES_SL,
+        `Cannot close ${position.symbol}: no stopLoss — attach SL first`,
+        HttpStatus.CONFLICT,
+      );
+    }
+  }
 
   /**
    * Mark local OPEN rows CLOSED when the broker no longer has the deal
@@ -418,6 +489,8 @@ export class PositionsService {
     const adapter = this.brokers.get(position.accountId);
     if (!adapter) throw new AppError(ErrorCodes.BROKER_UNHEALTHY, "Broker not connected");
 
+    await this.assertStopLossBeforeClose(position, adapter);
+
     await this.prisma.position.update({
       where: { id },
       data: { status: "CLOSING" },
@@ -520,6 +593,9 @@ export class PositionsService {
     }
     const adapter = this.brokers.get(position.accountId);
     if (!adapter) throw new AppError(ErrorCodes.BROKER_UNHEALTHY, "Broker not connected");
+
+    // NEVER close a naked trade — attach/recover SL first, then close.
+    await this.assertStopLossBeforeClose(position, adapter);
 
     await this.prisma.position.update({
       where: { id },

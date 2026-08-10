@@ -733,13 +733,25 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             },
           });
           for (const pos of openOnSymbol) {
-            await this.positions.close(
-              strategy.organizationId,
-              actorId,
-              pos.id,
-              { clientRequestId: newId() },
-              correlationId,
-            );
+            try {
+              await this.positions.close(
+                strategy.organizationId,
+                actorId,
+                pos.id,
+                { clientRequestId: newId() },
+                correlationId,
+              );
+            } catch (closeErr) {
+              const msg =
+                closeErr instanceof Error ? closeErr.message : String(closeErr);
+              this.log.warn(`CLOSE blocked ${pos.id}: ${msg}`);
+              lastStatus = {
+                ...lastStatus,
+                skip: "no_sl_no_close",
+                reason: msg,
+                signal: "HOLD",
+              };
+            }
           }
         }
         continue;
@@ -867,18 +879,34 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         );
 
         const opposite = openOnSymbol.filter((p) => p.direction !== signal);
+        let blockedNakedClose = false;
         if (opposite.length > 0) {
           for (const pos of opposite) {
-            await this.positions.close(
-              strategy.organizationId,
-              actorId,
-              pos.id,
-              { clientRequestId: newId() },
-              correlationId,
-            );
-            _acted = true;
+            try {
+              await this.positions.close(
+                strategy.organizationId,
+                actorId,
+                pos.id,
+                { clientRequestId: newId() },
+                correlationId,
+              );
+              _acted = true;
+            } catch (closeErr) {
+              const msg =
+                closeErr instanceof Error ? closeErr.message : String(closeErr);
+              this.log.warn(`Flip-close blocked ${pos.id}: ${msg}`);
+              lastStatus = {
+                ...lastStatus,
+                skip: "no_sl_no_close",
+                reason: msg,
+              };
+              blockedNakedClose = true;
+              break;
+            }
           }
         }
+        // Never open a new side while a naked opposite trade cannot be closed
+        if (blockedNakedClose) continue;
 
         const tick = this.market.getTick(brokerSymbol);
         const entry = Number(

@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit } from "@nestjs/common";
 import { DomainEventType } from "@nexus/domain";
 import { Prisma } from "@prisma/client";
-import { newId } from "@nexus/shared";
+import { newId, closeAllowedByStopLoss } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
 import { AuditService } from "../audit/audit.service";
@@ -174,8 +174,36 @@ export class AutomationsService implements OnModuleInit {
         });
         const adapter = this.brokers.get(action.accountId);
         if (adapter) {
+          let live: Awaited<ReturnType<typeof adapter.getOpenPositions>> = [];
+          try {
+            live = await adapter.getOpenPositions({ force: true });
+          } catch {
+            live = [];
+          }
           for (const p of positions) {
             if (!p.brokerPositionId) continue;
+            const match = live.find(
+              (x) => x.brokerPositionId === p.brokerPositionId,
+            );
+            const allowed = closeAllowedByStopLoss({
+              brokerFound: match ? true : live.length > 0 ? false : null,
+              brokerStopLoss: match?.stopLoss ?? null,
+              dbStopLoss: p.stopLoss != null ? String(p.stopLoss) : null,
+            });
+            // live empty + match missing is ambiguous — treat as unread (null) via live.length===0
+            const allowedSafe =
+              live.length === 0
+                ? closeAllowedByStopLoss({
+                    brokerFound: null,
+                    dbStopLoss: p.stopLoss != null ? String(p.stopLoss) : null,
+                  })
+                : allowed;
+            if (!allowedSafe) {
+              console.warn(
+                `automation close_all blocked ${p.id}: no stopLoss`,
+              );
+              continue;
+            }
             await adapter.closePosition({
               brokerPositionId: p.brokerPositionId,
               clientRequestId: newId(),
