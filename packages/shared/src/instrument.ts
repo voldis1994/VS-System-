@@ -382,6 +382,32 @@ export function formatScalpBrokerStopLevel(
   return Number(level).toFixed(decimals);
 }
 
+/**
+ * Whether a 10s SCALPING Capital stopLevel modify should be sent.
+ *
+ * - be_sync: first-arm BE — send when candidate is better OR equal (Capital
+ *   chart may be naked while DB already shows entry). Never move SL backward.
+ * - improve_only: chase — send only when strictly better (BUY >, SELL <).
+ */
+export function scalpBrokerStopShouldMove(input: {
+  direction: "BUY" | "SELL";
+  candidate: number | string;
+  current?: number | string | null;
+  mode: "be_sync" | "improve_only";
+}): boolean {
+  const cand = Number(input.candidate);
+  if (!Number.isFinite(cand)) return false;
+  const curRaw =
+    input.current == null || String(input.current).length === 0
+      ? NaN
+      : Number(input.current);
+  if (!Number.isFinite(curRaw) || curRaw === 0) return true;
+  if (input.direction === "BUY") {
+    return input.mode === "be_sync" ? cand >= curRaw : cand > curRaw;
+  }
+  return input.mode === "be_sync" ? cand <= curRaw : cand < curRaw;
+}
+
 /** Absolute peak price for soft trail (BUY=high watermark, SELL=low). */
 export function updateScalpSoftPeakPrice(
   direction: "BUY" | "SELL",

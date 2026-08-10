@@ -32,6 +32,7 @@ import {
   instrumentPipSize,
   scalpSoftTrailDistancePrice,
   formatScalpBrokerStopLevel,
+  scalpBrokerStopShouldMove,
   updateScalpSoftPeakPrice,
   scalpSoftExitLevel,
   scalpSoftExitHit,
@@ -993,14 +994,17 @@ export class PositionsService {
         severity: "SUCCESS",
       });
 
-      // First Capital move: Break Even at entry (improve-only)
+      // First Capital move: BE at entry. Use be_sync so equal DB SL still
+      // hits Capital (chart can be naked while DB already shows entry).
       const beN = Number(requestedBe);
       const curBe = liveSl != null ? Number(liveSl) : NaN;
-      const beImproves =
-        !Number.isFinite(curBe) ||
-        curBe === 0 ||
-        (dir === "BUY" ? beN > curBe : beN < curBe);
-      if (beImproves) {
+      const shouldPushBe = scalpBrokerStopShouldMove({
+        direction: dir,
+        candidate: beN,
+        current: liveSl,
+        mode: "be_sync",
+      });
+      if (shouldPushBe) {
         await this.pushScalpBrokerStop({
           position,
           dir,
@@ -1014,10 +1018,8 @@ export class PositionsService {
         });
         liveSl = brokerStopLoss.get(position.id) ?? liveSl;
       } else {
-        const equal =
-          Number.isFinite(curBe) && Number.isFinite(beN) && beN === curBe;
         console.warn(
-          `[SCALP BROKER SL SKIP] reason=${equal ? "no_change" : "candidate_not_better"} phase=BE positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} side=${dir} requestedBESL=${requestedBe} beN=${beN} currentBrokerSL=${liveSl ?? "none"} curBe=${curBe} compare=${dir === "BUY" ? "need_beN>curBe" : "need_beN<curBe"}`,
+          `[SCALP BROKER SL SKIP] reason=candidate_not_better phase=BE positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} side=${dir} requestedBESL=${requestedBe} beN=${beN} currentBrokerSL=${liveSl ?? "none"} curBe=${curBe} compare=${dir === "BUY" ? "need_beN>=curBe_be_sync" : "need_beN<=curBe_be_sync"}`,
         );
       }
     } else if (
@@ -1038,10 +1040,12 @@ export class PositionsService {
     const trailCandidate = trailCandidatePreview;
     const curN = liveSl != null ? Number(liveSl) : NaN;
     const candN = Number(trailCandidate);
-    const improvesBroker =
-      !Number.isFinite(curN) ||
-      curN === 0 ||
-      (dir === "BUY" ? candN > curN : candN < curN);
+    const improvesBroker = scalpBrokerStopShouldMove({
+      direction: dir,
+      candidate: candN,
+      current: liveSl,
+      mode: "improve_only",
+    });
     if (improvesBroker && Number.isFinite(candN)) {
       await this.pushScalpBrokerStop({
         position,

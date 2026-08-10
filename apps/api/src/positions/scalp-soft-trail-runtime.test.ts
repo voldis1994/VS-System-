@@ -10,6 +10,7 @@ import {
   capitalSafeTrailDistance,
   formatInstrumentPrice,
   formatScalpBrokerStopLevel,
+  scalpBrokerStopShouldMove,
   scalpSoftExitHit,
   scalpSoftExitLevel,
   scalpSoftTrailDistancePrice,
@@ -81,6 +82,44 @@ describe("PositionsService 10s SCALPING soft-trail + broker SL chase", () => {
     const sellCand = peakSell + soft;
     const prevSell = 4392.5;
     expect(sellCand < prevSell).toBe(true);
+  });
+
+  it("first-arm BE sync still sends when DB SL already equals entry", () => {
+    const entry = Number(formatScalpBrokerStopLevel("GOLD", 4392.52));
+    // Bug that blocked REQUEST: strict > treated equal as skip
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "BUY",
+        candidate: entry,
+        current: entry,
+        mode: "improve_only",
+      }),
+    ).toBe(false);
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "BUY",
+        candidate: entry,
+        current: entry,
+        mode: "be_sync",
+      }),
+    ).toBe(true);
+    // Never pull SL backward on BE sync
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "BUY",
+        candidate: entry,
+        current: entry + 0.01,
+        mode: "be_sync",
+      }),
+    ).toBe(false);
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "SELL",
+        candidate: entry,
+        current: entry,
+        mode: "be_sync",
+      }),
+    ).toBe(true);
   });
 
   it("0.3 pip retracement → soft exit even if broker SL lags", () => {
