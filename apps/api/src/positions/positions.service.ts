@@ -842,7 +842,7 @@ export class PositionsService {
   /**
    * 10s SCALPING — from entry moment, lock 15% of move from entry into Capital SL.
    * Flat/loss → candidate = entry. In profit → entry ± 15%×favorable.
-   * Every ≥10s improve-only (be_sync); never move SL backward on pullback.
+   * Better lock → Capital modify immediately (no 10s block). Never move SL backward.
    *
    * Uses mark/SL already refreshed by autoManageAccountProtectionsLocked —
    * do NOT call getOpenPositions(force) here (that held Capital login lock and
@@ -910,28 +910,39 @@ export class PositionsService {
       return;
     }
 
-    const improves = scalpBrokerStopShouldMove({
-      direction: dir,
-      candidate: candidateSL,
-      current: liveSl,
-      // be_sync: from entry moment allow SL=entry even when equal to DB;
-      // never move backward if a better lock already exists.
-      mode: "be_sync",
-    });
-    if (!improves) {
+    const hasSl =
+      liveSl != null && String(liveSl).trim().length > 0 && Number(liveSl) !== 0;
+    // No SL on chart/DB → always send. Otherwise only if candidate is better or equal (be_sync).
+    const shouldSend =
+      !hasSl ||
+      scalpBrokerStopShouldMove({
+        direction: dir,
+        candidate: candidateSL,
+        current: liveSl,
+        mode: "be_sync",
+      });
+    if (!shouldSend) {
       console.log(
         `[SCALP PCT SL CHASE] skip=not_better symbol=${position.symbol} candidateSL=${candidateSL} currentSL=${liveSl ?? "none"}`,
       );
       return;
     }
 
-    const now = Date.now();
-    const lastAt = this.scalpSlModifyAt.get(position.id) ?? 0;
-    if (now - lastAt < SCALP_SL_MODIFY_INTERVAL_MS) {
-      console.log(
-        `[SCALP PCT SL CHASE] skip=throttle_10s symbol=${position.symbol} waitMs=${SCALP_SL_MODIFY_INTERVAL_MS - (now - lastAt)}`,
-      );
-      return;
+    // Throttle ONLY identical re-sends (already at this SL).
+    // A better 15% lock always goes to Capital immediately — never blocked by 10s timer.
+    const sameLevel =
+      hasSl &&
+      Number.isFinite(Number(liveSl)) &&
+      Number(candidateSL) === Number(liveSl);
+    if (sameLevel) {
+      const now = Date.now();
+      const lastAt = this.scalpSlModifyAt.get(position.id) ?? 0;
+      if (now - lastAt < SCALP_SL_MODIFY_INTERVAL_MS) {
+        console.log(
+          `[SCALP PCT SL CHASE] skip=already_at_level symbol=${position.symbol} sl=${candidateSL}`,
+        );
+        return;
+      }
     }
 
     await this.pushScalpFixedBrokerStop({
