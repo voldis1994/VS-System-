@@ -9,7 +9,6 @@ import {
   modeAutoExit,
   StrategyMode,
   isTenSecondScalpingMode,
-  decideScalpSoftTrailArm,
 } from "@nexus/domain";
 import {
   d,
@@ -30,12 +29,10 @@ import {
   capitalMinStopDistance,
   closeAllowedByStopLoss,
   instrumentPipSize,
-  scalpSoftTrailDistancePrice,
+  SCALP_FIXED_SL_DISTANCE,
+  scalpFixedTrailCandidateSl,
   formatScalpBrokerStopLevel,
   scalpBrokerStopShouldMove,
-  updateScalpSoftPeakPrice,
-  scalpSoftExitLevel,
-  scalpSoftExitHit,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -61,14 +58,9 @@ export class PositionsService {
   private nativeTrailArmed = new Set<string>();
   /** Throttle CRITICAL "SL CHASE FAILED" toasts per position. */
   private chaseFailNotifyAt = new Map<string, number>();
-  /** Absolute peak price for 10s SCALPING soft trail (BUY high / SELL low). */
-  private peakFavorable = new Map<string, number>();
-  private softExitBusy = new Set<string>();
   private static readonly NAKED_RECOVERY_MS = 15_000;
   private static readonly NAKED_NOTIFY_MS = 120_000;
   private static readonly CHASE_FAIL_NOTIFY_MS = 30_000;
-  /** Operator rule: £0.05 floating → SL starts following price. */
-  private static readonly SCALP_MONEY_ARM = 0.05;
   /** Per-account BE/trail lock — one slow Capital confirm must not skip all accounts. */
   private protectionsRunningByAccount = new Set<string>();
   private protectionsRunning = false;
@@ -845,69 +837,35 @@ export class PositionsService {
   }
 
   /**
-   * 10s SCALPING — soft trail (0.3 pip) + live Capital broker SL chase.
-   *
-   * After floating PnL ≥ £0.05:
-   *   1) arm soft trail / peakFavorable
-   *   2) move Capital SL to BE (entry) once
-   *   3) each tick chase Capital SL to peak ± softTrailDistance (improve only)
-   *   4) soft exit via close() on 0.3 pip retrace (primary exit)
-   *
-   * NEVER run candidate through capitalSafeTrailDistance / capitalMinStopDistance
-   * for this path — send the true 0.3-pip level; on Capital reject keep soft trail.
+   * 10s SCALPING — fixed-price-distance Capital SL chase.
+   * candidateSL = livePrice ± 0.0100 (improve-only). No £0.05 arm, no 0.3-pip soft trail,
+   * no capitalSafeTrailDistance floor on this path.
    */
-  private async chaseScalpTrailFromMoneyHit(input: {
+  private async chaseScalpFixedPriceStop(input: {
     position: {
       id: string;
       organizationId: string;
       accountId: string;
       symbol: string;
       direction: string;
-      averageEntry: unknown;
       stopLoss: unknown;
-      trailingActivatedAt: Date | null;
-      breakEvenActivatedAt: Date | null;
-      breakEvenEnabled: boolean;
-      breakEvenOffset: unknown;
       brokerPositionId: string | null;
     };
     mark: number;
-    entry: number;
     dir: "BUY" | "SELL";
-    moneyPnl: number;
     correlationId: string;
     brokerStopLoss: Map<string, string>;
-    mode?: string | null;
-    timeframe?: string | null;
   }): Promise<void> {
-    const {
-      position,
-      entry,
-      dir,
-      moneyPnl,
-      correlationId,
-      brokerStopLoss,
-      mode,
-      timeframe,
-    } = input;
+    const { position, dir, correlationId, brokerStopLoss } = input;
     let mark = input.mark;
 
-    // Prefer live broker mark + SL
     let liveSl =
       brokerStopLoss.get(position.id) ??
       (position.stopLoss != null && String(position.stopLoss).length > 0
         ? String(position.stopLoss)
         : null);
+
     const adapter = this.brokers.get(position.accountId);
-    if (!adapter) {
-      console.warn(
-        `[SCALP BROKER SL SKIP] reason=missing_adapter positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} accountId=${position.accountId}`,
-      );
-    } else if (!position.brokerPositionId) {
-      console.warn(
-        `[SCALP BROKER SL SKIP] reason=missing_broker_position_id positionId=${position.id} symbol=${position.symbol} (live refresh skipped; modify may still fail)`,
-      );
-    }
     if (adapter && position.brokerPositionId) {
       try {
         const live = await adapter.getOpenPositions({ force: true });
@@ -925,206 +883,52 @@ export class PositionsService {
       }
     }
 
-    const softPips =
-      modeAutoExit(StrategyMode.SCALPING)?.trailingDistancePips ?? 0.3;
-    const softTrailDistance = scalpSoftTrailDistancePrice(
-      position.symbol,
-      softPips,
-    );
-
-    const firstArm = !position.trailingActivatedAt;
-    // Hard gate: never arm without £0.05
-    if (
-      firstArm &&
-      !(
-        Number.isFinite(moneyPnl) &&
-        moneyPnl >= PositionsService.SCALP_MONEY_ARM
-      )
-    ) {
+    if (!Number.isFinite(mark) || mark <= 0) {
       console.warn(
-        `[SCALP BROKER SL SKIP] reason=not_armed positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} pnl=${moneyPnl} moneyArm=${PositionsService.SCALP_MONEY_ARM}`,
+        `[SCALP FIXED SL CHASE] skip=missing_price positionId=${position.id} symbol=${position.symbol}`,
       );
       return;
     }
 
-    if (!Number.isFinite(mark) || mark <= 0) {
-      // Diagnostic only — do not change control flow vs prior chase behavior
+    const distance = SCALP_FIXED_SL_DISTANCE;
+    const candN = scalpFixedTrailCandidateSl(dir, mark, distance);
+    if (!Number.isFinite(candN)) {
       console.warn(
-        `[SCALP BROKER SL SKIP] reason=missing_price positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} mark=${mark}`,
+        `[SCALP FIXED SL CHASE] skip=candidate_invalid positionId=${position.id} symbol=${position.symbol} mark=${mark}`,
       );
+      return;
     }
+    const candidateSL = formatScalpBrokerStopLevel(position.symbol, candN);
 
-    const prevPeak = this.peakFavorable.get(position.id);
-    const peak = updateScalpSoftPeakPrice(dir, prevPeak, mark);
-    const oldPeak = prevPeak;
-    this.peakFavorable.set(position.id, peak);
-    const exitLevel = scalpSoftExitLevel(dir, peak, softTrailDistance);
-    const brokerSlBefore = liveSl;
-    const trailCandidatePreview = formatScalpBrokerStopLevel(
-      position.symbol,
-      dir === "BUY" ? peak - softTrailDistance : peak + softTrailDistance,
-    );
-
-    // Diagnostic: every chase invocation after £0.05 gate (math unchanged)
     console.log(
-      `[SCALP MODIFY FLOW] positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} mode=${mode ?? "SCALPING"} timeframe=${timeframe ?? "10s"} pnl=${Number.isFinite(moneyPnl) ? moneyPnl.toFixed(4) : String(moneyPnl)} armed=${!firstArm} currentPrice=${mark} entry=${entry} currentBrokerSL=${liveSl ?? "none"} peak=${peak} candidateSL=${trailCandidatePreview}`,
+      `[SCALP FIXED SL CHASE] symbol=${position.symbol} side=${dir} currentPrice=${mark} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL} distance=${distance.toFixed(4)}`,
     );
 
-    if (firstArm) {
-      await this.prisma.position.update({
-        where: { id: position.id },
-        data: {
-          trailingEnabled: true,
-          trailingDistance: softTrailDistance.toFixed(8),
-          trailingActivatedAt: new Date(),
-          breakEvenEnabled: true,
-          breakEvenActivation: String(PositionsService.SCALP_MONEY_ARM),
-          currentPrice: mark,
-        },
-      });
-      const requestedBe = formatScalpBrokerStopLevel(position.symbol, entry);
-      console.log(
-        `[SCALP TRAIL ARMED] symbol=${position.symbol} side=${dir} pnl=${moneyPnl.toFixed(4)} entry=${entry} currentPrice=${mark} peak=${peak} softTrailDistance=${softTrailDistance} brokerSLBefore=${brokerSlBefore ?? "none"} requestedBESL=${requestedBe}`,
-      );
-      await this.notifications.create({
-        organizationId: position.organizationId,
-        userId: null,
-        title: "SCALP TRAIL ARMED",
-        body: `${position.symbol} ${dir} soft=${softTrailDistance} peak=${peak} → Capital BE ${requestedBe}`,
-        severity: "SUCCESS",
-      });
-
-      // First Capital move: BE at entry. Use be_sync so equal DB SL still
-      // hits Capital (chart can be naked while DB already shows entry).
-      const beN = Number(requestedBe);
-      const curBe = liveSl != null ? Number(liveSl) : NaN;
-      const shouldPushBe = scalpBrokerStopShouldMove({
-        direction: dir,
-        candidate: beN,
-        current: liveSl,
-        mode: "be_sync",
-      });
-      if (shouldPushBe) {
-        await this.pushScalpBrokerStop({
-          position,
-          dir,
-          mark,
-          peak,
-          requestedSl: requestedBe,
-          previousSl: liveSl,
-          correlationId,
-          brokerStopLoss,
-          reason: "BE",
-        });
-        liveSl = brokerStopLoss.get(position.id) ?? liveSl;
-      } else {
-        console.warn(
-          `[SCALP BROKER SL SKIP] reason=candidate_not_better phase=BE positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} side=${dir} requestedBESL=${requestedBe} beN=${beN} currentBrokerSL=${liveSl ?? "none"} curBe=${curBe} compare=${dir === "BUY" ? "need_beN>=curBe_be_sync" : "need_beN<=curBe_be_sync"}`,
-        );
-      }
-    } else if (
-      oldPeak != null &&
-      Number.isFinite(oldPeak) &&
-      peak !== oldPeak
-    ) {
-      console.log(
-        `[SCALP TRAIL PEAK] symbol=${position.symbol} oldPeak=${oldPeak} newPeak=${peak} exitLevel=${exitLevel}`,
-      );
-      await this.prisma.position.update({
-        where: { id: position.id },
-        data: { currentPrice: mark },
-      });
-    }
-
-    // Chase Capital SL to peak ± 0.3 pip (NOT capitalSafeTrailDistance)
-    const trailCandidate = trailCandidatePreview;
-    const curN = liveSl != null ? Number(liveSl) : NaN;
-    const candN = Number(trailCandidate);
-    const improvesBroker = scalpBrokerStopShouldMove({
+    const improves = scalpBrokerStopShouldMove({
       direction: dir,
-      candidate: candN,
+      candidate: candidateSL,
       current: liveSl,
       mode: "improve_only",
     });
-    if (improvesBroker && Number.isFinite(candN)) {
-      await this.pushScalpBrokerStop({
-        position,
-        dir,
-        mark,
-        peak,
-        requestedSl: trailCandidate,
-        previousSl: liveSl,
-        correlationId,
-        brokerStopLoss,
-        reason: "TRAIL",
-      });
-    } else {
-      const equal =
-        Number.isFinite(curN) && Number.isFinite(candN) && candN === curN;
-      const reason = !Number.isFinite(candN)
-        ? "candidate_invalid"
-        : equal
-          ? "no_change"
-          : "candidate_not_better";
-      console.warn(
-        `[SCALP BROKER SL SKIP] reason=${reason} phase=CHASE positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} side=${dir} candidateSL=${trailCandidate} candN=${candN} currentBrokerSL=${liveSl ?? "none"} curN=${curN} compare=${dir === "BUY" ? "need_candN>curN" : "need_candN<curN"}`,
-      );
-    }
-
-    // Soft exit remains primary (even if broker SL is lagging)
-    if (
-      !scalpSoftExitHit(dir, mark, exitLevel) ||
-      this.softExitBusy.has(position.id)
-    ) {
+    if (!improves) {
       return;
     }
 
-    this.softExitBusy.add(position.id);
-    try {
-      const retrace = Math.abs(peak - mark);
-      console.log(
-        `[SCALP TRAIL EXIT] symbol=${position.symbol} side=${dir} peak=${peak} currentPrice=${mark} softExitLevel=${exitLevel} retracement=${retrace} reason=SCALP_10S_SOFT_TRAIL`,
-      );
-      await this.notifications.create({
-        organizationId: position.organizationId,
-        userId: null,
-        title: "SCALP TRAIL EXIT",
-        body: `${position.symbol} ${dir}: mark ${mark} hit softExit ${exitLevel} (peak ${peak})`,
-        severity: "WARNING",
-      });
-      await this.close(
-        position.organizationId,
-        "system",
-        position.id,
-        { clientRequestId: newId() },
-        correlationId,
-      );
-      this.peakFavorable.delete(position.id);
-      this.chaseFailNotifyAt.delete(position.id);
-    } catch (closeErr) {
-      console.warn(
-        `scalp soft trail exit ${position.id}:`,
-        closeErr instanceof Error ? closeErr.message : closeErr,
-      );
-      await this.notifications.create({
-        organizationId: position.organizationId,
-        userId: null,
-        title: "SCALP TRAIL EXIT FAILED",
-        body: `${position.symbol}: ${
-          closeErr instanceof Error ? closeErr.message : String(closeErr)
-        }`,
-        severity: "CRITICAL",
-      });
-    } finally {
-      this.softExitBusy.delete(position.id);
-    }
+    await this.pushScalpFixedBrokerStop({
+      position,
+      dir,
+      mark,
+      requestedSl: candidateSL,
+      previousSl: liveSl,
+      correlationId,
+      brokerStopLoss,
+    });
   }
 
   /**
-   * Push Capital stopLevel for 10s SCALPING — raw soft level, no Capital floor.
-   * On reject: log and keep previous SL; soft trail continues.
+   * Push Capital stopLevel for 10s SCALPING fixed trail — raw candidate, no 0.50 floor.
    */
-  private async pushScalpBrokerStop(input: {
+  private async pushScalpFixedBrokerStop(input: {
     position: {
       id: string;
       organizationId: string;
@@ -1134,53 +938,36 @@ export class PositionsService {
     };
     dir: "BUY" | "SELL";
     mark: number;
-    peak: number;
     requestedSl: string;
     previousSl: string | null;
     correlationId: string;
     brokerStopLoss: Map<string, string>;
-    reason: "BE" | "TRAIL";
   }): Promise<void> {
     const {
       position,
-      dir,
       mark,
-      peak,
       requestedSl,
       previousSl,
       correlationId,
       brokerStopLoss,
-      reason,
     } = input;
-    const chaseReason = reason === "BE" ? "BE" : "CHASE";
-    const reqN = Number(requestedSl);
 
     if (!position.brokerPositionId) {
       console.warn(
-        `[SCALP BROKER SL SKIP] reason=missing_broker_position_id positionId=${position.id} symbol=${position.symbol} side=${dir} requestedSL=${requestedSl} phase=${chaseReason}`,
+        `[SCALP FIXED SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_broker_position_id requestedSL=${requestedSl} positionId=${position.id}`,
       );
       return;
     }
     if (!this.brokers.get(position.accountId)) {
       console.warn(
-        `[SCALP BROKER SL SKIP] reason=missing_adapter positionId=${position.id} brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} accountId=${position.accountId} phase=${chaseReason}`,
-      );
-      return;
-    }
-    if (!Number.isFinite(reqN)) {
-      console.warn(
-        `[SCALP BROKER SL SKIP] reason=candidate_invalid positionId=${position.id} brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} requestedSL=${requestedSl} phase=${chaseReason}`,
+        `[SCALP FIXED SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_adapter requestedSL=${requestedSl} positionId=${position.id}`,
       );
       return;
     }
 
-    console.log(
-      `[SCALP BROKER SL REQUEST] brokerPositionId=${position.brokerPositionId} positionId=${position.id} symbol=${position.symbol} side=${dir} currentSL=${previousSl ?? "none"} requestedSL=${requestedSl} currentPrice=${mark} reason=${chaseReason} peak=${peak}`,
-    );
+    console.log(`[SCALP FIXED SL REQUEST] requestedSL=${requestedSl}`);
 
     try {
-      // modifySlTp → adapter.modifyPosition({ brokerPositionId, stopLoss })
-      // Capital PUT /api/v1/positions/{brokerPositionId} with stopLevel
       const after = await this.modifySlTp(
         position.organizationId,
         "system",
@@ -1199,34 +986,19 @@ export class PositionsService {
         data: {
           stopLoss: returned,
           currentPrice: mark,
-          ...(reason === "BE" ? { breakEvenActivatedAt: new Date() } : {}),
+          trailingEnabled: true,
+          trailingDistance: SCALP_FIXED_SL_DISTANCE.toFixed(8),
+          trailingActivatedAt: new Date(),
         },
       });
       console.log(
-        `[SCALP BROKER SL RESPONSE] accepted=true httpStatus=200 errorReason=none brokerReturnedSL=${returned} brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} requestedSL=${requestedSl} reason=${chaseReason}`,
-      );
-      console.log(
-        `[SCALP BROKER SL MOVE] symbol=${position.symbol} side=${dir} currentPrice=${mark} peak=${peak} requestedSL=${requestedSl} previousSL=${previousSl ?? "none"} brokerReturnedSL=${returned} accepted=true reason=${reason}`,
+        `[SCALP FIXED SL RESPONSE] accepted=true brokerReturnedSL=${returned} errorReason=none`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const httpStatus =
-        err instanceof AppError
-          ? err.getStatus()
-          : err &&
-              typeof err === "object" &&
-              "getStatus" in err &&
-              typeof (err as { getStatus: () => number }).getStatus ===
-                "function"
-            ? (err as { getStatus: () => number }).getStatus()
-            : "unknown";
       console.warn(
-        `[SCALP BROKER SL RESPONSE] accepted=false httpStatus=${httpStatus} errorReason=${msg} brokerReturnedSL=none brokerPositionId=${position.brokerPositionId} symbol=${position.symbol} requestedSL=${requestedSl} reason=${chaseReason}`,
+        `[SCALP FIXED SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=${msg}`,
       );
-      console.warn(
-        `[SCALP BROKER SL REJECTED] symbol=${position.symbol} side=${dir} requestedSL=${requestedSl} currentPrice=${mark} previousSL=${previousSl ?? "none"} errorReason=${msg}`,
-      );
-      // Soft trail keeps running; do not widen soft distance to Capital min
     }
   }
 
@@ -1437,7 +1209,7 @@ export class PositionsService {
           });
         }
 
-        // Heal 10s SCALPING flags only (soft trail distance). Other TFs untouched.
+        // Heal 10s SCALPING flags only (fixed 0.0100 trail distance). Other TFs untouched.
         if (position.strategyId) {
           const stHeal = await this.prisma.strategy.findFirst({
             where: { id: position.strategyId },
@@ -1447,55 +1219,22 @@ export class PositionsService {
             timeframe?: string;
           };
           if (isTenSecondScalpingMode(stHeal?.mode, healCfg)) {
-            const autoHeal = modeAutoExit(StrategyMode.SCALPING)!;
             const needTrail =
-              !position.trailingEnabled || position.trailingDistance == null;
-            const needBe =
-              !position.breakEvenEnabled || position.breakEvenActivation == null;
-            if (needTrail || needBe) {
-              const trailDist = scalpSoftTrailDistancePrice(
-                position.symbol,
-                autoHeal.trailingDistancePips,
-              );
-              const beMoney = String(autoHeal.breakEvenActivationMoney ?? 0.05);
-              const beOff = String(
-                resolveScalpActivationDistance(
-                  position.symbol,
-                  autoHeal.breakEvenOffsetPips,
-                ),
-              );
+              !position.trailingEnabled ||
+              position.trailingDistance == null ||
+              Number(position.trailingDistance) !== SCALP_FIXED_SL_DISTANCE;
+            if (needTrail) {
+              const trailDist = SCALP_FIXED_SL_DISTANCE;
               await this.prisma.position.update({
                 where: { id: position.id },
                 data: {
-                  ...(needBe
-                    ? {
-                        breakEvenEnabled: true,
-                        breakEvenActivation: beMoney,
-                        breakEvenOffset: beOff,
-                      }
-                    : {}),
-                  ...(needTrail
-                    ? {
-                        trailingEnabled: true,
-                        trailingDistance: trailDist.toFixed(8),
-                        // NEVER stamp trailingActivatedAt here — £0.05 only
-                      }
-                    : {}),
+                  trailingEnabled: true,
+                  trailingDistance: trailDist.toFixed(8),
                 },
               });
-              // Mutate local row so this tick uses healed flags (Decimal fields as any)
-              if (needBe) {
-                (position as { breakEvenEnabled: boolean }).breakEvenEnabled =
-                  true;
-                (position as { breakEvenActivation: unknown }).breakEvenActivation =
-                  beMoney;
-                (position as { breakEvenOffset: unknown }).breakEvenOffset = beOff;
-              }
-              if (needTrail) {
-                (position as { trailingEnabled: boolean }).trailingEnabled = true;
-                (position as { trailingDistance: unknown }).trailingDistance =
-                  trailDist.toFixed(8);
-              }
+              (position as { trailingEnabled: boolean }).trailingEnabled = true;
+              (position as { trailingDistance: unknown }).trailingDistance =
+                trailDist.toFixed(8);
             }
           }
         }
@@ -1669,7 +1408,7 @@ export class PositionsService {
           ) {
             moneyTrigger = cfg.breakEvenActivationMoney;
           }
-          // 10s SCALPING BE is inside chaseScalpTrailFromMoneyHit (no Capital floor)
+          // 10s SCALPING SL chase is fixed 0.0100 path (skip Capital-safe BE)
           skipGenericBe = isTenSecondScalpingMode(st?.mode, cfg);
         }
         const moneyHit =
@@ -1717,7 +1456,7 @@ export class PositionsService {
         let fresh = await this.get(position.organizationId, position.id);
         if (fresh.status === "CLOSED") continue;
 
-        // Force 10s SCALPING trail flags (enabled/distance only — never ActivatedAt)
+        // Force 10s SCALPING trail flags (fixed 0.0100 distance)
         if (
           (!fresh.trailingEnabled || fresh.trailingDistance == null) &&
           fresh.strategyId
@@ -1730,22 +1469,17 @@ export class PositionsService {
             timeframe?: string;
           };
           if (isTenSecondScalpingMode(stForce?.mode, forceCfg)) {
-            const autoF = modeAutoExit(StrategyMode.SCALPING)!;
-            const td = scalpSoftTrailDistancePrice(
-              position.symbol,
-              autoF.trailingDistancePips,
-            );
             fresh = await this.prisma.position.update({
               where: { id: position.id },
               data: {
                 trailingEnabled: true,
-                trailingDistance: td.toFixed(8),
+                trailingDistance: SCALP_FIXED_SL_DISTANCE.toFixed(8),
               },
             });
           }
         }
 
-        // 10s SCALPING: enable flags in profit, but do NOT activate soft trail here
+        // 10s SCALPING: enable fixed-trail flags in profit
         if (
           !fresh.trailingEnabled &&
           inProfit &&
@@ -1757,25 +1491,19 @@ export class PositionsService {
           });
           const pCfg = (stP?.configurationJson ?? {}) as { timeframe?: string };
           if (isTenSecondScalpingMode(stP?.mode, pCfg)) {
-            const autoP = modeAutoExit(StrategyMode.SCALPING)!;
-            const td = scalpSoftTrailDistancePrice(
-              position.symbol,
-              autoP.trailingDistancePips,
-            );
             fresh = await this.prisma.position.update({
               where: { id: position.id },
               data: {
                 trailingEnabled: true,
-                trailingDistance: td.toFixed(8),
+                trailingDistance: SCALP_FIXED_SL_DISTANCE.toFixed(8),
               },
             });
           }
         }
 
         // ═══════════════════════════════════════════════════════════
-        // 10s SCALPING soft trail — ONLY path that may arm/exit for this mode.
+        // 10s SCALPING fixed 0.0100 live-price SL chase.
         // Always continue afterward so capitalSafeTrailDistance is unreachable.
-        // inProfit / armThreshold=0 / trailArmImmediate cannot bypass £0.05.
         // ═══════════════════════════════════════════════════════════
         {
           let mode: string | null = null;
@@ -1790,42 +1518,14 @@ export class PositionsService {
               stTrail?.configurationJson as { timeframe?: string } | null
             )?.timeframe;
           }
-          // Re-read activation flag after heal/force (must not invent ActivatedAt)
-          const freshForArm = await this.prisma.position.findFirst({
-            where: { id: position.id },
-            select: { trailingActivatedAt: true },
-          });
-          const decision = decideScalpSoftTrailArm({
-            mode,
-            timeframe,
-            moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
-            softTrailActivatedAt:
-              freshForArm?.trailingActivatedAt ?? position.trailingActivatedAt,
-            moneyArm: PositionsService.SCALP_MONEY_ARM,
-          });
-          if (decision.isTenSecondScalping) {
-            if (decision.run) {
-              await this.chaseScalpTrailFromMoneyHit({
-                position: {
-                  ...position,
-                  trailingActivatedAt:
-                    freshForArm?.trailingActivatedAt ??
-                    position.trailingActivatedAt,
-                },
-                mark,
-                entry,
-                dir,
-                moneyPnl: Number.isFinite(moneyPnl) ? moneyPnl : 0,
-                correlationId,
-                brokerStopLoss,
-                mode,
-                timeframe,
-              });
-            } else {
-              console.warn(
-                `[SCALP BROKER SL SKIP] reason=not_armed positionId=${position.id} brokerPositionId=${position.brokerPositionId ?? "none"} symbol=${position.symbol} mode=${mode ?? "null"} timeframe=${timeframe ?? "null"} pnl=${Number.isFinite(moneyPnl) ? moneyPnl : "NaN"} decisionReason=${decision.reason}`,
-              );
-            }
+          if (isTenSecondScalpingMode(mode, { timeframe })) {
+            await this.chaseScalpFixedPriceStop({
+              position,
+              mark,
+              dir,
+              correlationId,
+              brokerStopLoss,
+            });
             // CRITICAL: never fall into generic broker trail (Capital 0.50 floor)
             continue;
           }

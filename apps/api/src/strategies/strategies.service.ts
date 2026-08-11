@@ -14,7 +14,7 @@ import {
   isTenSecondScalpingMode,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, scalpSoftTrailDistancePrice } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, SCALP_FIXED_SL_DISTANCE } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -1063,11 +1063,11 @@ export class StrategiesService {
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
     // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
     const priceOffset = config.priceOffsetMode === true;
-    // Arm at entry only when explicitly requested — 10s SCALPING soft trail
-    // arms only at floatingPnL ≥ £0.05 (never via trailArmImmediate).
+    // Arm at entry only when explicitly requested — 10s SCALPING uses fixed
+    // 0.0100 live-price SL chase (no £0.05 soft arm).
     const trailImmediate =
       config.trailArmImmediate === true || auto?.trailArmImmediate === true;
-    const is10sScalpSoft = isTenSecondScalpingMode(strategyMode, config);
+    const is10sScalpFixed = isTenSecondScalpingMode(strategyMode, config);
 
     for (const pos of open) {
       // Never overwrite manual trades that belong to another strategy
@@ -1093,7 +1093,7 @@ export class StrategiesService {
     // Arm trail flags, but do NOT stamp trailingActivatedAt until Capital has
     // a visible stopLevel — otherwise autoManage hammers soft trail modifies
     // on a naked chart and starves the API (Internal Server Error toasts).
-    // 10s SCALPING: NEVER stamp trailingActivatedAt here — £0.05 soft arm only.
+    // 10s SCALPING: fixed 0.0100 distance; ActivatedAt set on first successful chase.
     const hasBrokerSl =
       pos.stopLoss != null && String(pos.stopLoss).trim().length > 0;
     await this.prisma.position.update({
@@ -1105,12 +1105,12 @@ export class StrategiesService {
         breakEvenOffset: beEnabled ? beOff.toFixed(8) : null,
         trailingEnabled: trailEnabled,
         trailingDistance: trailEnabled
-          ? is10sScalpSoft
-            ? scalpSoftTrailDistancePrice(pos.symbol, trailPips).toFixed(8)
+          ? is10sScalpFixed
+            ? SCALP_FIXED_SL_DISTANCE.toFixed(8)
             : trail.toFixed(8)
           : null,
         trailingActivatedAt:
-          trailEnabled && trailImmediate && hasBrokerSl && !is10sScalpSoft
+          trailEnabled && trailImmediate && hasBrokerSl && !is10sScalpFixed
             ? new Date()
             : null,
       },
