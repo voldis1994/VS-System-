@@ -208,10 +208,10 @@ export class AccountsService {
       const health = await adapter.healthCheck();
       let state = await adapter.getAccountState();
 
-      // Auto-switch to richest CFD only when none pinned yet (never steal another desk bind)
+      // Prefer desk-pinned CFD over whatever health currently sees (audit H8)
       let boundExternal =
-        (health.details?.externalAccountId as string | undefined) ??
         account.externalAccountId ??
+        (health.details?.externalAccountId as string | undefined) ??
         null;
       if (
         account.provider === "CAPITAL" &&
@@ -431,12 +431,15 @@ export class AccountsService {
       }
     }
     await this.brokers.persistState(id);
-    const resolvedExternal =
-      (typeof adapter.healthCheck === "function"
+    // Keep desk pin stable — only fill externalAccountId when still empty (H8)
+    const healthExt =
+      typeof adapter.healthCheck === "function"
         ? ((await adapter.healthCheck()).details?.externalAccountId as
             | string
             | undefined)
-        : undefined) ?? account.externalAccountId;
+        : undefined;
+    const resolvedExternal =
+      account.externalAccountId || healthExt || undefined;
     const updated = await this.prisma.tradingAccount.update({
       where: { id },
       data: {
@@ -446,7 +449,7 @@ export class AccountsService {
         usedMargin: state.usedMargin,
         marginLevel: state.marginLevel,
         connectionStatus: "CONNECTED",
-        ...(resolvedExternal
+        ...(resolvedExternal && !account.externalAccountId
           ? { externalAccountId: String(resolvedExternal) }
           : {}),
       },

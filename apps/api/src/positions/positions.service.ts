@@ -183,21 +183,14 @@ export class PositionsService {
       const liveIds = new Set(
         live.map((x) => x.brokerPositionId).filter(Boolean),
       );
-      // Empty snapshot is ambiguous (API glitch) — require 3 consecutive empties
+      // Empty snapshot is ambiguous (wrong CFD / API glitch) — NEVER ghost-close
+      // on empty lists. Only close when broker returned a non-empty book that
+      // simply does not contain this dealId (audit C5).
       if (live.length === 0 && positions.length > 0) {
-        const n = (this.emptyBrokerSnapshots.get(accId) ?? 0) + 1;
-        this.emptyBrokerSnapshots.set(accId, n);
-        if (n < 3) {
-          console.warn(
-            `reconcileClosedAgainstBroker ${accId}: empty broker list (${n}/3) — skip ghost close`,
-          );
-          continue;
-        }
         console.warn(
-          `reconcileClosedAgainstBroker ${accId}: empty broker list ×${n} — closing local ghosts`,
+          `reconcileClosedAgainstBroker ${accId}: empty broker list — skip ghost close`,
         );
-      } else {
-        this.emptyBrokerSnapshots.set(accId, 0);
+        continue;
       }
       for (const p of positions) {
         if (!p.brokerPositionId) continue;
@@ -270,18 +263,12 @@ export class PositionsService {
       } catch {
         continue;
       }
-      // Same empty-snapshot guard as reconcile — UI list must not mass-close
+      // Same empty-snapshot guard as reconcile — NEVER mass-close on empty
       if (live.length === 0 && accountPositions.length > 0) {
-        const n = (this.emptyBrokerSnapshots.get(accountId) ?? 0) + 1;
-        this.emptyBrokerSnapshots.set(accountId, n);
-        if (n < 3) {
-          console.warn(
-            `positions.list ${accountId}: empty broker list (${n}/3) — skip ghost close`,
-          );
-          continue;
-        }
-      } else {
-        this.emptyBrokerSnapshots.set(accountId, 0);
+        console.warn(
+          `positions.list ${accountId}: empty broker list — skip ghost close`,
+        );
+        continue;
       }
       const liveById = new Map(
         live
@@ -300,12 +287,19 @@ export class PositionsService {
               currentPrice: match.currentPrice,
               unrealizedPnl: match.unrealizedPnl,
               volume: match.volume,
-              stopLoss: match.stopLoss,
-              takeProfit: match.takeProfit,
+              // Clear stale DB SL when Capital chart is naked (audit H6)
+              stopLoss:
+                match.stopLoss != null && String(match.stopLoss).length > 0
+                  ? match.stopLoss
+                  : null,
+              takeProfit:
+                match.takeProfit != null && String(match.takeProfit).length > 0
+                  ? match.takeProfit
+                  : null,
               status: match.status as never,
             },
           });
-        } else if (live.length > 0 || (this.emptyBrokerSnapshots.get(accountId) ?? 0) >= 3) {
+        } else if (live.length > 0) {
           await this.prisma.position.update({
             where: { id: p.id },
             data: {
@@ -322,11 +316,36 @@ export class PositionsService {
         if (!bp.brokerPositionId || seenLocal.has(bp.brokerPositionId)) continue;
         const symbol = String(bp.symbol ?? "").trim();
         if (!symbol) continue;
+        // Deduplicate — no unique constraint on brokerPositionId (audit C6)
+        const existing = await this.prisma.position.findFirst({
+          where: {
+            accountId,
+            brokerPositionId: bp.brokerPositionId,
+            status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+          },
+        });
+        if (existing) {
+          seenLocal.add(bp.brokerPositionId);
+          continue;
+        }
+        // Attach recent STRATEGY order on this account/symbol if any (audit H5)
+        const recentStrategy = await this.prisma.order.findFirst({
+          where: {
+            accountId,
+            symbol,
+            strategyId: { not: null },
+            status: { in: ["FILLED", "PARTIALLY_FILLED", "ACCEPTED"] },
+            createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
+          },
+          orderBy: { createdAt: "desc" },
+          select: { strategyId: true, id: true },
+        });
         await this.prisma.position.create({
           data: {
             organizationId,
             accountId,
             brokerPositionId: bp.brokerPositionId,
+            orderId: recentStrategy?.id ?? undefined,
             symbol,
             direction: bp.direction as never,
             volume: bp.volume,
@@ -337,13 +356,12 @@ export class PositionsService {
             takeProfit: bp.takeProfit ?? null,
             unrealizedPnl: bp.unrealizedPnl,
             realizedPnl: bp.realizedPnl ?? "0",
-            commission: bp.commission ?? "0",
-            swap: bp.swap ?? "0",
             status: "OPEN",
-            source: "SYSTEM",
-            openedAt: bp.openedAt ? new Date(bp.openedAt) : new Date(),
+            source: recentStrategy?.strategyId ? "STRATEGY" : "SYSTEM",
+            strategyId: recentStrategy?.strategyId ?? null,
           },
         });
+        seenLocal.add(bp.brokerPositionId);
       }
     }
 
@@ -1232,13 +1250,8 @@ export class PositionsService {
             )?.timeframe;
           }
           if (isTenSecondScalpingMode(mode, { timeframe })) {
-            if (
-              !brokerStopLoss.has(position.id) &&
-              position.stopLoss != null &&
-              String(position.stopLoss).trim().length > 0
-            ) {
-              brokerStopLoss.set(position.id, String(position.stopLoss));
-            }
+            // Do NOT seed brokerStopLoss from stale DB SL — that made chase
+            // think Capital already had the stop when the chart was naked (H6).
             if (
               !position.trailingEnabled ||
               position.trailingDistance == null ||

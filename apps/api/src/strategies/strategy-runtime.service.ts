@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import {
   DomainEventType,
   OrderDirection,
+  OrderStatus,
   OrderType,
   StrategyMode,
   VolumeMode,
@@ -868,8 +869,32 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             OR: [{ symbol: brokerSymbol }, { symbol }],
           },
         });
+        // Do NOT clear fingerprint while a recent fill still lacks a Position
+        // row (broker_ok_position_pending) — that re-armed same-side spam (H3).
         if (openCount === 0) {
-          this.lastFingerprint.delete(key);
+          const recentFilledOrphan = await this.prisma.order.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              strategyId: strategy.id,
+              symbol: brokerSymbol,
+              status: {
+                in: [
+                  OrderStatus.FILLED,
+                  OrderStatus.PARTIALLY_FILLED,
+                  OrderStatus.ACCEPTED,
+                  OrderStatus.SENT,
+                  OrderStatus.VALIDATING,
+                  OrderStatus.QUEUED,
+                ],
+              },
+              createdAt: { gte: new Date(Date.now() - 60_000) },
+              positions: { none: {} },
+            },
+          });
+          if (recentFilledOrphan === 0) {
+            this.lastFingerprint.delete(key);
+          }
         }
 
         const lastAt = this.lastSignalAt.get(key) ?? 0;
@@ -921,6 +946,49 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           (p) => p.symbol === brokerSymbol || p.symbol === symbol,
         );
         const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
+
+        // oneTradeOnly: block while an order is in-flight OR FILLED without a
+        // Position row yet (audit C4/H3 — prevents second Capital deal).
+        if (oneTradeOnly) {
+          const inflightOnSymbol = await this.prisma.order.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              strategyId: strategy.id,
+              symbol: brokerSymbol,
+              OR: [
+                {
+                  status: {
+                    in: [
+                      OrderStatus.VALIDATING,
+                      OrderStatus.QUEUED,
+                      OrderStatus.SENT,
+                      OrderStatus.ACCEPTED,
+                      OrderStatus.PARTIALLY_FILLED,
+                    ],
+                  },
+                },
+                {
+                  status: OrderStatus.FILLED,
+                  createdAt: { gte: new Date(Date.now() - 120_000) },
+                  positions: { none: {} },
+                },
+              ],
+            },
+          });
+          if (inflightOnSymbol > 0 && openOnSymbol.length === 0) {
+            lastStatus = {
+              ...lastStatus,
+              skip: "waiting_open_close",
+              reason: "account_has_inflight_order",
+              openTrades: inflightOnSymbol,
+              accountId,
+              signal,
+              symbol: brokerSymbol,
+            };
+            continue;
+          }
+        }
 
         // SCALPING: while any trade is open on this symbol — do nothing.
         // No flip, no opposite close, no second order. Trail/SL owns the exit.

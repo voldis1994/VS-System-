@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   OrderDirection,
   OrderStatus,
@@ -105,10 +106,18 @@ export class CapitalComAdapter implements BrokerAdapter {
     {
       tokens: { cst: string; securityToken: string } | null;
       activeExternalId: string;
+      /** Shared idle clock — one adapter's traffic keeps siblings warm (audit H7). */
+      lastActivityAt: number;
       tail: Promise<unknown>;
-      depth: number;
     }
   >();
+
+  /**
+   * Reentrancy is per async call-stack only (AsyncLocalStorage).
+   * NEVER use a shared depth counter — that let sibling VS adapters barge
+   * into an in-flight place/modify and steal the CST session (audit C1).
+   */
+  private static readonly loginLockOwner = new AsyncLocalStorage<true>();
 
   private loginKey(): string {
     return `${this.baseUrl}\0${this.apiKey}\0${this.identifier}`;
@@ -121,8 +130,8 @@ export class CapitalComAdapter implements BrokerAdapter {
       s = {
         tokens: null,
         activeExternalId: "",
+        lastActivityAt: 0,
         tail: Promise.resolve(),
-        depth: 0,
       };
       CapitalComAdapter.sharedByLogin.set(key, s);
     }
@@ -132,17 +141,38 @@ export class CapitalComAdapter implements BrokerAdapter {
   private pullSharedTokens() {
     const s = this.sharedState();
     if (s.tokens) this.tokens = { ...s.tokens };
+    if (s.lastActivityAt > this.lastActivityAt) {
+      this.lastActivityAt = s.lastActivityAt;
+    }
   }
 
   private pushSharedTokens() {
     const s = this.sharedState();
     if (this.tokens) s.tokens = { ...this.tokens };
+    if (this.lastActivityAt > s.lastActivityAt) {
+      s.lastActivityAt = this.lastActivityAt;
+    }
   }
 
-  /** Serialize Capital ops for this login (all CFD sub-accounts). Reentrant. */
-  private async withLoginLock<T>(fn: () => Promise<T>): Promise<T> {
+  private clearSharedSession() {
     const s = this.sharedState();
-    if (s.depth > 0) {
+    s.tokens = null;
+    s.activeExternalId = "";
+    s.lastActivityAt = 0;
+  }
+
+  private touchActivity() {
+    const now = Date.now();
+    this.lastActivityAt = now;
+    this.sharedState().lastActivityAt = now;
+  }
+
+  /**
+   * Serialize Capital ops for this login (all CFD sub-accounts).
+   * Reentrant only inside the same async context that already holds the lock.
+   */
+  private async withLoginLock<T>(fn: () => Promise<T>): Promise<T> {
+    if (CapitalComAdapter.loginLockOwner.getStore()) {
       this.pullSharedTokens();
       try {
         return await fn();
@@ -150,6 +180,7 @@ export class CapitalComAdapter implements BrokerAdapter {
         this.pushSharedTokens();
       }
     }
+    const s = this.sharedState();
     let release!: () => void;
     const gate = new Promise<void>((r) => {
       release = r;
@@ -160,13 +191,11 @@ export class CapitalComAdapter implements BrokerAdapter {
       () => gate,
     );
     await prev.catch(() => undefined);
-    s.depth = 1;
     try {
       this.pullSharedTokens();
-      return await fn();
+      return await CapitalComAdapter.loginLockOwner.run(true, fn);
     } finally {
       this.pushSharedTokens();
-      s.depth = 0;
       release();
     }
   }
@@ -248,13 +277,22 @@ export class CapitalComAdapter implements BrokerAdapter {
     this.stopMarketStream();
     try {
       if (this.tokens) {
-        await this.request("DELETE", "/api/v1/session");
+        await this.withLoginLock(async () => {
+          this.pullSharedTokens();
+          if (this.tokens) {
+            await this.request("DELETE", "/api/v1/session");
+          }
+          this.tokens = null;
+          this.clearSharedSession();
+        });
+      } else {
+        this.clearSharedSession();
       }
     } catch {
-      // ignore
+      this.tokens = null;
+      this.clearSharedSession();
     }
     this.connected = false;
-    this.tokens = null;
     this.lastActivityAt = 0;
     this.invalidatePositionsCache();
   }
@@ -262,20 +300,22 @@ export class CapitalComAdapter implements BrokerAdapter {
   async healthCheck(): Promise<BrokerHealth> {
     const started = Date.now();
     try {
-      await this.ensureSession();
-      await this.ensureActiveAccount();
-      await this.request("GET", "/api/v1/session");
-      this.lastHeartbeatAt = toUtcIso();
-      return {
-        healthy: this.connected,
-        latencyMs: Date.now() - started,
-        lastHeartbeatAt: this.lastHeartbeatAt,
-        details: {
-          provider: "CAPITAL",
-          externalAccountId: this.externalAccountId,
-          targetExternalAccountId: this.targetExternalAccountId,
-        },
-      };
+      return await this.withLoginLock(async () => {
+        await this.ensureSession();
+        await this.ensureActiveAccount();
+        await this.request("GET", "/api/v1/session");
+        this.lastHeartbeatAt = toUtcIso();
+        return {
+          healthy: this.connected,
+          latencyMs: Date.now() - started,
+          lastHeartbeatAt: this.lastHeartbeatAt,
+          details: {
+            provider: "CAPITAL",
+            externalAccountId: this.externalAccountId,
+            targetExternalAccountId: this.targetExternalAccountId,
+          },
+        };
+      });
     } catch (err) {
       return {
         healthy: false,
@@ -317,89 +357,97 @@ export class CapitalComAdapter implements BrokerAdapter {
   async bindCapitalAccount(externalAccountId: string): Promise<string> {
     const id = String(externalAccountId ?? "").trim();
     if (!id) throw new Error("externalAccountId required");
-    await this.ensureSession();
-    this.targetExternalAccountId = id;
-    await this.switchSessionAccount(id);
-    this.externalAccountId = id;
-    this.invalidatePositionsCache();
-    return id;
+    return this.withLoginLock(async () => {
+      await this.ensureSession();
+      this.targetExternalAccountId = id;
+      await this.switchSessionAccount(id);
+      this.externalAccountId = id;
+      this.sharedState().activeExternalId = id;
+      this.invalidatePositionsCache();
+      return id;
+    });
   }
 
   async getAccountState(): Promise<BrokerAccountState> {
-    await this.ensureSession();
-    await this.ensureActiveAccount();
+    return this.withLoginLock(async () => {
+      await this.ensureSession();
+      await this.ensureActiveAccount();
 
-    // GET /session often has no accountInfo — balance lives on GET /accounts
-    const accountsRes = await this.request<{
-      accounts?: Array<{
-        accountId: string;
-        preferred?: boolean;
-        currency?: string;
-        balance?: {
-          balance?: number;
-          deposit?: number;
-          profitLoss?: number;
-          available?: number;
-        };
-      }>;
-    }>("GET", "/api/v1/accounts");
-
-    const list = accountsRes.accounts ?? [];
-    const target = this.targetExternalAccountId || this.externalAccountId;
-    const selected =
-      pickBestCapitalSubAccount(list, target) ??
-      list.find((a) => a.preferred) ??
-      list[0];
-
-    let bal = selected?.balance;
-    let currency = selected?.currency ?? this.currency;
-
-    // Fallback: POST session body shape sometimes mirrored on GET /session
-    if (!bal || (bal.balance == null && bal.deposit == null)) {
-      try {
-        const session = await this.request<{
-          accountInfo?: {
+      // GET /session often has no accountInfo — balance lives on GET /accounts
+      const accountsRes = await this.request<{
+        accounts?: Array<{
+          accountId: string;
+          preferred?: boolean;
+          currency?: string;
+          balance?: {
             balance?: number;
             deposit?: number;
             profitLoss?: number;
             available?: number;
           };
-          currencyIsoCode?: string;
-          currentAccountId?: string;
-        }>("GET", "/api/v1/session");
-        if (session.accountInfo) {
-          bal = session.accountInfo;
+        }>;
+      }>("GET", "/api/v1/accounts");
+
+      const list = accountsRes.accounts ?? [];
+      const target = this.targetExternalAccountId || this.externalAccountId;
+      const selected =
+        pickBestCapitalSubAccount(list, target) ??
+        list.find((a) => a.preferred) ??
+        list[0];
+
+      let bal = selected?.balance;
+      let currency = selected?.currency ?? this.currency;
+
+      // Fallback: POST session body shape sometimes mirrored on GET /session
+      if (!bal || (bal.balance == null && bal.deposit == null)) {
+        try {
+          const session = await this.request<{
+            accountInfo?: {
+              balance?: number;
+              deposit?: number;
+              profitLoss?: number;
+              available?: number;
+            };
+            currencyIsoCode?: string;
+            currentAccountId?: string;
+          }>("GET", "/api/v1/session");
+          if (session.accountInfo) {
+            bal = session.accountInfo;
+          }
+          currency = session.currencyIsoCode ?? currency;
+        } catch {
+          // keep accounts data
         }
-        currency = session.currencyIsoCode ?? currency;
-      } catch {
-        // keep accounts data
       }
-    }
 
-    // Never silently retarget to preferred — keep pinned CFD account
-    if (selected?.accountId && !this.targetExternalAccountId) {
-      this.externalAccountId = selected.accountId;
-      this.targetExternalAccountId = selected.accountId;
-    }
-    this.currency = currency || this.currency;
+      // Never silently retarget to preferred — keep pinned CFD account
+      if (selected?.accountId && !this.targetExternalAccountId) {
+        this.externalAccountId = selected.accountId;
+        this.targetExternalAccountId = selected.accountId;
+      }
+      if (this.externalAccountId) {
+        this.sharedState().activeExternalId = this.externalAccountId;
+      }
+      this.currency = currency || this.currency;
 
-    const equity = Number(bal?.balance ?? 0);
-    const deposit = Number(bal?.deposit ?? equity);
-    const available = Number(bal?.available ?? equity);
-    const profitLoss = Number(bal?.profitLoss ?? 0);
-    const used = Math.max(0, equity - available);
-    const marginLevel = used > 0 ? (equity / used) * 100 : 0;
+      const equity = Number(bal?.balance ?? 0);
+      const deposit = Number(bal?.deposit ?? equity);
+      const available = Number(bal?.available ?? equity);
+      const profitLoss = Number(bal?.profitLoss ?? 0);
+      const used = Math.max(0, equity - available);
+      const marginLevel = used > 0 ? (equity / used) * 100 : 0;
 
-    return {
-      balance: String(deposit),
-      equity: String(equity),
-      freeMargin: String(available),
-      usedMargin: String(used),
-      marginLevel: marginLevel.toFixed(4),
-      leverage: this.leverage,
-      currency: this.currency,
-      floatingPnl: String(profitLoss),
-    };
+      return {
+        balance: String(deposit),
+        equity: String(equity),
+        freeMargin: String(available),
+        usedMargin: String(used),
+        marginLevel: marginLevel.toFixed(4),
+        leverage: this.leverage,
+        currency: this.currency,
+        floatingPnl: String(profitLoss),
+      };
+    });
   }
 
   async getSymbols(): Promise<BrokerSymbol[]> {
@@ -1007,8 +1055,10 @@ export class CapitalComAdapter implements BrokerAdapter {
       throw err;
     }
 
-    // Empty REJECTED often = wrong CFD sub-account after sibling session steal.
-    // Re-pin account once and verify live positions before giving up.
+    // Empty REJECTED often = wrong CFD / sibling session steal.
+    // Re-pin and look for an already-opened deal — NEVER postMarket again
+    // (blind retry was opening a second live position — audit C4).
+    let matchedVolume: number | undefined;
     if (
       !accepted &&
       (confirm.dealStatus ?? "").toUpperCase() === "REJECTED" &&
@@ -1026,17 +1076,14 @@ export class CapitalComAdapter implements BrokerAdapter {
           accepted = true;
           dealId = match.brokerPositionId;
           fillLevel = Number(match.averageEntry);
-        } else {
-          // One bare retry after re-bind (common when two accounts share login)
-          const retry = await postMarket(usedSize);
-          res = retry.res;
-          confirm = retry.confirm;
-          dealId = confirm.dealId;
-          fillLevel = confirm.level;
-          accepted = isCapitalConfirmAccepted(confirm);
+          const mv = Number(match.volume);
+          if (Number.isFinite(mv) && mv > 0) {
+            matchedVolume = mv;
+            usedSize = mv;
+          }
         }
       } catch {
-        // keep original reject
+        // keep original reject — do not open a second deal
       }
     }
 
@@ -1054,7 +1101,12 @@ export class CapitalComAdapter implements BrokerAdapter {
             richest?.available ?? richest?.balance ?? 0,
           );
           if (richest?.accountId && richestAvail > 0) {
-            await this.bindCapitalAccount(richest.accountId);
+            // Already inside withLoginLock — bindCapitalAccount reenters safely
+            this.targetExternalAccountId = richest.accountId;
+            await this.switchSessionAccount(richest.accountId);
+            this.externalAccountId = richest.accountId;
+            this.sharedState().activeExternalId = richest.accountId;
+            this.invalidatePositionsCache();
             await new Promise((r) => setTimeout(r, 400));
             const attempt = await postMarket(usedSize);
             res = attempt.res;
@@ -1062,6 +1114,7 @@ export class CapitalComAdapter implements BrokerAdapter {
             dealId = confirm.dealId;
             fillLevel = confirm.level;
             accepted = isCapitalConfirmAccepted(confirm);
+            usedSize = attempt.size;
           }
         }
       } catch {
@@ -1080,6 +1133,11 @@ export class CapitalComAdapter implements BrokerAdapter {
         accepted = true;
         dealId = match.brokerPositionId;
         fillLevel = Number(match.averageEntry);
+        const mv = Number(match.volume);
+        if (Number.isFinite(mv) && mv > 0) {
+          matchedVolume = mv;
+          usedSize = mv;
+        }
       }
     }
 
@@ -1117,6 +1175,14 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
+    const fillVolNum =
+      matchedVolume != null && Number.isFinite(matchedVolume) && matchedVolume > 0
+        ? matchedVolume
+        : usedSize;
+    const fillVolStr = Number.isFinite(fillVolNum)
+      ? Number(fillVolNum).toFixed(prec)
+      : sized.sizeStr;
+
     const rejected =
       !accepted && (confirm.dealStatus ?? "").toUpperCase() === "REJECTED";
     const reasonStr = String(confirm.reason ?? "");
@@ -1124,7 +1190,9 @@ export class CapitalComAdapter implements BrokerAdapter {
       accepted,
       brokerOrderId: dealId ?? res.dealReference,
       status: accepted ? OrderStatus.FILLED : OrderStatus.REJECTED,
-      filledVolume: accepted ? sized.sizeStr : "0",
+      // Always report actual/used size — never only the pre-request sized.sizeStr
+      // when match recovery found a different live volume (audit H1).
+      filledVolume: accepted ? fillVolStr : "0",
       averageFillPrice:
         fillLevel != null && Number.isFinite(fillLevel)
           ? String(fillLevel)
@@ -1160,26 +1228,32 @@ export class CapitalComAdapter implements BrokerAdapter {
   }): Promise<BrokerPosition | undefined> {
     const wantEpic = resolveCapitalEpic(input.epic).toUpperCase();
     const wantDir = String(input.direction).toUpperCase();
-    const tol = Math.max(input.size * 0.05, 0.0005);
+    // Near-exact only — 5% tol falsely latched sibling lots (audit H2).
+    const tol = Math.max(input.size * 0.001, 1e-8);
+    const maxAgeMs = 60_000;
+    const now = Date.now();
     for (let attempt = 0; attempt < 4; attempt++) {
       if (attempt > 0) {
         await new Promise((r) => setTimeout(r, 250 * attempt));
       }
       this.invalidatePositionsCache();
-      const open = await this.getOpenPositions({ force: true });
+      // Already under login lock — use locked path to avoid re-queue
+      const open = await this.getOpenPositionsLocked({ force: true });
       const candidates = open
         .filter((p) => {
           const epic = resolveCapitalEpic(p.symbol).toUpperCase();
           if (epic !== wantEpic) return false;
           if (String(p.direction).toUpperCase() !== wantDir) return false;
-          return Math.abs(Number(p.volume) - input.size) <= tol;
+          if (Math.abs(Number(p.volume) - input.size) > tol) return false;
+          const opened = new Date(p.openedAt).getTime();
+          if (Number.isFinite(opened) && now - opened > maxAgeMs) return false;
+          return true;
         })
         .sort(
           (a, b) =>
             new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime(),
         );
       if (candidates[0]) return candidates[0];
-      // Do not latch a different size / unrelated same-side position
     }
     return undefined;
   }
@@ -1661,7 +1735,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     const quote = parseCapitalStreamQuote(raw);
     if (!quote) return;
     this.lastStreamQuoteAt = Date.now();
-    this.lastActivityAt = Date.now();
+    this.touchActivity();
     this.quoteHandler?.(quote);
   }
 
@@ -1707,7 +1781,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     this.tokens = { cst, securityToken };
     this.pushSharedTokens();
     this.lastHeartbeatAt = toUtcIso();
-    this.lastActivityAt = Date.now();
+    this.touchActivity();
     this.invalidatePositionsCache();
     try {
       const body = (await res.json()) as { accountId?: string };
@@ -1804,6 +1878,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       );
       if (current && current === desired) {
         this.externalAccountId = desired;
+        this.sharedState().activeExternalId = desired;
         return;
       }
     } catch {
@@ -1812,6 +1887,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     try {
       await this.request("PUT", "/api/v1/session", { accountId: desired });
       this.externalAccountId = desired;
+      this.sharedState().activeExternalId = desired;
       this.invalidatePositionsCache();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1896,7 +1972,7 @@ export class CapitalComAdapter implements BrokerAdapter {
       const text = await res.text();
       throw new Error(`Capital.com ${method} ${path} failed (${res.status}): ${text}`);
     }
-    this.lastActivityAt = Date.now();
+    this.touchActivity();
     this.lastHeartbeatAt = toUtcIso();
     if (res.status === 204) return {} as T;
     const text = await res.text();

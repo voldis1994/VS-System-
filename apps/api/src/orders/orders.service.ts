@@ -500,8 +500,9 @@ export class OrdersService implements OnModuleInit {
       const fillPx =
         brokerResponse.averageFillPrice ??
         input.entryPrice ??
-        undefined;
-      if (fillPx) {
+        // Never skip Position create when Capital already filled (audit H3)
+        (await this.midPrice(adapter, symbol.brokerSymbol).catch(() => "0"));
+      if (fillPx && Number(fillPx) > 0) {
       position = await this.prisma.position.create({
         data: {
           organizationId,
@@ -564,6 +565,10 @@ export class OrdersService implements OnModuleInit {
           direction: position.direction,
         },
       });
+      } else {
+        this.log.warn(
+          `Order ${filled.id} filled on broker ${brokerResponse.positionId} but no fill price — position row deferred`,
+        );
       }
     }
 
