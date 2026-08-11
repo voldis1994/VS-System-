@@ -522,8 +522,23 @@ export class OrdersService implements OnModuleInit {
           initialVolume: brokerResponse.filledVolume,
           averageEntry: fillPx,
           currentPrice: fillPx,
-          stopLoss: input.stopLoss,
-          takeProfit: input.takeProfit,
+          // Prefer broker-confirmed stopLevel. If adapter omits the field
+          // (paper), fall back to requested. Explicit empty/null → keep null
+          // so naked recovery can see the truth (never fake Capital SL in DB).
+          stopLoss:
+            brokerResponse.stopLoss != null &&
+            String(brokerResponse.stopLoss).length > 0
+              ? String(brokerResponse.stopLoss)
+              : brokerResponse.stopLoss === undefined
+                ? (input.stopLoss ?? null)
+                : null,
+          takeProfit:
+            brokerResponse.takeProfit != null &&
+            String(brokerResponse.takeProfit).length > 0
+              ? String(brokerResponse.takeProfit)
+              : brokerResponse.takeProfit === undefined
+                ? (input.takeProfit ?? null)
+                : null,
           takeProfitsJson: (() => {
             if (!input.takeProfits?.length) return undefined;
             const fill = Number(brokerResponse.filledVolume);

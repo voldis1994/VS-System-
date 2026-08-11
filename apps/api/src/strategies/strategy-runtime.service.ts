@@ -1487,10 +1487,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 trailingActivatedAt: null,
               },
             });
-            // Static SL on fill — must land on Capital, but do NOT block sibling
-            // accounts for ~1s+ of retries (multi-account SCALPING isolation).
-            // One sync attempt here; remaining retries run in background while
-            // the next account can still place on the same tick.
+            // Static SL on fill — MUST be visible on Capital before fill is done.
+            // Adapter prefers stopLevel on placeOrder; this is defense-in-depth.
+            // Sync widen retries only — never background "recovery later" as primary.
             try {
               const fillRow = await this.prisma.position.findFirst({
                 where: { id: positionId },
@@ -1498,6 +1497,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                   currentPrice: true,
                   averageEntry: true,
                   brokerPositionId: true,
+                  stopLoss: true,
                 },
               });
               const fillEntry =
@@ -1508,8 +1508,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 stopDist,
                 capitalMinStopDistance(brokerSymbol),
               );
-              const tryAttach = async (attempt: number) => {
-                const dist = baseDist * (1 + attempt);
+              // orders.service only stamps Capital-confirmed stopLoss (adapter
+              // verified chart visibility). Non-empty ⇒ placeOrder already done.
+              let liveSl =
+                fillRow?.stopLoss != null &&
+                String(fillRow.stopLoss).trim().length > 0
+                  ? String(fillRow.stopLoss)
+                  : "";
+              let lastErr: unknown;
+              for (let attempt = 0; attempt < 6 && !liveSl; attempt++) {
+                const dist = baseDist * (1 + attempt * 0.5);
                 const safeSl = capitalSafeInitialStop({
                   symbol: brokerSymbol,
                   direction: signal,
@@ -1517,78 +1525,67 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                   distance: dist,
                   mark: fillMark,
                 });
-                const after = await this.positions.modifySlTp(
-                  strategy.organizationId,
-                  actorId,
-                  positionId,
-                  {
-                    stopLoss: safeSl,
-                    ...(takeProfit ? { takeProfit } : {}),
-                  },
-                  correlationId,
-                  { silent: true },
-                );
-                const live =
-                  after &&
-                  typeof after === "object" &&
-                  "stopLoss" in after &&
-                  (after as { stopLoss?: string | null }).stopLoss
-                    ? String(
-                        (after as { stopLoss?: string | null }).stopLoss,
-                      )
-                    : "";
-                return live;
-              };
-              let liveSl = "";
-              try {
-                liveSl = await tryAttach(0);
-              } catch {
-                liveSl = "";
+                try {
+                  const after = await this.positions.modifySlTp(
+                    strategy.organizationId,
+                    actorId,
+                    positionId,
+                    {
+                      stopLoss: safeSl,
+                      ...(takeProfit ? { takeProfit } : {}),
+                    },
+                    correlationId,
+                    { silent: true },
+                  );
+                  liveSl =
+                    after &&
+                    typeof after === "object" &&
+                    "stopLoss" in after &&
+                    (after as { stopLoss?: string | null }).stopLoss
+                      ? String(
+                          (after as { stopLoss?: string | null }).stopLoss,
+                        )
+                      : "";
+                  if (liveSl) break;
+                  lastErr = new Error(
+                    `Capital chart still has no stopLevel after attach (${safeSl})`,
+                  );
+                } catch (err) {
+                  lastErr = err;
+                  await new Promise((r) =>
+                    setTimeout(r, 200 + attempt * 150),
+                  );
+                }
               }
               if (!liveSl) {
-                void (async () => {
-                  for (let attempt = 1; attempt < 4; attempt++) {
-                    try {
-                      const got = await tryAttach(attempt);
-                      if (got) {
-                        await this.notifications.create({
-                          organizationId: strategy.organizationId,
-                          userId: actorId === "system" ? null : actorId,
-                          title: "SL ON Capital",
-                          body: `${brokerSymbol} stopLevel ${got} — trail will chase`,
-                          severity: "SUCCESS",
-                        });
-                        return;
-                      }
-                    } catch {
-                      await new Promise((r) =>
-                        setTimeout(r, 200 + attempt * 150),
-                      );
-                    }
-                  }
-                  await this.notifications.create({
-                    organizationId: strategy.organizationId,
-                    userId: actorId === "system" ? null : actorId,
-                    title: "SL attach deferred",
-                    body: `${brokerSymbol}: sync attach missed — recovery tick will retry`,
-                    severity: "WARNING",
-                  });
-                })();
-              } else {
-                await this.notifications.create({
-                  organizationId: strategy.organizationId,
-                  userId: actorId === "system" ? null : actorId,
-                  title: "SL ON Capital",
-                  body: `${brokerSymbol} stopLevel ${liveSl} — trail will chase`,
-                  severity: "SUCCESS",
-                });
+                throw lastErr instanceof Error
+                  ? lastErr
+                  : new Error("Capital SL attach failed after sync retries");
               }
+              await this.notifications.create({
+                organizationId: strategy.organizationId,
+                userId: actorId === "system" ? null : actorId,
+                title: "SL ON Capital",
+                body: `${brokerSymbol} stopLevel ${liveSl} — trail will chase`,
+                severity: "SUCCESS",
+              });
             } catch (attachErr) {
               this.log.warn(
-                `Post-fill SL pending recovery: ${
+                `Post-fill SL FAILED (deal may be unprotected): ${
                   attachErr instanceof Error ? attachErr.message : attachErr
                 }`,
               );
+              await this.notifications.create({
+                organizationId: strategy.organizationId,
+                userId: actorId === "system" ? null : actorId,
+                title: "SL attach FAILED",
+                body: `${brokerSymbol}: ${
+                  attachErr instanceof Error
+                    ? attachErr.message
+                    : "modify failed"
+                } — naked recovery will retry`,
+                severity: "CRITICAL",
+              });
             }
             await this.notifications.create({
               organizationId: strategy.organizationId,

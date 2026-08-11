@@ -558,6 +558,8 @@ export class PaperBrokerAdapter implements BrokerAdapter {
       filledVolume: volume.toFixed(symbol.volumePrecision),
       averageFillPrice: roundedFill.toFixed(symbol.pricePrecision),
       positionId,
+      stopLoss: request.stopLoss,
+      takeProfit: request.takeProfit,
     };
   }
 

@@ -139,6 +139,9 @@ export interface BrokerOrderResponse {
   rejectionCode?: string;
   rejectionMessage?: string;
   positionId?: string;
+  /** Broker-confirmed stopLevel after place (Capital chart SL) */
+  stopLoss?: string;
+  takeProfit?: string;
 }
 
 export interface BrokerModifyPositionRequest {

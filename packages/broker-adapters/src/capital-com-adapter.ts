@@ -1039,31 +1039,73 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
-    // MARKET: open bare (size+direction only). Capital often REJECTS create when
-    // stopLevel violates min distance — EMA/SCALPING tight SL on US100 is typical.
-    // Caller attaches SL/TP via modifyPosition after fill.
+    // MARKET: prefer stopLevel on create so Capital chart is never naked.
+    // If market+SL is rejected (min-distance / ATTACHED_ORDER), open bare then
+    // sync-attach via modifyPosition until stopLevel is visible — never return
+    // "filled" while the chart still shows Stop loss OFF.
     const rules = await this.resolveDealRules(epic);
     const prec = volumePrecisionForStep(rules.step);
-    const baseBody: Record<string, unknown> = {
-      epic,
-      direction: request.direction,
-      size: sized.size,
-    };
     const trailDist = request.stopDistance != null ? Number(request.stopDistance) : NaN;
-    if (request.trailingStop && Number.isFinite(trailDist) && trailDist > 0) {
-      baseBody.trailingStop = true;
-      baseBody.stopDistance = trailDist;
-    }
+    const useNativeTrail =
+      !!request.trailingStop && Number.isFinite(trailDist) && trailDist > 0;
+    const wantProtectiveSl =
+      !useNativeTrail &&
+      !!request.stopLoss &&
+      Number.isFinite(Number(request.stopLoss));
 
-    const postMarket = async (size: number) => {
-      const body = { ...baseBody, size };
+    const entryGuess = (() => {
+      const p = Number(request.price ?? 0);
+      return Number.isFinite(p) && p > 0 ? p : Number(request.stopLoss);
+    })();
+
+    const safeCreateSl = wantProtectiveSl
+      ? capitalSafeInitialStop({
+          symbol: epic,
+          direction: request.direction,
+          entry: entryGuess,
+          distance:
+            Number.isFinite(entryGuess) && entryGuess > 0
+              ? Math.abs(entryGuess - Number(request.stopLoss))
+              : undefined,
+          mark: entryGuess,
+        })
+      : undefined;
+
+    const isStopReject = (reason: string | undefined) => {
+      const r = String(reason ?? "").toUpperCase();
+      return (
+        r.includes("STOP") ||
+        r.includes("ATTACHED") ||
+        r.includes("MINIMUM") ||
+        r.includes("MIN_DISTANCE") ||
+        r.includes("LEVEL") ||
+        r.includes("DISTANCE") ||
+        r.includes("GUARANTEED")
+      );
+    };
+
+    const postMarket = async (size: number, withStops: boolean) => {
+      const body: Record<string, unknown> = {
+        epic,
+        direction: request.direction,
+        size,
+      };
+      if (useNativeTrail) {
+        body.trailingStop = true;
+        body.stopDistance = trailDist;
+      } else if (withStops && safeCreateSl) {
+        body.stopLevel = Number(safeCreateSl);
+        if (request.takeProfit) {
+          body.profitLevel = Number(request.takeProfit);
+        }
+      }
       const res = await this.request<{ dealReference: string }>(
         "POST",
         "/api/v1/positions",
         body,
       );
       const confirm = await this.waitConfirm(res.dealReference);
-      return { res, confirm, size };
+      return { res, confirm, size, withStops };
     };
 
     let res: { dealReference: string };
@@ -1072,18 +1114,70 @@ export class CapitalComAdapter implements BrokerAdapter {
     let fillLevel: number | undefined;
     let accepted = false;
     let usedSize = sized.size;
+    let openedWithStops = false;
 
     try {
-      const first = await postMarket(sized.size);
+      // Prefer market+stopLevel so Capital chart shows SL immediately.
+      const first = await postMarket(sized.size, wantProtectiveSl);
       res = first.res;
       confirm = first.confirm;
       dealId = confirm.dealId;
       fillLevel = confirm.level;
       accepted = isCapitalConfirmAccepted(confirm);
       usedSize = first.size;
+      openedWithStops = first.withStops && accepted;
+
+      // Market+SL rejected for stop rules → open bare, then sync-attach below.
+      if (
+        !accepted &&
+        wantProtectiveSl &&
+        first.withStops &&
+        ((confirm.dealStatus ?? "").toUpperCase() === "REJECTED" ||
+          isStopReject(confirm.reason))
+      ) {
+        const bare = await postMarket(sized.size, false);
+        res = bare.res;
+        confirm = bare.confirm;
+        dealId = confirm.dealId;
+        fillLevel = confirm.level;
+        accepted = isCapitalConfirmAccepted(confirm);
+        usedSize = bare.size;
+        openedWithStops = false;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (isCapitalSizeError(msg)) {
+      if (
+        wantProtectiveSl &&
+        isStopReject(msg)
+      ) {
+        try {
+          const bare = await postMarket(sized.size, false);
+          res = bare.res;
+          confirm = bare.confirm;
+          dealId = confirm.dealId;
+          fillLevel = confirm.level;
+          accepted = isCapitalConfirmAccepted(confirm);
+          usedSize = bare.size;
+          openedWithStops = false;
+        } catch (bareErr) {
+          const bareMsg =
+            bareErr instanceof Error ? bareErr.message : String(bareErr);
+          if (isCapitalSizeError(bareMsg)) {
+            const hint = capitalSizeErrorHint(epic, String(request.volume));
+            const response: BrokerOrderResponse = {
+              accepted: false,
+              brokerOrderId: request.clientRequestId,
+              status: OrderStatus.REJECTED,
+              filledVolume: "0",
+              rejectionCode: "CAPITAL_SIZE_INVALID",
+              rejectionMessage: `${hint} (API: ${bareMsg.slice(0, 160)})`,
+            };
+            this.processed.set(request.clientRequestId, response);
+            return response;
+          }
+          throw bareErr;
+        }
+      } else if (isCapitalSizeError(msg)) {
         const hint = capitalSizeErrorHint(epic, String(request.volume));
         const response: BrokerOrderResponse = {
           accepted: false,
@@ -1095,8 +1189,9 @@ export class CapitalComAdapter implements BrokerAdapter {
         };
         this.processed.set(request.clientRequestId, response);
         return response;
+      } else {
+        throw err;
       }
-      throw err;
     }
 
     // Empty REJECTED often = wrong CFD / sibling session steal.
@@ -1156,13 +1251,14 @@ export class CapitalComAdapter implements BrokerAdapter {
             this.registerLoginRef();
             this.invalidatePositionsCache();
             await new Promise((r) => setTimeout(r, 400));
-            const attempt = await postMarket(usedSize);
+            const attempt = await postMarket(usedSize, false);
             res = attempt.res;
             confirm = attempt.confirm;
             dealId = confirm.dealId;
             fillLevel = confirm.level;
             accepted = isCapitalConfirmAccepted(confirm);
             usedSize = attempt.size;
+            openedWithStops = false;
           }
         }
       } catch {
@@ -1189,28 +1285,48 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
-    // Optional post-fill SL/TP — MUST attach protective stop (retry/widen).
+    // Protective SL MUST be visible on Capital before fill is "done".
+    // Prefer create-time stopLevel; otherwise sync-attach with widen retries.
+    // Never return accepted+naked for "recovery later".
+    let confirmedStopLoss: string | undefined;
+    let confirmedTakeProfit: string | undefined;
     if (
       accepted &&
       dealId &&
-      !request.trailingStop &&
-      (request.stopLoss || request.takeProfit)
+      !useNativeTrail &&
+      (wantProtectiveSl || request.takeProfit)
     ) {
       const fillPx =
         fillLevel != null && Number.isFinite(Number(fillLevel))
           ? Number(fillLevel)
           : Number(request.price ?? 0);
-      if (request.stopLoss) {
+
+      const readBrokerSl = async (): Promise<string | undefined> => {
+        this.invalidatePositionsCache();
+        const open = await this.getOpenPositionsLocked({ force: true });
+        const found = open.find((p) => p.brokerPositionId === dealId);
+        if (found?.stopLoss != null && String(found.stopLoss).length > 0) {
+          return String(found.stopLoss);
+        }
+        return undefined;
+      };
+
+      if (openedWithStops) {
+        confirmedStopLoss = await readBrokerSl();
+      }
+
+      if (wantProtectiveSl && !confirmedStopLoss) {
         const baseDist =
           fillPx > 0
             ? Math.abs(fillPx - Number(request.stopLoss))
             : undefined;
         let attached = false;
-        for (let attempt = 0; attempt < 3 && !attached; attempt++) {
+        let lastAttachErr: unknown;
+        for (let attempt = 0; attempt < 6 && !attached; attempt++) {
           try {
             const dist =
               baseDist != null && Number.isFinite(baseDist)
-                ? baseDist * (1 + attempt)
+                ? baseDist * (1 + attempt * 0.5)
                 : undefined;
             const safeSl = capitalSafeInitialStop({
               symbol: epic,
@@ -1219,24 +1335,96 @@ export class CapitalComAdapter implements BrokerAdapter {
               distance: dist,
               mark: fillPx > 0 ? fillPx : undefined,
             });
-            await this.modifyPosition({
+            const modified = await this.modifyPosition({
               brokerPositionId: dealId,
               stopLoss: safeSl,
-              ...(request.takeProfit ? { takeProfit: request.takeProfit } : {}),
+              ...(request.takeProfit && attempt === 0
+                ? { takeProfit: request.takeProfit }
+                : {}),
             });
-            attached = true;
-          } catch {
-            await new Promise((r) => setTimeout(r, 150 + attempt * 100));
+            if (
+              modified.stopLoss != null &&
+              String(modified.stopLoss).length > 0
+            ) {
+              confirmedStopLoss = String(modified.stopLoss);
+              if (
+                modified.takeProfit != null &&
+                String(modified.takeProfit).length > 0
+              ) {
+                confirmedTakeProfit = String(modified.takeProfit);
+              }
+              attached = true;
+              break;
+            }
+            // modify ACK without visible SL — re-read then widen
+            confirmedStopLoss = await readBrokerSl();
+            if (confirmedStopLoss) {
+              attached = true;
+              break;
+            }
+            lastAttachErr = new Error(
+              `Capital chart still has no stopLevel after attach (${safeSl})`,
+            );
+          } catch (err) {
+            lastAttachErr = err;
+            await new Promise((r) => setTimeout(r, 150 + attempt * 120));
           }
         }
-      } else if (request.takeProfit) {
+
+        if (!attached || !confirmedStopLoss) {
+          // Last-resort: close naked deal — never leave Stop loss OFF on Capital.
+          try {
+            await this.closePositionLocked({
+              brokerPositionId: dealId,
+              clientRequestId: `${request.clientRequestId}:sl-fail-close`,
+            });
+          } catch {
+            // still report SL failure — recovery tick may see leftover
+          }
+          const detail =
+            lastAttachErr instanceof Error
+              ? lastAttachErr.message
+              : String(lastAttachErr ?? "stopLevel not visible");
+          const response: BrokerOrderResponse = {
+            accepted: false,
+            brokerOrderId: dealId,
+            status: OrderStatus.REJECTED,
+            filledVolume: "0",
+            positionId: undefined,
+            rejectionCode: "CAPITAL_SL_ATTACH_FAILED",
+            rejectionMessage: `Capital fill closed: could not attach stopLevel (${detail})`,
+          };
+          this.processed.set(request.clientRequestId, response);
+          this.invalidatePositionsCache();
+          return response;
+        }
+      } else if (request.takeProfit && !wantProtectiveSl) {
         try {
-          await this.modifyPosition({
+          const modified = await this.modifyPosition({
             brokerPositionId: dealId,
             takeProfit: request.takeProfit,
           });
+          if (
+            modified.takeProfit != null &&
+            String(modified.takeProfit).length > 0
+          ) {
+            confirmedTakeProfit = String(modified.takeProfit);
+          }
         } catch {
-          // TP optional
+          // TP optional when no SL requested
+        }
+      } else if (openedWithStops && request.takeProfit && !confirmedTakeProfit) {
+        try {
+          const open = await this.getOpenPositionsLocked({ force: true });
+          const found = open.find((p) => p.brokerPositionId === dealId);
+          if (
+            found?.takeProfit != null &&
+            String(found.takeProfit).length > 0
+          ) {
+            confirmedTakeProfit = String(found.takeProfit);
+          }
+        } catch {
+          // ignore
         }
       }
     }
@@ -1264,6 +1452,8 @@ export class CapitalComAdapter implements BrokerAdapter {
           ? String(fillLevel)
           : undefined,
       positionId: accepted ? dealId : undefined,
+      stopLoss: accepted ? confirmedStopLoss : undefined,
+      takeProfit: accepted ? confirmedTakeProfit : undefined,
       rejectionCode: accepted
         ? undefined
         : rejected
