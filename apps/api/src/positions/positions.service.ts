@@ -840,9 +840,9 @@ export class PositionsService {
   }
 
   /**
-   * 10s SCALPING — lock 15% of favorable move from entry into Capital SL.
-   * Every ≥10s: candidate = entry ± 15%×(favorable), improve-only, physical Capital modify.
-   * Pullback that would put lock at e.g. 10% never moves SL backward.
+   * 10s SCALPING — from entry moment, lock 15% of move from entry into Capital SL.
+   * Flat/loss → candidate = entry. In profit → entry ± 15%×favorable.
+   * Every ≥10s improve-only (be_sync); never move SL backward on pullback.
    *
    * Uses mark/SL already refreshed by autoManageAccountProtectionsLocked —
    * do NOT call getOpenPositions(force) here (that held Capital login lock and
@@ -904,6 +904,9 @@ export class PositionsService {
     );
 
     if (!Number.isFinite(candN)) {
+      console.warn(
+        `[SCALP PCT SL CHASE] skip=candidate_invalid positionId=${position.id} symbol=${position.symbol}`,
+      );
       return;
     }
 
@@ -911,7 +914,9 @@ export class PositionsService {
       direction: dir,
       candidate: candidateSL,
       current: liveSl,
-      mode: "improve_only",
+      // be_sync: from entry moment allow SL=entry even when equal to DB;
+      // never move backward if a better lock already exists.
+      mode: "be_sync",
     });
     if (!improves) {
       console.log(

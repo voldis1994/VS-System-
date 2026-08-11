@@ -9,13 +9,30 @@ import {
 } from "@nexus/shared";
 
 /**
- * 10s SCALPING: every 10s lock 15% of favorable move from entry into Capital SL.
- * Never move SL backward on pullback.
+ * 10s SCALPING: from entry moment lock 15% of move from entry into Capital SL.
+ * Flat/loss → SL candidate = entry. Never move SL backward on pullback.
  */
 describe("PositionsService 10s SCALPING 15% from-entry SL lock", () => {
   it("constants", () => {
     expect(SCALP_LOCK_PCT).toBe(0.15);
     expect(SCALP_SL_MODIFY_INTERVAL_MS).toBe(10_000);
+  });
+
+  it("from entry moment: flat → candidate = entry (does not wait for profit)", () => {
+    expect(
+      scalpPctLockCandidateSl({
+        direction: "SELL",
+        entry: 2408.15,
+        livePrice: 2408.15,
+      }),
+    ).toBe(2408.15);
+    expect(
+      scalpPctLockCandidateSl({
+        direction: "BUY",
+        entry: 2400,
+        livePrice: 2399,
+      }),
+    ).toBe(2400);
   });
 
   it("SELL candidate = entry − 15% × favorable (screenshot-style)", () => {
@@ -26,7 +43,6 @@ describe("PositionsService 10s SCALPING 15% from-entry SL lock", () => {
       entry,
       livePrice: mark,
     });
-    // favorable=2.23 → lock 0.3345 → SL 2407.8155 → Capital 2dp 2407.82
     expect(cand).toBeCloseTo(2407.8155, 4);
     expect(formatScalpBrokerStopLevel("GOLD", cand)).toBe("2407.82");
   });
@@ -42,39 +58,48 @@ describe("PositionsService 10s SCALPING 15% from-entry SL lock", () => {
     expect(cand).toBeCloseTo(2401.5, 8);
   });
 
-  it("flat/loss → no candidate", () => {
+  it("loss does not move SL past entry backward when better lock exists", () => {
+    const entry = 2408.15;
+    const locked = scalpPctLockCandidateSl({
+      direction: "SELL",
+      entry,
+      livePrice: 2405.92,
+    });
+    const atLoss = scalpPctLockCandidateSl({
+      direction: "SELL",
+      entry,
+      livePrice: 2409,
+    });
+    expect(atLoss).toBe(entry);
     expect(
-      Number.isFinite(
-        scalpPctLockCandidateSl({
-          direction: "SELL",
-          entry: 2408,
-          livePrice: 2409,
-        }),
-      ),
+      scalpBrokerStopShouldMove({
+        direction: "SELL",
+        candidate: atLoss,
+        current: locked,
+        mode: "be_sync",
+      }),
     ).toBe(false);
   });
 
   it("pullback never worsens SL (15% → would-be 10%)", () => {
     const entry = 2408.15;
-    const peakMark = 2405.92; // deep profit
     const peakSl = scalpPctLockCandidateSl({
       direction: "SELL",
       entry,
-      livePrice: peakMark,
+      livePrice: 2405.92,
     });
-    const pullbackMark = 2407.0; // less profit → ~10%-ish lock
     const weakerSl = scalpPctLockCandidateSl({
       direction: "SELL",
       entry,
-      livePrice: pullbackMark,
+      livePrice: 2407.0,
     });
-    expect(weakerSl).toBeGreaterThan(peakSl); // worse for SELL
+    expect(weakerSl).toBeGreaterThan(peakSl);
     expect(
       scalpBrokerStopShouldMove({
         direction: "SELL",
         candidate: weakerSl,
         current: peakSl,
-        mode: "improve_only",
+        mode: "be_sync",
       }),
     ).toBe(false);
   });
