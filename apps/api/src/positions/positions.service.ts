@@ -912,9 +912,9 @@ export class PositionsService {
   }
 
   /**
-   * 10s SCALPING — from entry moment, lock 15% of move from entry into Capital SL.
-   * Flat/loss → candidate = entry. In profit → entry ± 15%×favorable.
-   * Better lock → Capital modify immediately (no 10s block). Never move SL backward.
+   * 10s SCALPING — from entry, Capital SL trails live price with 15% cushion
+   * of the favorable move (locks ~85%). Flat/loss → entry. Better lock →
+   * Capital modify immediately. Never move SL backward.
    *
    * Uses mark/SL already refreshed by autoManageAccountProtectionsLocked —
    * do NOT call getOpenPositions(force) here (that held Capital login lock and
@@ -990,14 +990,14 @@ export class PositionsService {
 
     const hasSl =
       liveSl != null && String(liveSl).trim().length > 0 && Number(liveSl) !== 0;
-    // No SL on chart/DB → always send. Otherwise only if candidate is better or equal (be_sync).
+    // Naked → always send. Otherwise only when candidate strictly improves (chase).
     const shouldSend =
       !hasSl ||
       scalpBrokerStopShouldMove({
         direction: dir,
         candidate: candidateSL,
         current: liveSl,
-        mode: "be_sync",
+        mode: hasSl ? "improve_only" : "be_sync",
       });
     if (!shouldSend) {
       console.log(
@@ -1295,7 +1295,7 @@ export class PositionsService {
         const entry = Number(position.averageEntry);
         const dir = position.direction as "BUY" | "SELL";
 
-        // ─── 10s SCALPING: Capital 15% SL lock FIRST ───
+        // ─── 10s SCALPING: Capital 15% price-chase SL FIRST ───
         // Run before Multi-TP / naked recovery / generic BE+trail so those
         // paths cannot hold the Capital login lock or continue-skip ahead
         // of the physical stopLevel modify.
@@ -1545,7 +1545,7 @@ export class PositionsService {
           ) {
             moneyTrigger = cfg.breakEvenActivationMoney;
           }
-          // 10s SCALPING SL chase is 15% from-entry lock path (skip Capital-safe BE)
+          // 10s SCALPING SL chase is 15% price-cushion path (skip Capital-safe BE)
           skipGenericBe = isTenSecondScalpingMode(st?.mode, cfg);
         }
         const moneyHit =

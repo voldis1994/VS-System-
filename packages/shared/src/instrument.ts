@@ -367,11 +367,12 @@ export function scalpSoftTrailDistancePrice(
 }
 
 /**
- * 10s SCALPING: from entry moment, lock this fraction of the move from entry.
- * Flat/loss → candidate = entry (start immediately, not wait for profit).
- * BUY in profit: SL = entry + 15% × (mark − entry)
- * SELL in profit: SL = entry − 15% × (entry − mark)
- * Improve-only / be_sync — never move SL backward on a pullback.
+ * 10s SCALPING trail cushion from entry.
+ * SL follows live price, leaving this fraction of the favorable move as room:
+ *   BUY:  SL = mark − 15% × (mark − entry)  [= entry + 85% × move]
+ *   SELL: SL = mark + 15% × (entry − mark)  [= entry − 85% × move]
+ * Flat/loss → entry (BE). Improve-only — never move SL backward on pullback.
+ * (Previously this constant locked only 15% of the move, which looked stuck at BE.)
  */
 export const SCALP_LOCK_PCT = 0.15;
 
@@ -380,7 +381,8 @@ export const SCALP_SL_MODIFY_INTERVAL_MS = 10_000;
 
 /**
  * Candidate broker SL from entry (always defined when entry/mark valid).
- * Flat or against → entry. Favorable → entry ± lockPct × move.
+ * Flat or against → entry.
+ * In profit → trail behind mark by lockPct × favorable move (not a near-BE stub).
  */
 export function scalpPctLockCandidateSl(input: {
   direction: "BUY" | "SELL";
@@ -399,12 +401,13 @@ export function scalpPctLockCandidateSl(input: {
 
   if (input.direction === "BUY") {
     const favorable = mark - entry;
-    if (!(favorable > 0)) return entry; // from entry moment — not wait for profit
-    return entry + pct * favorable;
+    if (!(favorable > 0)) return entry;
+    // Leave pct of the move as cushion under mark — chase price, not hug entry
+    return mark - pct * favorable;
   }
   const favorable = entry - mark;
   if (!(favorable > 0)) return entry;
-  return entry - pct * favorable;
+  return mark + pct * favorable;
 }
 
 /** @deprecated Prefer SCALP_LOCK_PCT / scalpPctLockCandidateSl for 10s SCALPING. */
