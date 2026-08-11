@@ -1064,7 +1064,7 @@ export class StrategiesService {
     // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
     const priceOffset = config.priceOffsetMode === true;
     // Arm at entry only when explicitly requested — 10s SCALPING uses fixed
-    // 0.0100 live-price SL chase (no £0.05 soft arm).
+    // 0.00100 live-price SL chase (no £0.05 soft arm).
     const trailImmediate =
       config.trailArmImmediate === true || auto?.trailArmImmediate === true;
     const is10sScalpFixed = isTenSecondScalpingMode(strategyMode, config);
@@ -1093,7 +1093,7 @@ export class StrategiesService {
     // Arm trail flags, but do NOT stamp trailingActivatedAt until Capital has
     // a visible stopLevel — otherwise autoManage hammers soft trail modifies
     // on a naked chart and starves the API (Internal Server Error toasts).
-    // 10s SCALPING: fixed 0.0100 distance; ActivatedAt set on first successful chase.
+    // 10s SCALPING: fixed 0.00100 distance; ActivatedAt set on first successful chase.
     const hasBrokerSl =
       pos.stopLoss != null && String(pos.stopLoss).trim().length > 0;
     await this.prisma.position.update({

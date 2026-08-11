@@ -838,7 +838,7 @@ export class PositionsService {
 
   /**
    * 10s SCALPING — fixed-price-distance Capital SL chase.
-   * candidateSL = livePrice ± 0.0100 (improve-only). No £0.05 arm, no 0.3-pip soft trail,
+   * candidateSL = livePrice ± 0.00100 (improve-only). No £0.05 arm, no 0.3-pip soft trail,
    * no capitalSafeTrailDistance floor on this path.
    */
   private async chaseScalpFixedPriceStop(input: {
@@ -901,7 +901,7 @@ export class PositionsService {
     const candidateSL = formatScalpBrokerStopLevel(position.symbol, candN);
 
     console.log(
-      `[SCALP FIXED SL CHASE] symbol=${position.symbol} side=${dir} currentPrice=${mark} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL} distance=${distance.toFixed(4)}`,
+      `[SCALP FIXED SL CHASE] symbol=${position.symbol} side=${dir} currentPrice=${mark} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL} distance=${distance.toFixed(5)}`,
     );
 
     const improves = scalpBrokerStopShouldMove({
@@ -1209,7 +1209,7 @@ export class PositionsService {
           });
         }
 
-        // Heal 10s SCALPING flags only (fixed 0.0100 trail distance). Other TFs untouched.
+        // Heal 10s SCALPING flags only (fixed 0.00100 trail distance). Other TFs untouched.
         if (position.strategyId) {
           const stHeal = await this.prisma.strategy.findFirst({
             where: { id: position.strategyId },
@@ -1408,7 +1408,7 @@ export class PositionsService {
           ) {
             moneyTrigger = cfg.breakEvenActivationMoney;
           }
-          // 10s SCALPING SL chase is fixed 0.0100 path (skip Capital-safe BE)
+          // 10s SCALPING SL chase is fixed 0.00100 path (skip Capital-safe BE)
           skipGenericBe = isTenSecondScalpingMode(st?.mode, cfg);
         }
         const moneyHit =
@@ -1456,7 +1456,7 @@ export class PositionsService {
         let fresh = await this.get(position.organizationId, position.id);
         if (fresh.status === "CLOSED") continue;
 
-        // Force 10s SCALPING trail flags (fixed 0.0100 distance)
+        // Force 10s SCALPING trail flags (fixed 0.00100 distance)
         if (
           (!fresh.trailingEnabled || fresh.trailingDistance == null) &&
           fresh.strategyId
@@ -1502,7 +1502,7 @@ export class PositionsService {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // 10s SCALPING fixed 0.0100 live-price SL chase.
+        // 10s SCALPING fixed 0.00100 live-price SL chase.
         // Always continue afterward so capitalSafeTrailDistance is unreachable.
         // ═══════════════════════════════════════════════════════════
         {

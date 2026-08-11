@@ -368,9 +368,9 @@ export function scalpSoftTrailDistancePrice(
 
 /**
  * 10s SCALPING fixed broker SL distance from live price (not pips, not £0.05).
- * BUY: mark − 0.0100 · SELL: mark + 0.0100 · improve-only.
+ * BUY: mark − 0.00100 · SELL: mark + 0.00100 · improve-only.
  */
-export const SCALP_FIXED_SL_DISTANCE = 0.01;
+export const SCALP_FIXED_SL_DISTANCE = 0.001;
 
 export function scalpFixedTrailCandidateSl(
   direction: "BUY" | "SELL",
@@ -386,7 +386,7 @@ export function scalpFixedTrailCandidateSl(
 
 /**
  * Format a 10s SCALPING broker stopLevel string.
- * Must NOT use formatInstrumentPrice (GOLD 2dp would wipe 0.3-pip = 0.003).
+ * Must NOT use formatInstrumentPrice (GOLD 2dp would wipe 0.001 trail).
  */
 export function formatScalpBrokerStopLevel(
   symbol: string,
@@ -395,7 +395,7 @@ export function formatScalpBrokerStopLevel(
   const pip = instrumentPipSize(symbol);
   let decimals = 2;
   if (pip <= 0.0001) decimals = 5;
-  else if (pip <= 0.01) decimals = 4; // GOLD: keep 0.0100 fixed-trail precision
+  else if (pip <= 0.01) decimals = 5; // GOLD: keep 0.00100 fixed-trail precision
   else if (pip <= 0.1) decimals = 2;
   return Number(level).toFixed(decimals);
 }

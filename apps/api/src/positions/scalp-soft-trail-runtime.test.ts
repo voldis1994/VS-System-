@@ -10,12 +10,12 @@ import {
 } from "@nexus/shared";
 
 /**
- * Runtime contract: 10s SCALPING fixed 0.0100 live-price Capital SL chase.
+ * Runtime contract: 10s SCALPING fixed 0.00100 live-price Capital SL chase.
  * No £0.05 arm, no 0.3-pip soft trail, no capitalSafe 0.50 floor.
  */
-describe("PositionsService 10s SCALPING fixed 0.0100 SL chase", () => {
-  it("distance is exactly 0.0100 (not Capital 0.50)", () => {
-    expect(SCALP_FIXED_SL_DISTANCE).toBe(0.01);
+describe("PositionsService 10s SCALPING fixed 0.00100 SL chase", () => {
+  it("distance is exactly 0.00100 (not Capital 0.50)", () => {
+    expect(SCALP_FIXED_SL_DISTANCE).toBe(0.001);
     expect(SCALP_FIXED_SL_DISTANCE).toBeLessThan(
       capitalMinStopDistance("GOLD"),
     );
@@ -24,17 +24,17 @@ describe("PositionsService 10s SCALPING fixed 0.0100 SL chase", () => {
     ).toBeGreaterThanOrEqual(0.5);
   });
 
-  it("BUY candidateSL = livePrice − 0.0100", () => {
+  it("BUY candidateSL = livePrice − 0.00100", () => {
     const live = 4393.19;
     const cand = scalpFixedTrailCandidateSl("BUY", live);
-    expect(cand).toBeCloseTo(4393.18, 8);
-    expect(formatScalpBrokerStopLevel("GOLD", cand)).toBe("4393.1800");
+    expect(cand).toBeCloseTo(4393.189, 8);
+    expect(formatScalpBrokerStopLevel("GOLD", cand)).toBe("4393.18900");
   });
 
-  it("SELL candidateSL = livePrice + 0.0100", () => {
+  it("SELL candidateSL = livePrice + 0.00100", () => {
     const live = 4392.0;
     const cand = scalpFixedTrailCandidateSl("SELL", live);
-    expect(cand).toBeCloseTo(4392.01, 8);
+    expect(cand).toBeCloseTo(4392.001, 8);
   });
 
   it("BUY SL only moves up; SELL only down", () => {
