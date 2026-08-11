@@ -843,6 +843,10 @@ export class PositionsService {
    * 10s SCALPING — lock 15% of favorable move from entry into Capital SL.
    * Every ≥10s: candidate = entry ± 15%×(favorable), improve-only, physical Capital modify.
    * Pullback that would put lock at e.g. 10% never moves SL backward.
+   *
+   * Uses mark/SL already refreshed by autoManageAccountProtectionsLocked —
+   * do NOT call getOpenPositions(force) here (that held Capital login lock and
+   * starved the next protection tick / other positions).
    */
   private async chaseScalpFixedPriceStop(input: {
     position: {
@@ -862,32 +866,14 @@ export class PositionsService {
     brokerStopLoss: Map<string, string>;
   }): Promise<void> {
     const { position, dir, correlationId, brokerStopLoss } = input;
-    let mark = input.mark;
+    const mark = input.mark;
     const entry = Number(input.entry);
 
-    let liveSl =
+    const liveSl =
       brokerStopLoss.get(position.id) ??
       (position.stopLoss != null && String(position.stopLoss).length > 0
         ? String(position.stopLoss)
         : null);
-
-    const adapter = this.brokers.get(position.accountId);
-    if (adapter && position.brokerPositionId) {
-      try {
-        const live = await adapter.getOpenPositions({ force: true });
-        const match = live.find(
-          (x) => x.brokerPositionId === position.brokerPositionId,
-        );
-        const liveMark = Number(match?.currentPrice);
-        if (Number.isFinite(liveMark) && liveMark > 0) mark = liveMark;
-        if (match?.stopLoss != null && String(match.stopLoss).length > 0) {
-          liveSl = String(match.stopLoss);
-          brokerStopLoss.set(position.id, liveSl);
-        }
-      } catch {
-        // caller mark / cached SL
-      }
-    }
 
     if (
       !Number.isFinite(mark) ||
@@ -942,6 +928,9 @@ export class PositionsService {
       );
       return;
     }
+
+    // Stamp only when we actually attempt Capital — cleared/shortened on reject
+    // so a failed modify does not burn the full 10s window.
     this.scalpSlModifyAt.set(position.id, now);
 
     await this.pushScalpFixedBrokerStop({
@@ -977,12 +966,14 @@ export class PositionsService {
       input;
 
     if (!position.brokerPositionId) {
+      this.scalpSlModifyAt.delete(position.id);
       console.warn(
         `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_broker_position_id requestedSL=${requestedSl} positionId=${position.id}`,
       );
       return;
     }
     if (!this.brokers.get(position.accountId)) {
+      this.scalpSlModifyAt.delete(position.id);
       console.warn(
         `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_adapter requestedSL=${requestedSl} positionId=${position.id}`,
       );
@@ -990,7 +981,7 @@ export class PositionsService {
     }
 
     console.log(
-      `[SCALP PCT SL REQUEST] requestedSL=${requestedSl} symbol=${position.symbol}`,
+      `[SCALP PCT SL REQUEST] requestedSL=${requestedSl} symbol=${position.symbol} brokerPositionId=${position.brokerPositionId}`,
     );
 
     try {
@@ -1017,11 +1008,15 @@ export class PositionsService {
           trailingActivatedAt: new Date(),
         },
       });
+      // Full 10s cadence only after Capital accepted
+      this.scalpSlModifyAt.set(position.id, Date.now());
       console.log(
         `[SCALP PCT SL RESPONSE] accepted=true brokerReturnedSL=${returned} errorReason=none`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Allow retry in ~2s — do not block full 10s after Capital reject
+      this.scalpSlModifyAt.set(position.id, Date.now() - (SCALP_SL_MODIFY_INTERVAL_MS - 2000));
       console.warn(
         `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=${msg}`,
       );
