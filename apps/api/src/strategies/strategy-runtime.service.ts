@@ -1096,6 +1096,36 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
+        // Capital still open while DB looks flat (ghost) — never open a 2nd lot.
+        if (oneTradeOnly && openAnywhere.length === 0) {
+          try {
+            const adapter = this.brokers.get(accountId);
+            if (adapter) {
+              const live = await adapter.getOpenPositions({ force: true });
+              if (live.length > 0) {
+                lastStatus = {
+                  ...lastStatus,
+                  skip: "waiting_open_close",
+                  reason: "broker_has_open",
+                  openTrades: live.length,
+                  accountId,
+                  signal,
+                  symbol: brokerSymbol,
+                };
+                continue;
+              }
+            }
+          } catch {
+            lastStatus = {
+              ...lastStatus,
+              skip: "waiting_open_close",
+              reason: "broker_open_check_failed",
+              accountId,
+            };
+            continue;
+          }
+        }
+
         const tick = this.market.getTick(brokerSymbol);
         const entry = Number(
           tick
