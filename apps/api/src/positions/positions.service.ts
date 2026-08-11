@@ -914,7 +914,7 @@ export class PositionsService {
 
   /**
    * 10s SCALPING — Capital SL must exist from the first tick.
-   * In profit: trail mark with 15% cushion (~85% locked), improve-only.
+   * In profit: trail mark with 12% cushion (~88% locked), improve-only.
    * Flat/loss or invalid vs mark: Capital-safe protective stop (never naked).
    */
   private async chaseScalpFixedPriceStop(input: {
@@ -1068,7 +1068,7 @@ export class PositionsService {
   }
 
   /**
-   * Push Capital stopLevel for 10s SCALPING 15% lock — physical modify, no 0.50 pre-floor.
+   * Push Capital stopLevel for 10s SCALPING 12% lock — physical modify, no 0.50 pre-floor.
    */
   private async pushScalpFixedBrokerStop(input: {
     position: {
@@ -1328,7 +1328,7 @@ export class PositionsService {
         const entry = Number(position.averageEntry);
         const dir = position.direction as "BUY" | "SELL";
 
-        // ─── 10s SCALPING: Capital 15% price-chase SL FIRST ───
+        // ─── 10s SCALPING: Capital 12% price-chase SL FIRST ───
         // Run before Multi-TP / naked recovery / generic BE+trail so those
         // paths cannot hold the Capital login lock or continue-skip ahead
         // of the physical stopLevel modify.
@@ -1578,7 +1578,7 @@ export class PositionsService {
           ) {
             moneyTrigger = cfg.breakEvenActivationMoney;
           }
-          // 10s SCALPING SL chase is 15% price-cushion path (skip Capital-safe BE)
+          // 10s SCALPING SL chase is 12% price-cushion path (skip Capital-safe BE)
           skipGenericBe = isTenSecondScalpingMode(st?.mode, cfg);
         }
         const moneyHit =

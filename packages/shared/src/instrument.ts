@@ -387,12 +387,12 @@ export function scalpStopValidVsMark(input: {
 /**
  * 10s SCALPING trail cushion from entry.
  * SL follows live price, leaving this fraction of the favorable move as room:
- *   BUY:  SL = mark − 15% × (mark − entry)  [= entry + 85% × move]
- *   SELL: SL = mark + 15% × (entry − mark)  [= entry − 85% × move]
+ *   BUY:  SL = mark − 12% × (mark − entry)  [= entry + 88% × move]
+ *   SELL: SL = mark + 12% × (entry − mark)  [= entry − 88% × move]
  * Flat/loss → entry (caller must Capital-safe clamp vs live mark).
  * Improve-only — never move SL backward on pullback.
  */
-export const SCALP_LOCK_PCT = 0.15;
+export const SCALP_LOCK_PCT = 0.12;
 
 /** Min interval between Capital SL modify attempts for 10s SCALPING. */
 export const SCALP_SL_MODIFY_INTERVAL_MS = 10_000;

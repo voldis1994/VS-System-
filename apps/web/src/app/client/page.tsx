@@ -228,7 +228,7 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "10s SCALP: SL uzreiz uz Capital · 15% chase no entry · 1 trade until flat.",
+    tip: "10s SCALP: SL uzreiz uz Capital · 12% chase no entry · 1 trade until flat.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
@@ -843,7 +843,7 @@ export default function ClientPortalPage() {
                 <>
                   <p className="text-[#7af6ff]">AUTO · 10s SCALP</p>
                   <p>
-                    SL uzreiz uz Capital. Peļņā SL seko cenai (15% cushion).
+                    SL uzreiz uz Capital. Peļņā SL seko cenai (12% cushion).
                     Lot = tikai nākamajam treidam (SAVE). Kamēr OPEN — viens
                     treids, SL paliek; lot maiņa neaiztiek esošo.
                   </p>

@@ -1310,7 +1310,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             brokerSymbol,
             Math.max(beOffsetPips, 0),
           );
-          // Classic 10s SCALPING: trail Capital SL with 15% cushion of move from entry
+          // Classic 10s SCALPING: trail Capital SL with 12% cushion of move from entry
           trailDist = isClassicScalping
             ? SCALP_LOCK_PCT
             : resolveScalpTrailDistance(brokerSymbol, entry, trailPips);
