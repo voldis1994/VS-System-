@@ -228,7 +228,7 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "SCALP: BE pie £0.05 (Capital GOLD chart BE pēc ~0.50), tad trail. Nav BUY pret SELL svecēm.",
+    tip: "10s SCALP: SL uzreiz uz Capital · 15% chase no entry · 1 trade until flat.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
@@ -841,10 +841,10 @@ export default function ClientPortalPage() {
             <div className="space-y-1.5 text-[11px] leading-snug text-[#8aa3b8]">
               {mode === StrategyMode.SCALPING ? (
                 <>
-                  <p className="text-[#7af6ff]">AUTO · SCALP RAZOR</p>
+                  <p className="text-[#7af6ff]">AUTO · 10s SCALP</p>
                   <p>
-                    Tūlītējs ciešs trail (6 pip) + BE pie +5. Nav fiksēta TP —
-                    trail ir exits. SAVE / START.
+                    SL uzreiz uz Capital. Peļņā SL seko cenai (15% cushion).
+                    Lot maiņa — SAVE; neatver jaunu treidu kamēr viens OPEN.
                   </p>
                 </>
               ) : (

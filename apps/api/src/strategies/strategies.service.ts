@@ -14,7 +14,7 @@ import {
   isTenSecondScalpingMode,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, SCALP_LOCK_PCT } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, resolveScalpDistance, capitalSafeInitialStop, SCALP_LOCK_PCT } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -129,9 +129,37 @@ export class StrategiesService {
     correlationId: string,
   ) {
     const strategy = await this.require(organizationId, id);
-    // Idempotent START — already running is OK (client double-tap / reconnect)
+    // Idempotent START — already running is OK (client double-tap / reconnect).
+    // Only clear fingerprints when this strategy has no open trades — otherwise
+    // a LOT change + START re-arms duplicate entries.
     if (strategy.status === StrategyStatus.RUNNING) {
-      this.runtime.resetSignals(id);
+      const openCount = await this.prisma.position.count({
+        where: {
+          organizationId,
+          strategyId: id,
+          status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+        },
+      });
+      if (openCount === 0) {
+        this.runtime.resetSignals(id);
+      }
+      // Still refresh exit flags / lot-driven config onto open rows
+      const accountIds = (strategy.assignedAccountIds as string[]) ?? [];
+      const assignedSymbols = (strategy.assignedSymbols as string[]) ?? [];
+      const cfg =
+        strategy.configurationJson && typeof strategy.configurationJson === "object"
+          ? (strategy.configurationJson as Record<string, unknown>)
+          : {};
+      for (const accountId of accountIds) {
+        await this.applyExitFlagsToOpenPositions(
+          organizationId,
+          accountId,
+          cfg,
+          strategy.id,
+          assignedSymbols,
+          strategy.mode,
+        );
+      }
       return strategy;
     }
     if (
@@ -800,10 +828,17 @@ export class StrategiesService {
       input.configuration as Record<string, unknown>,
     );
     const auto = modeAutoExit(input.mode);
+    // Preserve operator volume; merge auto exits without wiping 10s SCALPING chase.
+    const prevCfg =
+      strategy?.configurationJson &&
+      typeof strategy.configurationJson === "object"
+        ? (strategy.configurationJson as Record<string, unknown>)
+        : {};
     const configuration = {
+      ...prevCfg,
       ...cfgIn,
       useRiskPercent: false,
-      volume: String(cfgIn.volume ?? "0.01"),
+      volume: String(cfgIn.volume ?? prevCfg.volume ?? "0.01"),
       oneTradeOnly: true,
       closeOnlyNoFlip: false,
       newsFilterEnabled: false,
@@ -824,11 +859,10 @@ export class StrategiesService {
             trailingDistancePips: auto.trailingDistancePips,
             trailingActivationPips: auto.trailingActivationPips,
             trailArmImmediate: auto.trailArmImmediate,
-            priceOffsetMode: false,
+            priceOffsetMode: auto.priceOffsetMode === true,
             atrStopMult: auto.atrStopMult,
             atrTpMult: auto.atrTpMult,
             stopDistancePips: auto.stopDistancePips,
-            // Never re-apply auto cooldown — protective gates stay OFF
             cooldownSeconds: 0,
             exitVersion: auto.exitVersion,
             timeframe: modePreferredTimeframe(input.mode),
@@ -876,7 +910,18 @@ export class StrategiesService {
     }
 
     if (input.action === "save") {
-      this.runtime.resetSignals(strategy.id);
+      // Do NOT resetSignals while opens exist — that cleared fingerprints and
+      // re-armed same-side entries the moment operator changed LOT.
+      const openCount = await this.prisma.position.count({
+        where: {
+          organizationId,
+          accountId: input.accountId,
+          status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+        },
+      });
+      if (openCount === 0) {
+        this.runtime.resetSignals(strategy.id);
+      }
       await this.applyExitFlagsToOpenPositions(
         organizationId,
         input.accountId,
@@ -1116,23 +1161,45 @@ export class StrategiesService {
       },
     });
 
-      // Push fixed SL/TP only when missing — never rewrite existing levels with wrong formula
+      // Push protective SL when DB missing OR Capital chart is naked.
+      // Use capitalSafeInitialStop (mark-aware) — pip×count alone rejects on GOLD.
       try {
         const dir = pos.direction as "BUY" | "SELL";
         const stopDistancePips = Number(config.stopDistancePips);
         const atrStopMult = Number(config.atrStopMult ?? 1.0);
+
+        let brokerHasSl = Boolean(
+          pos.stopLoss && String(pos.stopLoss).trim().length > 0,
+        );
+        try {
+          const adapter = this.brokers.get(pos.accountId);
+          if (adapter && pos.brokerPositionId) {
+            const live = await adapter.getOpenPositions({ force: true });
+            const match = live.find(
+              (x) => x.brokerPositionId === pos.brokerPositionId,
+            );
+            brokerHasSl = Boolean(
+              match?.stopLoss != null && String(match.stopLoss).trim().length > 0,
+            );
+          }
+        } catch {
+          // keep DB view
+        }
+
         let stopLoss = pos.stopLoss ? String(pos.stopLoss) : null;
-        if (!stopLoss && Number.isFinite(entry) && entry > 0) {
-          const slDist =
+        if (!brokerHasSl && Number.isFinite(entry) && entry > 0) {
+          const preferred =
             Number.isFinite(stopDistancePips) && stopDistancePips > 0
-              ? Math.max(minDist, pip * stopDistancePips)
+              ? resolveScalpDistance(pos.symbol, entry, stopDistancePips)
               : Math.max(minDist, pip * 20 * Math.max(atrStopMult, 0.5));
-          stopLoss = formatInstrumentPrice(
-            pos.symbol,
-            dir === "BUY"
-              ? d(entry).minus(slDist).toNumber()
-              : d(entry).plus(slDist).toNumber(),
-          );
+          const mark = Number(pos.currentPrice) || entry;
+          stopLoss = capitalSafeInitialStop({
+            symbol: pos.symbol,
+            direction: dir,
+            entry,
+            distance: preferred,
+            mark,
+          });
         }
 
         let takeProfit: string | null = pos.takeProfit ? String(pos.takeProfit) : null;
@@ -1153,7 +1220,7 @@ export class StrategiesService {
           takeProfit = null;
         }
 
-        const shouldPushSl = Boolean(stopLoss) && !pos.stopLoss;
+        const shouldPushSl = Boolean(stopLoss) && !brokerHasSl;
         const shouldPushTp =
           tpEnabled
             ? Boolean(takeProfit) && !pos.takeProfit
