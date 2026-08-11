@@ -1,81 +1,85 @@
 import { describe, expect, it } from "vitest";
 import { StrategyMode, isTenSecondScalpingMode } from "@nexus/domain";
 import {
-  SCALP_FIXED_SL_DISTANCE,
-  capitalMinStopDistance,
-  capitalSafeTrailDistance,
+  SCALP_LOCK_PCT,
+  SCALP_SL_MODIFY_INTERVAL_MS,
   formatScalpBrokerStopLevel,
   scalpBrokerStopShouldMove,
-  scalpFixedTrailCandidateSl,
+  scalpPctLockCandidateSl,
 } from "@nexus/shared";
 
 /**
- * Runtime contract: 10s SCALPING fixed 0.00100 live-price Capital SL chase.
- * No £0.05 arm, no 0.3-pip soft trail, no capitalSafe 0.50 floor.
+ * 10s SCALPING: every 10s lock 15% of favorable move from entry into Capital SL.
+ * Never move SL backward on pullback.
  */
-describe("PositionsService 10s SCALPING fixed 0.00100 SL chase", () => {
-  it("distance is exactly 0.00100 (not Capital 0.50)", () => {
-    expect(SCALP_FIXED_SL_DISTANCE).toBe(0.001);
-    expect(SCALP_FIXED_SL_DISTANCE).toBeLessThan(
-      capitalMinStopDistance("GOLD"),
-    );
-    expect(
-      capitalSafeTrailDistance("GOLD", 4393, SCALP_FIXED_SL_DISTANCE),
-    ).toBeGreaterThanOrEqual(0.5);
+describe("PositionsService 10s SCALPING 15% from-entry SL lock", () => {
+  it("constants", () => {
+    expect(SCALP_LOCK_PCT).toBe(0.15);
+    expect(SCALP_SL_MODIFY_INTERVAL_MS).toBe(10_000);
   });
 
-  it("BUY candidateSL = livePrice − 0.00100", () => {
-    const live = 4393.19;
-    const cand = scalpFixedTrailCandidateSl("BUY", live);
-    expect(cand).toBeCloseTo(4393.189, 8);
-    expect(formatScalpBrokerStopLevel("GOLD", cand)).toBe("4393.18900");
+  it("SELL candidate = entry − 15% × favorable (screenshot-style)", () => {
+    const entry = 2408.15;
+    const mark = 2405.92;
+    const cand = scalpPctLockCandidateSl({
+      direction: "SELL",
+      entry,
+      livePrice: mark,
+    });
+    // favorable=2.23 → lock 0.3345 → SL 2407.8155 → Capital 2dp 2407.82
+    expect(cand).toBeCloseTo(2407.8155, 4);
+    expect(formatScalpBrokerStopLevel("GOLD", cand)).toBe("2407.82");
   });
 
-  it("SELL candidateSL = livePrice + 0.00100", () => {
-    const live = 4392.0;
-    const cand = scalpFixedTrailCandidateSl("SELL", live);
-    expect(cand).toBeCloseTo(4392.001, 8);
+  it("BUY candidate = entry + 15% × favorable", () => {
+    const entry = 2400;
+    const mark = 2410;
+    const cand = scalpPctLockCandidateSl({
+      direction: "BUY",
+      entry,
+      livePrice: mark,
+    });
+    expect(cand).toBeCloseTo(2401.5, 8);
   });
 
-  it("BUY SL only moves up; SELL only down", () => {
-    const buyCand = scalpFixedTrailCandidateSl("BUY", 4393.19);
+  it("flat/loss → no candidate", () => {
     expect(
-      scalpBrokerStopShouldMove({
-        direction: "BUY",
-        candidate: buyCand,
-        current: 4392.5,
-        mode: "improve_only",
-      }),
-    ).toBe(true);
-    expect(
-      scalpBrokerStopShouldMove({
-        direction: "BUY",
-        candidate: buyCand,
-        current: buyCand + 0.01,
-        mode: "improve_only",
-      }),
-    ).toBe(false);
-
-    const sellCand = scalpFixedTrailCandidateSl("SELL", 4392.0);
-    expect(
-      scalpBrokerStopShouldMove({
-        direction: "SELL",
-        candidate: sellCand,
-        current: 4392.5,
-        mode: "improve_only",
-      }),
-    ).toBe(true);
-    expect(
-      scalpBrokerStopShouldMove({
-        direction: "SELL",
-        candidate: sellCand,
-        current: sellCand - 0.01,
-        mode: "improve_only",
-      }),
+      Number.isFinite(
+        scalpPctLockCandidateSl({
+          direction: "SELL",
+          entry: 2408,
+          livePrice: 2409,
+        }),
+      ),
     ).toBe(false);
   });
 
-  it("no £0.05 gate — 10s SCALPING path is TF/mode only", () => {
+  it("pullback never worsens SL (15% → would-be 10%)", () => {
+    const entry = 2408.15;
+    const peakMark = 2405.92; // deep profit
+    const peakSl = scalpPctLockCandidateSl({
+      direction: "SELL",
+      entry,
+      livePrice: peakMark,
+    });
+    const pullbackMark = 2407.0; // less profit → ~10%-ish lock
+    const weakerSl = scalpPctLockCandidateSl({
+      direction: "SELL",
+      entry,
+      livePrice: pullbackMark,
+    });
+    expect(weakerSl).toBeGreaterThan(peakSl); // worse for SELL
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "SELL",
+        candidate: weakerSl,
+        current: peakSl,
+        mode: "improve_only",
+      }),
+    ).toBe(false);
+  });
+
+  it("only 10s SCALPING", () => {
     expect(
       isTenSecondScalpingMode(StrategyMode.SCALPING, { timeframe: "10s" }),
     ).toBe(true);

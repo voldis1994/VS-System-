@@ -367,9 +367,46 @@ export function scalpSoftTrailDistancePrice(
 }
 
 /**
- * 10s SCALPING fixed broker SL distance from live price (not pips, not £0.05).
- * BUY: mark − 0.00100 · SELL: mark + 0.00100 · improve-only.
+ * 10s SCALPING: lock this fraction of the favorable move from entry into SL.
+ * BUY: SL = entry + 15% × (mark − entry)
+ * SELL: SL = entry − 15% × (entry − mark)
+ * Improve-only — never move SL backward on a pullback.
  */
+export const SCALP_LOCK_PCT = 0.15;
+
+/** Min interval between Capital SL modify attempts for 10s SCALPING. */
+export const SCALP_SL_MODIFY_INTERVAL_MS = 10_000;
+
+/**
+ * Candidate broker SL = entry ± lockPct of favorable excursion.
+ * Returns NaN when flat/loss (no lock yet).
+ */
+export function scalpPctLockCandidateSl(input: {
+  direction: "BUY" | "SELL";
+  entry: number;
+  livePrice: number;
+  lockPct?: number;
+}): number {
+  const entry = Number(input.entry);
+  const mark = Number(input.livePrice);
+  const pctRaw = Number(input.lockPct ?? SCALP_LOCK_PCT);
+  const pct =
+    Number.isFinite(pctRaw) && pctRaw > 0 && pctRaw <= 1
+      ? pctRaw
+      : SCALP_LOCK_PCT;
+  if (![entry, mark].every((n) => Number.isFinite(n) && n > 0)) return NaN;
+
+  if (input.direction === "BUY") {
+    const favorable = mark - entry;
+    if (!(favorable > 0)) return NaN;
+    return entry + pct * favorable;
+  }
+  const favorable = entry - mark;
+  if (!(favorable > 0)) return NaN;
+  return entry - pct * favorable;
+}
+
+/** @deprecated Prefer SCALP_LOCK_PCT / scalpPctLockCandidateSl for 10s SCALPING. */
 export const SCALP_FIXED_SL_DISTANCE = 0.001;
 
 export function scalpFixedTrailCandidateSl(
@@ -386,7 +423,7 @@ export function scalpFixedTrailCandidateSl(
 
 /**
  * Format a 10s SCALPING broker stopLevel string.
- * Must NOT use formatInstrumentPrice (GOLD 2dp would wipe 0.001 trail).
+ * GOLD uses 2dp (Capital chart); finer for FX.
  */
 export function formatScalpBrokerStopLevel(
   symbol: string,
@@ -395,7 +432,7 @@ export function formatScalpBrokerStopLevel(
   const pip = instrumentPipSize(symbol);
   let decimals = 2;
   if (pip <= 0.0001) decimals = 5;
-  else if (pip <= 0.01) decimals = 5; // GOLD: keep 0.00100 fixed-trail precision
+  else if (pip <= 0.01) decimals = 2; // GOLD Capital chart
   else if (pip <= 0.1) decimals = 2;
   return Number(level).toFixed(decimals);
 }

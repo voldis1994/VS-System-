@@ -29,8 +29,9 @@ import {
   capitalMinStopDistance,
   closeAllowedByStopLoss,
   instrumentPipSize,
-  SCALP_FIXED_SL_DISTANCE,
-  scalpFixedTrailCandidateSl,
+  SCALP_LOCK_PCT,
+  SCALP_SL_MODIFY_INTERVAL_MS,
+  scalpPctLockCandidateSl,
   formatScalpBrokerStopLevel,
   scalpBrokerStopShouldMove,
   type MultiTpLevelPlan,
@@ -61,6 +62,8 @@ export class PositionsService {
   private static readonly NAKED_RECOVERY_MS = 15_000;
   private static readonly NAKED_NOTIFY_MS = 120_000;
   private static readonly CHASE_FAIL_NOTIFY_MS = 30_000;
+  /** Last Capital SL modify attempt (ms) per position — 10s SCALPING throttle. */
+  private scalpSlModifyAt = new Map<string, number>();
   /** Per-account BE/trail lock — one slow Capital confirm must not skip all accounts. */
   private protectionsRunningByAccount = new Set<string>();
   private protectionsRunning = false;
@@ -837,9 +840,9 @@ export class PositionsService {
   }
 
   /**
-   * 10s SCALPING — fixed-price-distance Capital SL chase.
-   * candidateSL = livePrice ± 0.00100 (improve-only). No £0.05 arm, no 0.3-pip soft trail,
-   * no capitalSafeTrailDistance floor on this path.
+   * 10s SCALPING — lock 15% of favorable move from entry into Capital SL.
+   * Every ≥10s: candidate = entry ± 15%×(favorable), improve-only, physical Capital modify.
+   * Pullback that would put lock at e.g. 10% never moves SL backward.
    */
   private async chaseScalpFixedPriceStop(input: {
     position: {
@@ -848,16 +851,19 @@ export class PositionsService {
       accountId: string;
       symbol: string;
       direction: string;
+      averageEntry?: unknown;
       stopLoss: unknown;
       brokerPositionId: string | null;
     };
     mark: number;
+    entry: number;
     dir: "BUY" | "SELL";
     correlationId: string;
     brokerStopLoss: Map<string, string>;
   }): Promise<void> {
     const { position, dir, correlationId, brokerStopLoss } = input;
     let mark = input.mark;
+    const entry = Number(input.entry);
 
     let liveSl =
       brokerStopLoss.get(position.id) ??
@@ -883,26 +889,37 @@ export class PositionsService {
       }
     }
 
-    if (!Number.isFinite(mark) || mark <= 0) {
+    if (
+      !Number.isFinite(mark) ||
+      mark <= 0 ||
+      !Number.isFinite(entry) ||
+      entry <= 0
+    ) {
       console.warn(
-        `[SCALP FIXED SL CHASE] skip=missing_price positionId=${position.id} symbol=${position.symbol}`,
+        `[SCALP PCT SL CHASE] skip=missing_price positionId=${position.id} symbol=${position.symbol} mark=${mark} entry=${entry}`,
       );
       return;
     }
 
-    const distance = SCALP_FIXED_SL_DISTANCE;
-    const candN = scalpFixedTrailCandidateSl(dir, mark, distance);
-    if (!Number.isFinite(candN)) {
-      console.warn(
-        `[SCALP FIXED SL CHASE] skip=candidate_invalid positionId=${position.id} symbol=${position.symbol} mark=${mark}`,
-      );
-      return;
-    }
-    const candidateSL = formatScalpBrokerStopLevel(position.symbol, candN);
+    const lockPct = SCALP_LOCK_PCT;
+    const candN = scalpPctLockCandidateSl({
+      direction: dir,
+      entry,
+      livePrice: mark,
+      lockPct,
+    });
+    const favorable = dir === "BUY" ? mark - entry : entry - mark;
+    const candidateSL = Number.isFinite(candN)
+      ? formatScalpBrokerStopLevel(position.symbol, candN)
+      : "none";
 
     console.log(
-      `[SCALP FIXED SL CHASE] symbol=${position.symbol} side=${dir} currentPrice=${mark} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL} distance=${distance.toFixed(5)}`,
+      `[SCALP PCT SL CHASE] symbol=${position.symbol} side=${dir} entry=${entry} currentPrice=${mark} favorable=${favorable.toFixed(4)} lockPct=${lockPct} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL}`,
     );
+
+    if (!Number.isFinite(candN)) {
+      return;
+    }
 
     const improves = scalpBrokerStopShouldMove({
       direction: dir,
@@ -911,8 +928,21 @@ export class PositionsService {
       mode: "improve_only",
     });
     if (!improves) {
+      console.log(
+        `[SCALP PCT SL CHASE] skip=not_better symbol=${position.symbol} candidateSL=${candidateSL} currentSL=${liveSl ?? "none"}`,
+      );
       return;
     }
+
+    const now = Date.now();
+    const lastAt = this.scalpSlModifyAt.get(position.id) ?? 0;
+    if (now - lastAt < SCALP_SL_MODIFY_INTERVAL_MS) {
+      console.log(
+        `[SCALP PCT SL CHASE] skip=throttle_10s symbol=${position.symbol} waitMs=${SCALP_SL_MODIFY_INTERVAL_MS - (now - lastAt)}`,
+      );
+      return;
+    }
+    this.scalpSlModifyAt.set(position.id, now);
 
     await this.pushScalpFixedBrokerStop({
       position,
@@ -926,7 +956,7 @@ export class PositionsService {
   }
 
   /**
-   * Push Capital stopLevel for 10s SCALPING fixed trail — raw candidate, no 0.50 floor.
+   * Push Capital stopLevel for 10s SCALPING 15% lock — physical modify, no 0.50 pre-floor.
    */
   private async pushScalpFixedBrokerStop(input: {
     position: {
@@ -943,29 +973,25 @@ export class PositionsService {
     correlationId: string;
     brokerStopLoss: Map<string, string>;
   }): Promise<void> {
-    const {
-      position,
-      mark,
-      requestedSl,
-      previousSl,
-      correlationId,
-      brokerStopLoss,
-    } = input;
+    const { position, mark, requestedSl, correlationId, brokerStopLoss } =
+      input;
 
     if (!position.brokerPositionId) {
       console.warn(
-        `[SCALP FIXED SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_broker_position_id requestedSL=${requestedSl} positionId=${position.id}`,
+        `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_broker_position_id requestedSL=${requestedSl} positionId=${position.id}`,
       );
       return;
     }
     if (!this.brokers.get(position.accountId)) {
       console.warn(
-        `[SCALP FIXED SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_adapter requestedSL=${requestedSl} positionId=${position.id}`,
+        `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_adapter requestedSL=${requestedSl} positionId=${position.id}`,
       );
       return;
     }
 
-    console.log(`[SCALP FIXED SL REQUEST] requestedSL=${requestedSl}`);
+    console.log(
+      `[SCALP PCT SL REQUEST] requestedSL=${requestedSl} symbol=${position.symbol}`,
+    );
 
     try {
       const after = await this.modifySlTp(
@@ -987,17 +1013,17 @@ export class PositionsService {
           stopLoss: returned,
           currentPrice: mark,
           trailingEnabled: true,
-          trailingDistance: SCALP_FIXED_SL_DISTANCE.toFixed(8),
+          trailingDistance: SCALP_LOCK_PCT.toFixed(8),
           trailingActivatedAt: new Date(),
         },
       });
       console.log(
-        `[SCALP FIXED SL RESPONSE] accepted=true brokerReturnedSL=${returned} errorReason=none`,
+        `[SCALP PCT SL RESPONSE] accepted=true brokerReturnedSL=${returned} errorReason=none`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `[SCALP FIXED SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=${msg}`,
+        `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=${msg}`,
       );
     }
   }
@@ -1209,7 +1235,7 @@ export class PositionsService {
           });
         }
 
-        // Heal 10s SCALPING flags only (fixed 0.00100 trail distance). Other TFs untouched.
+        // Heal 10s SCALPING flags only (15% from-entry lock). Other TFs untouched.
         if (position.strategyId) {
           const stHeal = await this.prisma.strategy.findFirst({
             where: { id: position.strategyId },
@@ -1222,9 +1248,9 @@ export class PositionsService {
             const needTrail =
               !position.trailingEnabled ||
               position.trailingDistance == null ||
-              Number(position.trailingDistance) !== SCALP_FIXED_SL_DISTANCE;
+              Number(position.trailingDistance) !== SCALP_LOCK_PCT;
             if (needTrail) {
-              const trailDist = SCALP_FIXED_SL_DISTANCE;
+              const trailDist = SCALP_LOCK_PCT;
               await this.prisma.position.update({
                 where: { id: position.id },
                 data: {
@@ -1408,7 +1434,7 @@ export class PositionsService {
           ) {
             moneyTrigger = cfg.breakEvenActivationMoney;
           }
-          // 10s SCALPING SL chase is fixed 0.00100 path (skip Capital-safe BE)
+          // 10s SCALPING SL chase is 15% from-entry lock path (skip Capital-safe BE)
           skipGenericBe = isTenSecondScalpingMode(st?.mode, cfg);
         }
         const moneyHit =
@@ -1456,7 +1482,7 @@ export class PositionsService {
         let fresh = await this.get(position.organizationId, position.id);
         if (fresh.status === "CLOSED") continue;
 
-        // Force 10s SCALPING trail flags (fixed 0.00100 distance)
+        // Force 10s SCALPING trail flags (15% from-entry lock)
         if (
           (!fresh.trailingEnabled || fresh.trailingDistance == null) &&
           fresh.strategyId
@@ -1473,13 +1499,13 @@ export class PositionsService {
               where: { id: position.id },
               data: {
                 trailingEnabled: true,
-                trailingDistance: SCALP_FIXED_SL_DISTANCE.toFixed(8),
+                trailingDistance: SCALP_LOCK_PCT.toFixed(8),
               },
             });
           }
         }
 
-        // 10s SCALPING: enable fixed-trail flags in profit
+        // 10s SCALPING: enable 15% lock trail flags in profit
         if (
           !fresh.trailingEnabled &&
           inProfit &&
@@ -1495,14 +1521,14 @@ export class PositionsService {
               where: { id: position.id },
               data: {
                 trailingEnabled: true,
-                trailingDistance: SCALP_FIXED_SL_DISTANCE.toFixed(8),
+                trailingDistance: SCALP_LOCK_PCT.toFixed(8),
               },
             });
           }
         }
 
         // ═══════════════════════════════════════════════════════════
-        // 10s SCALPING fixed 0.00100 live-price SL chase.
+        // 10s SCALPING 15% from-entry SL lock every 10s.
         // Always continue afterward so capitalSafeTrailDistance is unreachable.
         // ═══════════════════════════════════════════════════════════
         {
@@ -1522,6 +1548,7 @@ export class PositionsService {
             await this.chaseScalpFixedPriceStop({
               position,
               mark,
+              entry,
               dir,
               correlationId,
               brokerStopLoss,

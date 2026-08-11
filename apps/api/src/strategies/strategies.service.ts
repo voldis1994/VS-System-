@@ -14,7 +14,7 @@ import {
   isTenSecondScalpingMode,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, SCALP_FIXED_SL_DISTANCE } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, SCALP_LOCK_PCT } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -1064,7 +1064,7 @@ export class StrategiesService {
     // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
     const priceOffset = config.priceOffsetMode === true;
     // Arm at entry only when explicitly requested — 10s SCALPING uses fixed
-    // 0.00100 live-price SL chase (no £0.05 soft arm).
+    // 0.15 (15%) from-entry SL lock every 10s (no £0.05 soft arm).
     const trailImmediate =
       config.trailArmImmediate === true || auto?.trailArmImmediate === true;
     const is10sScalpFixed = isTenSecondScalpingMode(strategyMode, config);
@@ -1093,7 +1093,7 @@ export class StrategiesService {
     // Arm trail flags, but do NOT stamp trailingActivatedAt until Capital has
     // a visible stopLevel — otherwise autoManage hammers soft trail modifies
     // on a naked chart and starves the API (Internal Server Error toasts).
-    // 10s SCALPING: fixed 0.00100 distance; ActivatedAt set on first successful chase.
+    // 10s SCALPING: 15% from-entry lock; ActivatedAt set on first successful chase.
     const hasBrokerSl =
       pos.stopLoss != null && String(pos.stopLoss).trim().length > 0;
     await this.prisma.position.update({
@@ -1106,7 +1106,7 @@ export class StrategiesService {
         trailingEnabled: trailEnabled,
         trailingDistance: trailEnabled
           ? is10sScalpFixed
-            ? SCALP_FIXED_SL_DISTANCE.toFixed(8)
+            ? SCALP_LOCK_PCT.toFixed(8)
             : trail.toFixed(8)
           : null,
         trailingActivatedAt:

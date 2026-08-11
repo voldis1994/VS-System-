@@ -20,7 +20,7 @@ import {
   resolveScalpDistance,
   resolveScalpTrailDistance,
   resolveScalpActivationDistance,
-  SCALP_FIXED_SL_DISTANCE,
+  SCALP_LOCK_PCT,
   capitalSafeInitialStop,
   capitalMinStopDistance,
   isMarginOrFundsError,
@@ -1205,9 +1205,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             brokerSymbol,
             Math.max(beOffsetPips, 0),
           );
-          // Classic 10s SCALPING: fixed 0.00100 price-distance Capital SL chase
+          // Classic 10s SCALPING: lock 15% of favorable move from entry into SL
           trailDist = isClassicScalping
-            ? SCALP_FIXED_SL_DISTANCE
+            ? SCALP_LOCK_PCT
             : resolveScalpTrailDistance(brokerSymbol, entry, trailPips);
         } else {
           beActDist =
