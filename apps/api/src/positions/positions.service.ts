@@ -929,10 +929,6 @@ export class PositionsService {
       return;
     }
 
-    // Stamp only when we actually attempt Capital — cleared/shortened on reject
-    // so a failed modify does not burn the full 10s window.
-    this.scalpSlModifyAt.set(position.id, now);
-
     await this.pushScalpFixedBrokerStop({
       position,
       dir,
@@ -966,19 +962,20 @@ export class PositionsService {
       input;
 
     if (!position.brokerPositionId) {
-      this.scalpSlModifyAt.delete(position.id);
       console.warn(
         `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_broker_position_id requestedSL=${requestedSl} positionId=${position.id}`,
       );
       return;
     }
     if (!this.brokers.get(position.accountId)) {
-      this.scalpSlModifyAt.delete(position.id);
       console.warn(
         `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=missing_adapter requestedSL=${requestedSl} positionId=${position.id}`,
       );
       return;
     }
+
+    // Stamp immediately before Capital PUT — reject uses 2s backoff below
+    this.scalpSlModifyAt.set(position.id, Date.now());
 
     console.log(
       `[SCALP PCT SL REQUEST] requestedSL=${requestedSl} symbol=${position.symbol} brokerPositionId=${position.brokerPositionId}`,
@@ -1104,7 +1101,12 @@ export class PositionsService {
     priceBySymbol: Map<string, number>,
     correlationId: string,
   ) {
-    if (this.protectionsRunningByAccount.has(accountId)) return;
+    if (this.protectionsRunningByAccount.has(accountId)) {
+      console.warn(
+        `[PROTECTIONS] skip=account_busy accountId=${accountId} positions=${accountPositions.length} — Capital modify still in flight`,
+      );
+      return;
+    }
     this.protectionsRunningByAccount.add(accountId);
     try {
       await this.autoManageAccountProtectionsLocked(
@@ -1193,6 +1195,59 @@ export class PositionsService {
           data: { currentPrice: mark },
         });
 
+        const entry = Number(position.averageEntry);
+        const dir = position.direction as "BUY" | "SELL";
+
+        // ─── 10s SCALPING: Capital 15% SL lock FIRST ───
+        // Run before Multi-TP / naked recovery / generic BE+trail so those
+        // paths cannot hold the Capital login lock or continue-skip ahead
+        // of the physical stopLevel modify.
+        {
+          let mode: string | null = null;
+          let timeframe: string | undefined;
+          if (position.strategyId) {
+            const stEarly = await this.prisma.strategy.findFirst({
+              where: { id: position.strategyId },
+              select: { mode: true, configurationJson: true },
+            });
+            mode = stEarly?.mode ?? null;
+            timeframe = (
+              stEarly?.configurationJson as { timeframe?: string } | null
+            )?.timeframe;
+          }
+          if (isTenSecondScalpingMode(mode, { timeframe })) {
+            if (
+              !brokerStopLoss.has(position.id) &&
+              position.stopLoss != null &&
+              String(position.stopLoss).trim().length > 0
+            ) {
+              brokerStopLoss.set(position.id, String(position.stopLoss));
+            }
+            if (
+              !position.trailingEnabled ||
+              position.trailingDistance == null ||
+              Number(position.trailingDistance) !== SCALP_LOCK_PCT
+            ) {
+              await this.prisma.position.update({
+                where: { id: position.id },
+                data: {
+                  trailingEnabled: true,
+                  trailingDistance: SCALP_LOCK_PCT.toFixed(8),
+                },
+              });
+            }
+            await this.chaseScalpFixedPriceStop({
+              position,
+              mark,
+              entry,
+              dir,
+              correlationId,
+              brokerStopLoss,
+            });
+            continue;
+          }
+        }
+
         // App-managed Multi TP scale-out (Capital has only 1 native TP)
         await this.manageMultiTakeProfits(
           position.organizationId,
@@ -1209,8 +1264,6 @@ export class PositionsService {
         });
         if (!stillOpen) continue;
 
-        const entry = Number(position.averageEntry);
-        const dir = position.direction as "BUY" | "SELL";
         const favorable =
           dir === "BUY" ? mark - entry : entry - mark;
         const moneyPnl = resolveFloatingMoneyPnl({
@@ -1230,36 +1283,7 @@ export class PositionsService {
           });
         }
 
-        // Heal 10s SCALPING flags only (15% from-entry lock). Other TFs untouched.
-        if (position.strategyId) {
-          const stHeal = await this.prisma.strategy.findFirst({
-            where: { id: position.strategyId },
-            select: { mode: true, configurationJson: true },
-          });
-          const healCfg = (stHeal?.configurationJson ?? {}) as {
-            timeframe?: string;
-          };
-          if (isTenSecondScalpingMode(stHeal?.mode, healCfg)) {
-            const needTrail =
-              !position.trailingEnabled ||
-              position.trailingDistance == null ||
-              Number(position.trailingDistance) !== SCALP_LOCK_PCT;
-            if (needTrail) {
-              const trailDist = SCALP_LOCK_PCT;
-              await this.prisma.position.update({
-                where: { id: position.id },
-                data: {
-                  trailingEnabled: true,
-                  trailingDistance: trailDist.toFixed(8),
-                },
-              });
-              (position as { trailingEnabled: boolean }).trailingEnabled = true;
-              (position as { trailingDistance: unknown }).trailingDistance =
-                trailDist.toFixed(8);
-            }
-          }
-        }
-
+        // Heal trail flags for non-10s paths only (10s already continued above)
         // Resolve whether Capital (or DB) already has a stopLevel.
         // Never treat "broker map miss" as naked if DB has stopLoss — that
         // used to skip BE/trail forever while price ran in profit.
@@ -1477,81 +1501,7 @@ export class PositionsService {
         let fresh = await this.get(position.organizationId, position.id);
         if (fresh.status === "CLOSED") continue;
 
-        // Force 10s SCALPING trail flags (15% from-entry lock)
-        if (
-          (!fresh.trailingEnabled || fresh.trailingDistance == null) &&
-          fresh.strategyId
-        ) {
-          const stForce = await this.prisma.strategy.findFirst({
-            where: { id: fresh.strategyId },
-            select: { mode: true, configurationJson: true },
-          });
-          const forceCfg = (stForce?.configurationJson ?? {}) as {
-            timeframe?: string;
-          };
-          if (isTenSecondScalpingMode(stForce?.mode, forceCfg)) {
-            fresh = await this.prisma.position.update({
-              where: { id: position.id },
-              data: {
-                trailingEnabled: true,
-                trailingDistance: SCALP_LOCK_PCT.toFixed(8),
-              },
-            });
-          }
-        }
-
-        // 10s SCALPING: enable 15% lock trail flags in profit
-        if (
-          !fresh.trailingEnabled &&
-          inProfit &&
-          fresh.strategyId
-        ) {
-          const stP = await this.prisma.strategy.findFirst({
-            where: { id: fresh.strategyId },
-            select: { mode: true, configurationJson: true },
-          });
-          const pCfg = (stP?.configurationJson ?? {}) as { timeframe?: string };
-          if (isTenSecondScalpingMode(stP?.mode, pCfg)) {
-            fresh = await this.prisma.position.update({
-              where: { id: position.id },
-              data: {
-                trailingEnabled: true,
-                trailingDistance: SCALP_LOCK_PCT.toFixed(8),
-              },
-            });
-          }
-        }
-
-        // ═══════════════════════════════════════════════════════════
-        // 10s SCALPING 15% from-entry SL lock every 10s.
-        // Always continue afterward so capitalSafeTrailDistance is unreachable.
-        // ═══════════════════════════════════════════════════════════
-        {
-          let mode: string | null = null;
-          let timeframe: string | undefined;
-          if (position.strategyId) {
-            const stTrail = await this.prisma.strategy.findFirst({
-              where: { id: position.strategyId },
-              select: { mode: true, configurationJson: true },
-            });
-            mode = stTrail?.mode ?? null;
-            timeframe = (
-              stTrail?.configurationJson as { timeframe?: string } | null
-            )?.timeframe;
-          }
-          if (isTenSecondScalpingMode(mode, { timeframe })) {
-            await this.chaseScalpFixedPriceStop({
-              position,
-              mark,
-              entry,
-              dir,
-              correlationId,
-              brokerStopLoss,
-            });
-            // CRITICAL: never fall into generic broker trail (Capital 0.50 floor)
-            continue;
-          }
-        }
+        // 10s SCALPING already chased+continued above — this branch is other modes only.
 
         if (fresh.trailingEnabled && fresh.trailingDistance != null) {
           let distance = String(fresh.trailingDistance);
