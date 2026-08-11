@@ -3,6 +3,7 @@ import {
   directionAllowedAgainstCandles,
   evaluateCandleBiasFive,
   resolveEntryWithCandleFlip,
+  scalpStrictEntryAllowed,
 } from "./candle-bias";
 
 function bar(open: number, close: number) {
@@ -39,6 +40,58 @@ describe("candle bias + direction filter", () => {
     });
     expect(directionAllowedAgainstCandles("BUY", "bull").ok).toBe(true);
     expect(directionAllowedAgainstCandles("BUY", "flat").ok).toBe(true);
+  });
+
+  it("strict scalp: flat TF blocks BUY (no knife catch)", () => {
+    expect(
+      scalpStrictEntryAllowed({
+        signal: "BUY",
+        tfBias: "flat",
+        tfNetPct: 0,
+        microBias: "flat",
+        buyScore: 60,
+        sellScore: 40,
+      }),
+    ).toMatchObject({ ok: false, skip: "scalp_need_bull_structure" });
+  });
+
+  it("strict scalp: dumping net% blocks BUY even if bull labels noisy", () => {
+    expect(
+      scalpStrictEntryAllowed({
+        signal: "BUY",
+        tfBias: "bull",
+        tfNetPct: -0.05,
+        microBias: "flat",
+        buyScore: 70,
+        sellScore: 40,
+      }),
+    ).toMatchObject({ ok: false, skip: "scalp_falling_knife" });
+  });
+
+  it("strict scalp: weak score edge waits", () => {
+    expect(
+      scalpStrictEntryAllowed({
+        signal: "SELL",
+        tfBias: "bear",
+        tfNetPct: -0.02,
+        microBias: "bear",
+        buyScore: 48,
+        sellScore: 52,
+      }),
+    ).toMatchObject({ ok: false, skip: "scalp_weak_edge" });
+  });
+
+  it("strict scalp: clear bear dump allows SELL", () => {
+    expect(
+      scalpStrictEntryAllowed({
+        signal: "SELL",
+        tfBias: "bear",
+        tfNetPct: -0.04,
+        microBias: "bear",
+        buyScore: 30,
+        sellScore: 55,
+      }).ok,
+    ).toBe(true);
   });
 
   it("SELL invalid against bullish", () => {

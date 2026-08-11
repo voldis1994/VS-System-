@@ -98,6 +98,117 @@ export function directionAllowedAgainstCandles(
 }
 
 /**
+ * Strict 10s SCALPING entry gate — kills "buy the falling knife" soft scores.
+ * Soft score with minScore=0 + flat candles previously allowed BUY into a dump.
+ *
+ * Rules:
+ * 1) TF bias must AGREE (BUY→bull, SELL→bear). Flat = wait.
+ * 2) Micro 1m must not oppose; if not flat, must agree.
+ * 3) Net move of last-5 must not oppose (impulse veto).
+ * 4) Score edge — winner must beat loser by minEdge (noise filter).
+ */
+export function scalpStrictEntryAllowed(input: {
+  signal: "BUY" | "SELL";
+  tfBias: CandleBias;
+  tfNetPct: number;
+  microBias: CandleBias;
+  buyScore: number;
+  sellScore: number;
+  /** Minimum buy−sell gap (default 12). */
+  minEdge?: number;
+  /** Block BUY when last-5 net% below this; SELL when above -this (default 0.012%). */
+  maxAdverseNetPct?: number;
+}): { ok: boolean; skip?: string; reason?: string } {
+  const {
+    signal,
+    tfBias,
+    tfNetPct,
+    microBias,
+    buyScore,
+    sellScore,
+  } = input;
+  const minEdge = Number.isFinite(input.minEdge) ? Number(input.minEdge) : 12;
+  const adverse =
+    Number.isFinite(input.maxAdverseNetPct)
+      ? Math.abs(Number(input.maxAdverseNetPct))
+      : 0.012;
+
+  if (signal === "BUY" && tfBias !== "bull") {
+    return {
+      ok: false,
+      skip: "scalp_need_bull_structure",
+      reason: `BUY needs bull TF candles (got ${tfBias})`,
+    };
+  }
+  if (signal === "SELL" && tfBias !== "bear") {
+    return {
+      ok: false,
+      skip: "scalp_need_bear_structure",
+      reason: `SELL needs bear TF candles (got ${tfBias})`,
+    };
+  }
+
+  if (signal === "BUY" && microBias === "bear") {
+    return {
+      ok: false,
+      skip: "buy_vs_bearish_micro",
+      reason: "BUY blocked — bearish 1m micro",
+    };
+  }
+  if (signal === "SELL" && microBias === "bull") {
+    return {
+      ok: false,
+      skip: "sell_vs_bullish_micro",
+      reason: "SELL blocked — bullish 1m micro",
+    };
+  }
+  if (signal === "BUY" && microBias !== "flat" && microBias !== "bull") {
+    return {
+      ok: false,
+      skip: "micro_disagree",
+      reason: "BUY blocked — micro not bull",
+    };
+  }
+  if (signal === "SELL" && microBias !== "flat" && microBias !== "bear") {
+    return {
+      ok: false,
+      skip: "micro_disagree",
+      reason: "SELL blocked — micro not bear",
+    };
+  }
+
+  const net = Number(tfNetPct);
+  if (Number.isFinite(net)) {
+    if (signal === "BUY" && net < -adverse) {
+      return {
+        ok: false,
+        skip: "scalp_falling_knife",
+        reason: `BUY blocked — last-5 net ${net.toFixed(4)}% dumping`,
+      };
+    }
+    if (signal === "SELL" && net > adverse) {
+      return {
+        ok: false,
+        skip: "scalp_chasing_rally",
+        reason: `SELL blocked — last-5 net ${net.toFixed(4)}% rallying`,
+      };
+    }
+  }
+
+  const edge =
+    signal === "BUY" ? buyScore - sellScore : sellScore - buyScore;
+  if (!(edge >= minEdge)) {
+    return {
+      ok: false,
+      skip: "scalp_weak_edge",
+      reason: `Score edge ${edge.toFixed(0)} < ${minEdge} — wait clearer setup`,
+    };
+  }
+
+  return { ok: true };
+}
+
+/**
  * If strategy BUY is blocked by candles → try SELL (and vice versa).
  * Do not sit idle on one blocked setup when the opposite side is allowed.
  */

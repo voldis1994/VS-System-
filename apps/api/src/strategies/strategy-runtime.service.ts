@@ -37,7 +37,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { evaluateMicro1mFive } from "./micro-1m";
 import {
   evaluateCandleBiasFive,
-  directionAllowedAgainstCandles,
+  scalpStrictEntryAllowed,
 } from "./candle-bias";
 import {
   computeIndicators,
@@ -779,30 +779,36 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // 10s SCALPING: never BUY vs sell/bear candles, never SELL vs buy/bull.
-      // Flat candles OK. No auto-flip — wait for candle-aligned signal.
+      // 10s SCALPING: strict structure — no BUY into dump / SELL into rally,
+      // no flat-candle soft entries, require clear score edge.
       let signal: "BUY" | "SELL" = scored.signal;
       if (isClassicScalping) {
-        const tfDir = directionAllowedAgainstCandles(scored.signal, tfBias.bias);
         const microBias =
           micro.signal === "BUY"
             ? ("bull" as const)
             : micro.signal === "SELL"
               ? ("bear" as const)
               : ("flat" as const);
-        const microDir =
-          microBias === "flat"
-            ? { ok: true as const }
-            : directionAllowedAgainstCandles(scored.signal, microBias);
-        if (!tfDir.ok || !microDir.ok) {
-          const blocked = !tfDir.ok ? tfDir : microDir;
+        const strict = scalpStrictEntryAllowed({
+          signal: scored.signal,
+          tfBias: tfBias.bias,
+          tfNetPct: tfBias.netPct,
+          microBias,
+          buyScore: scored.buyScore,
+          sellScore: scored.sellScore,
+          minEdge: 12,
+          maxAdverseNetPct: 0.012,
+        });
+        if (!strict.ok) {
           lastStatus = {
             ...lastStatus,
             signal: "HOLD",
-            skip: blocked.skip ?? "candle_filter",
-            reason: blocked.reason ?? "candle_direction_block",
+            skip: strict.skip ?? "candle_filter",
+            reason: strict.reason ?? "scalp_strict_block",
             candleDirectionFilter: true,
+            scalpStrictEntry: true,
             tfBias: tfBias.bias,
+            tfNetPct: tfBias.netPct,
             micro: micro.signal,
             buyScore: scored.buyScore,
             sellScore: scored.sellScore,
@@ -814,7 +820,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           signal,
           gate: scored.gate,
           candleDirectionFilter: true,
-          reason: "scalp_candle_dir_ok",
+          scalpStrictEntry: true,
+          reason: "scalp_strict_ok",
           buyScore: scored.buyScore,
           sellScore: scored.sellScore,
         };
