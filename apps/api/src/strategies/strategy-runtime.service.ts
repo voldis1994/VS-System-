@@ -922,16 +922,21 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               OR: [{ symbol: brokerSymbol }, { symbol }],
             },
           });
-          lastStatus = {
-            ...lastStatus,
-            symbol: brokerSymbol,
-            signal,
-            skip: openSame > 0 ? "waiting_open_close" : "same_signal",
-            reason: openSame > 0 ? "same_side_open" : undefined,
-            openTrades: openSame > 0 ? openSame : undefined,
-            accountId,
-          };
-          continue;
+          if (openSame > 0) {
+            lastStatus = {
+              ...lastStatus,
+              symbol: brokerSymbol,
+              signal,
+              skip: "waiting_open_close",
+              reason: "same_side_open",
+              openTrades: openSame,
+              accountId,
+            };
+            continue;
+          }
+          // Flat but fingerprint stuck (orphan fill / prior pending) — clear and
+          // allow entry. Inflight gate below still blocks true in-flight races.
+          this.lastFingerprint.delete(key);
         }
 
         // Account-wide open positions — oneTradeOnly = max 1 open on this account
@@ -948,14 +953,17 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
 
         // oneTradeOnly: block while an order is in-flight OR FILLED without a
-        // Position row yet (audit C4/H3 — prevents second Capital deal).
+        // Position row yet. ALL statuses are time-bounded — stuck SENT/ACCEPTED
+        // must not freeze 10s SCALPING forever.
         if (oneTradeOnly) {
+          const inflightSince = new Date(Date.now() - 90_000);
           const inflightOnSymbol = await this.prisma.order.count({
             where: {
               organizationId: strategy.organizationId,
               accountId,
               strategyId: strategy.id,
               symbol: brokerSymbol,
+              createdAt: { gte: inflightSince },
               OR: [
                 {
                   status: {
@@ -970,7 +978,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 },
                 {
                   status: OrderStatus.FILLED,
-                  createdAt: { gte: new Date(Date.now() - 120_000) },
                   positions: { none: {} },
                 },
               ],

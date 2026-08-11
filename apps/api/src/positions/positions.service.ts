@@ -183,31 +183,62 @@ export class PositionsService {
       const liveIds = new Set(
         live.map((x) => x.brokerPositionId).filter(Boolean),
       );
-      // Empty snapshot is ambiguous (wrong CFD / API glitch) — NEVER ghost-close
-      // on empty lists. Only close when broker returned a non-empty book that
-      // simply does not contain this dealId (audit C5).
+      // Empty list: with login-lock fixed, repeated empties on the pinned CFD
+      // mean Capital is truly flat. Without this, local ghost OPENs permanently
+      // block oneTradeOnly / 10s SCALPING entries.
       if (live.length === 0 && positions.length > 0) {
+        const n = (this.emptyBrokerSnapshots.get(accId) ?? 0) + 1;
+        this.emptyBrokerSnapshots.set(accId, n);
+        if (n < 5) {
+          console.warn(
+            `reconcileClosedAgainstBroker ${accId}: empty broker list (${n}/5) — skip ghost close`,
+          );
+          continue;
+        }
         console.warn(
-          `reconcileClosedAgainstBroker ${accId}: empty broker list — skip ghost close`,
+          `reconcileClosedAgainstBroker ${accId}: empty broker list ×${n} — closing local ghosts so entries can resume`,
         );
-        continue;
+      } else {
+        this.emptyBrokerSnapshots.set(accId, 0);
       }
       for (const p of positions) {
-        if (!p.brokerPositionId) continue;
+        // Orphan local row with no broker id — cannot manage SL; unblock entries
+        if (!p.brokerPositionId) {
+          const ageMs = Date.now() - new Date(p.openedAt).getTime();
+          if (ageMs > 90_000) {
+            await this.prisma.position.update({
+              where: { id: p.id },
+              data: {
+                status: "CLOSED",
+                closedAt: p.closedAt ?? new Date(),
+                unrealizedPnl: "0",
+                volume: "0",
+              },
+            });
+            closed += 1;
+            console.warn(
+              `Reconciled orphan position ${p.id} (${p.symbol}) — no brokerPositionId`,
+            );
+          }
+          continue;
+        }
         if (liveIds.has(p.brokerPositionId)) continue;
-        await this.prisma.position.update({
-          where: { id: p.id },
-          data: {
-            status: "CLOSED",
-            closedAt: p.closedAt ?? new Date(),
-            unrealizedPnl: "0",
-            volume: "0",
-          },
-        });
-        closed += 1;
-        console.warn(
-          `Reconciled ghost position ${p.id} (${p.symbol}) — missing on broker`,
-        );
+        // Missing from a non-empty book, OR confirmed flat after 5 empty snapshots
+        if (live.length > 0 || (this.emptyBrokerSnapshots.get(accId) ?? 0) >= 5) {
+          await this.prisma.position.update({
+            where: { id: p.id },
+            data: {
+              status: "CLOSED",
+              closedAt: p.closedAt ?? new Date(),
+              unrealizedPnl: "0",
+              volume: "0",
+            },
+          });
+          closed += 1;
+          console.warn(
+            `Reconciled ghost position ${p.id} (${p.symbol}) — missing on broker`,
+          );
+        }
       }
     }
     return closed;
@@ -263,12 +294,18 @@ export class PositionsService {
       } catch {
         continue;
       }
-      // Same empty-snapshot guard as reconcile — NEVER mass-close on empty
+      // Same empty-snapshot guard as reconcile (5× confirmed flat)
       if (live.length === 0 && accountPositions.length > 0) {
-        console.warn(
-          `positions.list ${accountId}: empty broker list — skip ghost close`,
-        );
-        continue;
+        const n = (this.emptyBrokerSnapshots.get(accountId) ?? 0) + 1;
+        this.emptyBrokerSnapshots.set(accountId, n);
+        if (n < 5) {
+          console.warn(
+            `positions.list ${accountId}: empty broker list (${n}/5) — skip ghost close`,
+          );
+          continue;
+        }
+      } else if (live.length > 0) {
+        this.emptyBrokerSnapshots.set(accountId, 0);
       }
       const liveById = new Map(
         live
@@ -277,7 +314,21 @@ export class PositionsService {
       );
       const seenLocal = new Set<string>();
       for (const p of accountPositions) {
-        if (!p.brokerPositionId) continue;
+        if (!p.brokerPositionId) {
+          const ageMs = Date.now() - new Date(p.openedAt).getTime();
+          if (ageMs > 90_000) {
+            await this.prisma.position.update({
+              where: { id: p.id },
+              data: {
+                status: "CLOSED",
+                closedAt: p.closedAt ?? new Date(),
+                unrealizedPnl: "0",
+                volume: "0",
+              },
+            });
+          }
+          continue;
+        }
         seenLocal.add(p.brokerPositionId);
         const match = liveById.get(p.brokerPositionId);
         if (match) {
@@ -299,7 +350,10 @@ export class PositionsService {
               status: match.status as never,
             },
           });
-        } else if (live.length > 0) {
+        } else if (
+          live.length > 0 ||
+          (this.emptyBrokerSnapshots.get(accountId) ?? 0) >= 5
+        ) {
           await this.prisma.position.update({
             where: { id: p.id },
             data: {

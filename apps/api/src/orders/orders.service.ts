@@ -46,18 +46,25 @@ export class OrdersService implements OnModuleInit {
       const cutoff = new Date(Date.now() - 2 * 60_000);
       const res = await this.prisma.order.updateMany({
         where: {
-          status: OrderStatus.SENT,
+          status: {
+            in: [
+              OrderStatus.SENT,
+              OrderStatus.VALIDATING,
+              OrderStatus.QUEUED,
+              OrderStatus.ACCEPTED,
+            ],
+          },
           updatedAt: { lt: cutoff },
         },
         data: {
           status: OrderStatus.REJECTED,
           rejectionCode: "STALE_SENT",
           rejectionMessage:
-            "Order stuck in SENT — broker response never recorded (process restart?)",
+            "Order stuck in-flight — broker response never recorded (process restart?)",
         },
       });
       if (res.count > 0) {
-        this.log.warn(`Expired ${res.count} stale SENT order(s)`);
+        this.log.warn(`Expired ${res.count} stale in-flight order(s)`);
       }
     } catch (err) {
       this.log.warn(
