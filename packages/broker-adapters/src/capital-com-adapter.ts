@@ -1141,37 +1141,55 @@ export class CapitalComAdapter implements BrokerAdapter {
       }
     }
 
-    // Optional post-fill SL/TP — Capital-safe only; never fabricate levels
+    // Optional post-fill SL/TP — MUST attach protective stop (retry/widen).
     if (
       accepted &&
       dealId &&
       !request.trailingStop &&
       (request.stopLoss || request.takeProfit)
     ) {
-      try {
-        const fillPx =
-          fillLevel != null && Number.isFinite(Number(fillLevel))
-            ? Number(fillLevel)
-            : Number(request.price ?? 0);
-        const safeSl = request.stopLoss
-          ? capitalSafeInitialStop({
+      const fillPx =
+        fillLevel != null && Number.isFinite(Number(fillLevel))
+          ? Number(fillLevel)
+          : Number(request.price ?? 0);
+      if (request.stopLoss) {
+        const baseDist =
+          fillPx > 0
+            ? Math.abs(fillPx - Number(request.stopLoss))
+            : undefined;
+        let attached = false;
+        for (let attempt = 0; attempt < 3 && !attached; attempt++) {
+          try {
+            const dist =
+              baseDist != null && Number.isFinite(baseDist)
+                ? baseDist * (1 + attempt)
+                : undefined;
+            const safeSl = capitalSafeInitialStop({
               symbol: epic,
               direction: request.direction,
               entry: fillPx > 0 ? fillPx : Number(request.stopLoss),
-              distance:
-                fillPx > 0
-                  ? Math.abs(fillPx - Number(request.stopLoss))
-                  : undefined,
+              distance: dist,
               mark: fillPx > 0 ? fillPx : undefined,
-            })
-          : undefined;
-        await this.modifyPosition({
-          brokerPositionId: dealId,
-          ...(safeSl ? { stopLoss: safeSl } : {}),
-          ...(request.takeProfit ? { takeProfit: request.takeProfit } : {}),
-        });
-      } catch {
-        // Strategy / 1s recovery will retry with verified broker readback
+            });
+            await this.modifyPosition({
+              brokerPositionId: dealId,
+              stopLoss: safeSl,
+              ...(request.takeProfit ? { takeProfit: request.takeProfit } : {}),
+            });
+            attached = true;
+          } catch {
+            await new Promise((r) => setTimeout(r, 150 + attempt * 100));
+          }
+        }
+      } else if (request.takeProfit) {
+        try {
+          await this.modifyPosition({
+            brokerPositionId: dealId,
+            takeProfit: request.takeProfit,
+          });
+        } catch {
+          // TP optional
+        }
       }
     }
 

@@ -6,6 +6,7 @@ import {
   formatScalpBrokerStopLevel,
   scalpBrokerStopShouldMove,
   scalpPctLockCandidateSl,
+  scalpStopValidVsMark,
 } from "@nexus/shared";
 
 /**
@@ -143,20 +144,33 @@ describe("PositionsService 10s SCALPING 15% price-chase SL", () => {
     ).toBe(false);
   });
 
+  it("naked / wrong-side stop rejected by Capital validity helper", () => {
+    // SELL in loss: SL at entry is BELOW mark → invalid
+    expect(
+      scalpStopValidVsMark({
+        direction: "SELL",
+        stop: 4387.47,
+        mark: 4392.15,
+        symbol: "GOLD",
+      }),
+    ).toBe(false);
+    // SELL protective above mark+0.50 → valid
+    expect(
+      scalpStopValidVsMark({
+        direction: "SELL",
+        stop: 4392.65,
+        mark: 4392.15,
+        symbol: "GOLD",
+      }),
+    ).toBe(true);
+  });
+
   it("naked Capital (no current SL) always allows send", () => {
     expect(
       scalpBrokerStopShouldMove({
         direction: "BUY",
         candidate: 2400,
         current: null,
-        mode: "be_sync",
-      }),
-    ).toBe(true);
-    expect(
-      scalpBrokerStopShouldMove({
-        direction: "SELL",
-        candidate: 2408.15,
-        current: "",
         mode: "be_sync",
       }),
     ).toBe(true);

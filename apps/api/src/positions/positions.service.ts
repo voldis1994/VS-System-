@@ -34,6 +34,7 @@ import {
   scalpPctLockCandidateSl,
   formatScalpBrokerStopLevel,
   scalpBrokerStopShouldMove,
+  scalpStopValidVsMark,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -912,13 +913,9 @@ export class PositionsService {
   }
 
   /**
-   * 10s SCALPING — from entry, Capital SL trails live price with 15% cushion
-   * of the favorable move (locks ~85%). Flat/loss → entry. Better lock →
-   * Capital modify immediately. Never move SL backward.
-   *
-   * Uses mark/SL already refreshed by autoManageAccountProtectionsLocked —
-   * do NOT call getOpenPositions(force) here (that held Capital login lock and
-   * starved the next protection tick / other positions).
+   * 10s SCALPING — Capital SL must exist from the first tick.
+   * In profit: trail mark with 15% cushion (~85% locked), improve-only.
+   * Flat/loss or invalid vs mark: Capital-safe protective stop (never naked).
    */
   private async chaseScalpFixedPriceStop(input: {
     position: {
@@ -966,19 +963,55 @@ export class PositionsService {
     }
 
     const lockPct = SCALP_LOCK_PCT;
-    const candN = scalpPctLockCandidateSl({
+    const favorable = dir === "BUY" ? mark - entry : entry - mark;
+    const inProfit = favorable > 0;
+    let candN = scalpPctLockCandidateSl({
       direction: dir,
       entry,
       livePrice: mark,
       lockPct,
     });
-    const favorable = dir === "BUY" ? mark - entry : entry - mark;
+
+    // Clamp profitable chase so Capital min-stop vs live mark is satisfied.
+    // Flat/loss / invalid → hard protective stop (entry±min) — NEVER leave naked.
+    const minD = capitalMinStopDistance(position.symbol);
+    if (inProfit && Number.isFinite(candN)) {
+      if (dir === "BUY") {
+        candN = Math.min(candN, mark - minD);
+        // Never trail below entry once in profit (BE floor)
+        candN = Math.max(candN, entry);
+      } else {
+        candN = Math.max(candN, mark + minD);
+        candN = Math.min(candN, entry);
+      }
+    }
+    if (
+      !inProfit ||
+      !Number.isFinite(candN) ||
+      !scalpStopValidVsMark({
+        direction: dir,
+        stop: candN,
+        mark,
+        symbol: position.symbol,
+      })
+    ) {
+      candN = Number(
+        capitalSafeInitialStop({
+          symbol: position.symbol,
+          direction: dir,
+          entry,
+          distance: minD,
+          mark,
+        }),
+      );
+    }
+
     const candidateSL = Number.isFinite(candN)
       ? formatScalpBrokerStopLevel(position.symbol, candN)
       : "none";
 
     console.log(
-      `[SCALP PCT SL CHASE] symbol=${position.symbol} side=${dir} entry=${entry} currentPrice=${mark} favorable=${favorable.toFixed(4)} lockPct=${lockPct} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL}`,
+      `[SCALP PCT SL CHASE] symbol=${position.symbol} side=${dir} entry=${entry} currentPrice=${mark} favorable=${favorable.toFixed(4)} lockPct=${lockPct} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL} naked=${liveSl == null}`,
     );
 
     if (!Number.isFinite(candN)) {
@@ -990,7 +1023,7 @@ export class PositionsService {
 
     const hasSl =
       liveSl != null && String(liveSl).trim().length > 0 && Number(liveSl) !== 0;
-    // Naked → always send. Otherwise only when candidate strictly improves (chase).
+    // Naked → always send. Otherwise only when candidate strictly improves.
     const shouldSend =
       !hasSl ||
       scalpBrokerStopShouldMove({
@@ -1007,7 +1040,7 @@ export class PositionsService {
     }
 
     // Throttle ONLY identical re-sends (already at this SL).
-    // A better 15% lock always goes to Capital immediately — never blocked by 10s timer.
+    // Naked / better lock always goes to Capital immediately.
     const sameLevel =
       hasSl &&
       Number.isFinite(Number(liveSl)) &&

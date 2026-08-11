@@ -1448,46 +1448,70 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 trailingActivatedAt: null,
               },
             });
-            // Static SL on fill — Capital-safe ONLY (one attempt).
-            // NEVER push soft 3-pip trail here: GOLD min-stop ~0.50 rejects it.
-            // Widening / native trail is handled by throttled recovery ticks so
-            // we do not hold Capital login lock for 3× confirm (~30s) on fill.
+            // Static SL on fill — MUST land on Capital chart (retry with widen).
+            // NEVER leave a naked SCALPING deal for "recovery later".
             try {
-              const fillMark =
-                Number(
-                  (
-                    await this.prisma.position.findFirst({
-                      where: { id: positionId },
-                      select: { currentPrice: true, averageEntry: true },
-                    })
-                  )?.currentPrice ?? entry,
-                ) || entry;
-              const safeSl = capitalSafeInitialStop({
-                symbol: brokerSymbol,
-                direction: signal,
-                entry,
-                distance: Math.max(stopDist, capitalMinStopDistance(brokerSymbol)),
-                mark: fillMark,
+              const fillRow = await this.prisma.position.findFirst({
+                where: { id: positionId },
+                select: {
+                  currentPrice: true,
+                  averageEntry: true,
+                  brokerPositionId: true,
+                },
               });
-              const after = await this.positions.modifySlTp(
-                strategy.organizationId,
-                actorId,
-                positionId,
-                { stopLoss: safeSl, ...(takeProfit ? { takeProfit } : {}) },
-                correlationId,
-                { silent: true },
+              const fillEntry =
+                Number(fillRow?.averageEntry ?? entry) || entry;
+              const fillMark =
+                Number(fillRow?.currentPrice ?? fillEntry) || fillEntry;
+              const baseDist = Math.max(
+                stopDist,
+                capitalMinStopDistance(brokerSymbol),
               );
-              const liveSl =
-                after &&
-                typeof after === "object" &&
-                "stopLoss" in after &&
-                (after as { stopLoss?: string | null }).stopLoss
-                  ? String((after as { stopLoss?: string | null }).stopLoss)
-                  : "";
+              let liveSl = "";
+              let lastErr: unknown;
+              for (let attempt = 0; attempt < 4; attempt++) {
+                const dist = baseDist * (1 + attempt);
+                const safeSl = capitalSafeInitialStop({
+                  symbol: brokerSymbol,
+                  direction: signal,
+                  entry: fillEntry,
+                  distance: dist,
+                  mark: fillMark,
+                });
+                try {
+                  const after = await this.positions.modifySlTp(
+                    strategy.organizationId,
+                    actorId,
+                    positionId,
+                    {
+                      stopLoss: safeSl,
+                      ...(takeProfit ? { takeProfit } : {}),
+                    },
+                    correlationId,
+                    { silent: true },
+                  );
+                  liveSl =
+                    after &&
+                    typeof after === "object" &&
+                    "stopLoss" in after &&
+                    (after as { stopLoss?: string | null }).stopLoss
+                      ? String(
+                          (after as { stopLoss?: string | null }).stopLoss,
+                        )
+                      : "";
+                  if (liveSl) break;
+                  lastErr = new Error(
+                    `Capital chart still has no stopLevel after attach (${safeSl})`,
+                  );
+                } catch (err) {
+                  lastErr = err;
+                  await new Promise((r) => setTimeout(r, 200 + attempt * 150));
+                }
+              }
               if (!liveSl) {
-                throw new Error(
-                  `Capital chart still has no stopLevel after attach (${safeSl})`,
-                );
+                throw lastErr instanceof Error
+                  ? lastErr
+                  : new Error("Capital SL attach failed after retries");
               }
               await this.notifications.create({
                 organizationId: strategy.organizationId,

@@ -367,12 +367,30 @@ export function scalpSoftTrailDistancePrice(
 }
 
 /**
+ * Whether a stopLevel is on the correct side of mark with enough distance
+ * for Capital to accept it.
+ */
+export function scalpStopValidVsMark(input: {
+  direction: "BUY" | "SELL";
+  stop: number | string;
+  mark: number | string;
+  symbol: string;
+}): boolean {
+  const sl = Number(input.stop);
+  const mark = Number(input.mark);
+  if (![sl, mark].every((n) => Number.isFinite(n) && n > 0)) return false;
+  const minD = capitalMinStopDistance(input.symbol);
+  if (input.direction === "BUY") return mark - sl >= minD * 0.98;
+  return sl - mark >= minD * 0.98;
+}
+
+/**
  * 10s SCALPING trail cushion from entry.
  * SL follows live price, leaving this fraction of the favorable move as room:
  *   BUY:  SL = mark − 15% × (mark − entry)  [= entry + 85% × move]
  *   SELL: SL = mark + 15% × (entry − mark)  [= entry − 85% × move]
- * Flat/loss → entry (BE). Improve-only — never move SL backward on pullback.
- * (Previously this constant locked only 15% of the move, which looked stuck at BE.)
+ * Flat/loss → entry (caller must Capital-safe clamp vs live mark).
+ * Improve-only — never move SL backward on pullback.
  */
 export const SCALP_LOCK_PCT = 0.15;
 
