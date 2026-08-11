@@ -4,6 +4,7 @@ import {
   DomainEventType,
   OrderDirection,
   OrderType,
+  OrderStatus,
   StrategyMode,
   VolumeMode,
   modePreferredTimeframe,
@@ -921,6 +922,40 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           (p) => p.symbol === brokerSymbol || p.symbol === symbol,
         );
         const openAnywhere = oneTradeOnly ? openOnAccount : openOnSymbol;
+
+        // oneTradeOnly: prevent "order-in-flight" race where a second entry is sent
+        // before the first order is recorded as a Position row.
+        if (oneTradeOnly) {
+          const inflightOnSymbol = await this.prisma.order.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              strategyId: strategy.id,
+              symbol: brokerSymbol,
+              status: {
+                in: [
+                  OrderStatus.VALIDATING,
+                  OrderStatus.QUEUED,
+                  OrderStatus.SENT,
+                  OrderStatus.ACCEPTED,
+                  OrderStatus.PARTIALLY_FILLED,
+                ],
+              },
+            },
+          });
+          if (inflightOnSymbol > 0 && openOnSymbol.length === 0) {
+            lastStatus = {
+              ...lastStatus,
+              skip: "waiting_open_close",
+              reason: "account_has_inflight_order",
+              openTrades: inflightOnSymbol,
+              accountId,
+              signal,
+              symbol: brokerSymbol,
+            };
+            continue;
+          }
+        }
 
         // SCALPING: while any trade is open on this symbol — do nothing.
         // No flip, no opposite close, no second order. Trail/SL owns the exit.
