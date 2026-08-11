@@ -16,7 +16,7 @@ import {
 } from "@nexus/domain";
 import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, resolveScalpDistance, capitalSafeInitialStop, SCALP_LOCK_PCT } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
-import { Prisma } from "@prisma/client";
+import { OrderStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
 import { AuditService } from "../audit/audit.service";
@@ -41,6 +41,98 @@ export class StrategiesService {
     private readonly market: MarketDataService,
     private readonly brokers: BrokerRuntimeService,
   ) {}
+
+  /**
+   * Lot / SAVE / START must NEVER clear fingerprints while anything is still
+   * open (DB, recent inflight, or live Capital). That re-armed duplicates and
+   * brought every scalp bug back the moment the operator changed lot.
+   */
+  private async hasLiveExposure(opts: {
+    organizationId: string;
+    strategyId?: string;
+    accountId?: string;
+  }): Promise<boolean> {
+    const { organizationId, strategyId, accountId } = opts;
+    // Account-wide when accountId known (oneTradeOnly) — strategy-only otherwise.
+    const openWhere: Prisma.PositionWhereInput = {
+      organizationId,
+      status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+      ...(accountId
+        ? { accountId }
+        : strategyId
+          ? { strategyId }
+          : {}),
+    };
+    if (await this.prisma.position.count({ where: openWhere })) return true;
+
+    if (accountId) {
+      const inflightSince = new Date(Date.now() - 90_000);
+      const inflight = await this.prisma.order.count({
+        where: {
+          organizationId,
+          accountId,
+          createdAt: { gte: inflightSince },
+          OR: [
+            {
+              status: {
+                in: [
+                  OrderStatus.VALIDATING,
+                  OrderStatus.QUEUED,
+                  OrderStatus.SENT,
+                  OrderStatus.ACCEPTED,
+                  OrderStatus.PARTIALLY_FILLED,
+                ],
+              },
+            },
+            {
+              status: OrderStatus.FILLED,
+              positions: { none: {} },
+            },
+          ],
+        },
+      });
+      if (inflight > 0) return true;
+
+      try {
+        const adapter = this.brokers.get(accountId);
+        if (adapter) {
+          const live = await adapter.getOpenPositions({ force: true });
+          if (live.length > 0) return true;
+        }
+      } catch {
+        // If Capital is unreachable, stay conservative — do not reset.
+        return true;
+      }
+    } else if (strategyId) {
+      const inflightSince = new Date(Date.now() - 90_000);
+      const inflight = await this.prisma.order.count({
+        where: {
+          organizationId,
+          strategyId,
+          createdAt: { gte: inflightSince },
+          OR: [
+            {
+              status: {
+                in: [
+                  OrderStatus.VALIDATING,
+                  OrderStatus.QUEUED,
+                  OrderStatus.SENT,
+                  OrderStatus.ACCEPTED,
+                  OrderStatus.PARTIALLY_FILLED,
+                ],
+              },
+            },
+            {
+              status: OrderStatus.FILLED,
+              positions: { none: {} },
+            },
+          ],
+        },
+      });
+      if (inflight > 0) return true;
+    }
+    return false;
+  }
 
   list(organizationId: string) {
     return this.prisma.strategy.findMany({
@@ -130,22 +222,39 @@ export class StrategiesService {
   ) {
     const strategy = await this.require(organizationId, id);
     // Idempotent START — already running is OK (client double-tap / reconnect).
-    // Only clear fingerprints when this strategy has no open trades — otherwise
-    // a LOT change + START re-arms duplicate entries.
+    // Never clear fingerprints while DB/Capital still has exposure — LOT+START
+    // used to re-arm duplicates every time.
     if (strategy.status === StrategyStatus.RUNNING) {
-      const openCount = await this.prisma.position.count({
-        where: {
-          organizationId,
-          strategyId: id,
-          status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
-        },
-      });
-      if (openCount === 0) {
-        this.runtime.resetSignals(id);
-      }
-      // Still refresh exit flags / lot-driven config onto open rows
       const accountIds = (strategy.assignedAccountIds as string[]) ?? [];
       const assignedSymbols = (strategy.assignedSymbols as string[]) ?? [];
+      let anyExposure = false;
+      if (accountIds.length === 0) {
+        anyExposure = await this.hasLiveExposure({
+          organizationId,
+          strategyId: id,
+        });
+      } else {
+        for (const accountId of accountIds) {
+          if (
+            await this.hasLiveExposure({
+              organizationId,
+              strategyId: id,
+              accountId,
+            })
+          ) {
+            anyExposure = true;
+            break;
+          }
+        }
+      }
+      if (!anyExposure) {
+        this.runtime.resetSignals(id);
+      } else {
+        this.log.log(
+          `skip resetSignals ${id} — live exposure (lot/config safe)`,
+        );
+      }
+      // Still refresh exit flags / lot-driven config onto open rows
       const cfg =
         strategy.configurationJson && typeof strategy.configurationJson === "object"
           ? (strategy.configurationJson as Record<string, unknown>)
@@ -197,10 +306,36 @@ export class StrategiesService {
       },
     });
 
-    this.runtime.resetSignals(id);
-
     const accountIds = (updated.assignedAccountIds as string[]) ?? [];
     const assignedSymbols = (updated.assignedSymbols as string[]) ?? [];
+    // STOP→START with Capital still open must not re-arm entries (lot change path).
+    let anyExposure = false;
+    if (accountIds.length === 0) {
+      anyExposure = await this.hasLiveExposure({
+        organizationId,
+        strategyId: id,
+      });
+    } else {
+      for (const accountId of accountIds) {
+        if (
+          await this.hasLiveExposure({
+            organizationId,
+            strategyId: id,
+            accountId,
+          })
+        ) {
+          anyExposure = true;
+          break;
+        }
+      }
+    }
+    if (!anyExposure) {
+      this.runtime.resetSignals(id);
+    } else {
+      this.log.log(
+        `skip resetSignals ${id} — live exposure on START (lot/config safe)`,
+      );
+    }
     for (const accountId of accountIds) {
       await this.applyExitFlagsToOpenPositions(
         organizationId,
@@ -910,18 +1045,9 @@ export class StrategiesService {
     }
 
     if (input.action === "save") {
-      // Do NOT resetSignals while opens exist — that cleared fingerprints and
-      // re-armed same-side entries the moment operator changed LOT.
-      const openCount = await this.prisma.position.count({
-        where: {
-          organizationId,
-          accountId: input.accountId,
-          status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
-        },
-      });
-      if (openCount === 0) {
-        this.runtime.resetSignals(strategy.id);
-      }
+      // SAVE = config only (lot / mode / exits). Never reset fingerprints —
+      // that permanently broke scalp every time operator changed LOT.
+      // Runtime already clears fingerprints when the account is truly flat.
       await this.applyExitFlagsToOpenPositions(
         organizationId,
         input.accountId,

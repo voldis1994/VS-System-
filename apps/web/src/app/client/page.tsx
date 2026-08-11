@@ -844,7 +844,8 @@ export default function ClientPortalPage() {
                   <p className="text-[#7af6ff]">AUTO · 10s SCALP</p>
                   <p>
                     SL uzreiz uz Capital. Peļņā SL seko cenai (15% cushion).
-                    Lot maiņa — SAVE; neatver jaunu treidu kamēr viens OPEN.
+                    Lot = tikai nākamajam treidam (SAVE). Kamēr OPEN — viens
+                    treids, SL paliek; lot maiņa neaiztiek esošo.
                   </p>
                 </>
               ) : (
