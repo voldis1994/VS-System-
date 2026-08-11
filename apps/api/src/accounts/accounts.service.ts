@@ -220,12 +220,31 @@ export class AccountsService {
         typeof adapter.bindCapitalAccount === "function"
       ) {
         try {
+          // Never bind two VS accounts onto the same Capital CFD (multi-account
+          // SCALPING then fights oneTradeOnly / ghost reconcile).
+          const siblings = await this.prisma.tradingAccount.findMany({
+            where: {
+              organizationId,
+              provider: "CAPITAL",
+              id: { not: id },
+              connectionStatus: "CONNECTED",
+              externalAccountId: { not: null },
+            },
+            select: { externalAccountId: true },
+          });
+          const taken = new Set(
+            siblings
+              .map((s) => String(s.externalAccountId ?? "").trim())
+              .filter(Boolean),
+          );
           const subs = await adapter.listCapitalAccounts();
-          const richest = [...subs].sort(
-            (a, b) =>
-              Number(b.available ?? b.balance ?? 0) -
-              Number(a.available ?? a.balance ?? 0),
-          )[0];
+          const richest = [...subs]
+            .filter((a) => !taken.has(String(a.accountId)))
+            .sort(
+              (a, b) =>
+                Number(b.available ?? b.balance ?? 0) -
+                Number(a.available ?? a.balance ?? 0),
+            )[0];
           const richestAvail = Number(
             richest?.available ?? richest?.balance ?? 0,
           );

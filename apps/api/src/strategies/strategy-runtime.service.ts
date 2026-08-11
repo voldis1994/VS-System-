@@ -393,6 +393,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       protectiveGatesOff: true,
       stackingOff: true,
     };
+    const lastStatusByAccount: Record<string, Record<string, unknown>> = {};
 
     for (const symbol of symbols) {
       const brokerSymbol = resolveCapitalEpic(symbol);
@@ -859,6 +860,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       for (const accountId of accountIds) {
         const fingerprint = `${strategy.id}:${accountId}:${brokerSymbol}:${signal}`;
         const key = `${strategy.id}:${accountId}:${brokerSymbol}`;
+        try {
 
         // Flat after SL/close on this account — allow same-direction re-entry
         const openCount = await this.prisma.position.count({
@@ -1478,8 +1480,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 trailingActivatedAt: null,
               },
             });
-            // Static SL on fill — MUST land on Capital chart (retry with widen).
-            // NEVER leave a naked SCALPING deal for "recovery later".
+            // Static SL on fill — must land on Capital, but do NOT block sibling
+            // accounts for ~1s+ of retries (multi-account SCALPING isolation).
+            // One sync attempt here; remaining retries run in background while
+            // the next account can still place on the same tick.
             try {
               const fillRow = await this.prisma.position.findFirst({
                 where: { id: positionId },
@@ -1497,9 +1501,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 stopDist,
                 capitalMinStopDistance(brokerSymbol),
               );
-              let liveSl = "";
-              let lastErr: unknown;
-              for (let attempt = 0; attempt < 4; attempt++) {
+              const tryAttach = async (attempt: number) => {
                 const dist = baseDist * (1 + attempt);
                 const safeSl = capitalSafeInitialStop({
                   symbol: brokerSymbol,
@@ -1508,65 +1510,78 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                   distance: dist,
                   mark: fillMark,
                 });
-                try {
-                  const after = await this.positions.modifySlTp(
-                    strategy.organizationId,
-                    actorId,
-                    positionId,
-                    {
-                      stopLoss: safeSl,
-                      ...(takeProfit ? { takeProfit } : {}),
-                    },
-                    correlationId,
-                    { silent: true },
-                  );
-                  liveSl =
-                    after &&
-                    typeof after === "object" &&
-                    "stopLoss" in after &&
-                    (after as { stopLoss?: string | null }).stopLoss
-                      ? String(
-                          (after as { stopLoss?: string | null }).stopLoss,
-                        )
-                      : "";
-                  if (liveSl) break;
-                  lastErr = new Error(
-                    `Capital chart still has no stopLevel after attach (${safeSl})`,
-                  );
-                } catch (err) {
-                  lastErr = err;
-                  await new Promise((r) => setTimeout(r, 200 + attempt * 150));
-                }
+                const after = await this.positions.modifySlTp(
+                  strategy.organizationId,
+                  actorId,
+                  positionId,
+                  {
+                    stopLoss: safeSl,
+                    ...(takeProfit ? { takeProfit } : {}),
+                  },
+                  correlationId,
+                  { silent: true },
+                );
+                const live =
+                  after &&
+                  typeof after === "object" &&
+                  "stopLoss" in after &&
+                  (after as { stopLoss?: string | null }).stopLoss
+                    ? String(
+                        (after as { stopLoss?: string | null }).stopLoss,
+                      )
+                    : "";
+                return live;
+              };
+              let liveSl = "";
+              try {
+                liveSl = await tryAttach(0);
+              } catch {
+                liveSl = "";
               }
               if (!liveSl) {
-                throw lastErr instanceof Error
-                  ? lastErr
-                  : new Error("Capital SL attach failed after retries");
+                void (async () => {
+                  for (let attempt = 1; attempt < 4; attempt++) {
+                    try {
+                      const got = await tryAttach(attempt);
+                      if (got) {
+                        await this.notifications.create({
+                          organizationId: strategy.organizationId,
+                          userId: actorId === "system" ? null : actorId,
+                          title: "SL ON Capital",
+                          body: `${brokerSymbol} stopLevel ${got} — trail will chase`,
+                          severity: "SUCCESS",
+                        });
+                        return;
+                      }
+                    } catch {
+                      await new Promise((r) =>
+                        setTimeout(r, 200 + attempt * 150),
+                      );
+                    }
+                  }
+                  await this.notifications.create({
+                    organizationId: strategy.organizationId,
+                    userId: actorId === "system" ? null : actorId,
+                    title: "SL attach deferred",
+                    body: `${brokerSymbol}: sync attach missed — recovery tick will retry`,
+                    severity: "WARNING",
+                  });
+                })();
+              } else {
+                await this.notifications.create({
+                  organizationId: strategy.organizationId,
+                  userId: actorId === "system" ? null : actorId,
+                  title: "SL ON Capital",
+                  body: `${brokerSymbol} stopLevel ${liveSl} — trail will chase`,
+                  severity: "SUCCESS",
+                });
               }
-              await this.notifications.create({
-                organizationId: strategy.organizationId,
-                userId: actorId === "system" ? null : actorId,
-                title: "SL ON Capital",
-                body: `${brokerSymbol} stopLevel ${liveSl} — trail will chase`,
-                severity: "SUCCESS",
-              });
             } catch (attachErr) {
               this.log.warn(
                 `Post-fill SL pending recovery: ${
                   attachErr instanceof Error ? attachErr.message : attachErr
                 }`,
               );
-              await this.notifications.create({
-                organizationId: strategy.organizationId,
-                userId: actorId === "system" ? null : actorId,
-                title: "SL attach deferred",
-                body: `${brokerSymbol}: ${
-                  attachErr instanceof Error
-                    ? attachErr.message
-                    : "modify failed"
-                } — recovery tick will retry (desk stays responsive)`,
-                severity: "WARNING",
-              });
             }
             await this.notifications.create({
               organizationId: strategy.organizationId,
@@ -1666,6 +1681,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             skip: marginFail ? "insufficient_margin" : undefined,
           };
         }
+        } finally {
+          lastStatusByAccount[accountId] = { ...lastStatus, accountId };
+        }
       }
       // EMA: only burn a cross generation after a successful place
       if (isEmaTickScalp && !_acted) {
@@ -1682,7 +1700,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           engine: "VS_PRO_V10",
           oneTradeOnly,
           ...lastStatus,
-        },
+          lastStatusByAccount,
+        } as Prisma.InputJsonValue,
       },
     });
   }

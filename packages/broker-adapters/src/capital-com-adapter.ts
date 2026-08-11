@@ -100,6 +100,8 @@ export class CapitalComAdapter implements BrokerAdapter {
    * One Capital login = one CST session. Multiple VS accounts that share the
    * same API key must NOT create parallel sessions (second login kills the first
    * → REJECTED with empty reason). Share tokens + serialize trading ops.
+   * `refs` tracks live VS adapters so disconnect/reconnect cannot DELETE the
+   * CST while a sibling account is still trading (multi-account isolation).
    */
   private static readonly sharedByLogin = new Map<
     string,
@@ -109,6 +111,8 @@ export class CapitalComAdapter implements BrokerAdapter {
       /** Shared idle clock — one adapter's traffic keeps siblings warm (audit H7). */
       lastActivityAt: number;
       tail: Promise<unknown>;
+      /** VS accountId → pinned Capital CFD id (may be ""). */
+      refs: Map<string, string>;
     }
   >();
 
@@ -132,10 +136,38 @@ export class CapitalComAdapter implements BrokerAdapter {
         activeExternalId: "",
         lastActivityAt: 0,
         tail: Promise.resolve(),
+        refs: new Map(),
       };
       CapitalComAdapter.sharedByLogin.set(key, s);
     }
     return s;
+  }
+
+  private registerLoginRef() {
+    if (!this.accountId) return;
+    this.sharedState().refs.set(
+      this.accountId,
+      String(this.targetExternalAccountId ?? "").trim(),
+    );
+  }
+
+  /** @returns remaining sibling adapters for this Capital login */
+  private unregisterLoginRef(): number {
+    if (!this.accountId) return this.sharedState().refs.size;
+    const s = this.sharedState();
+    s.refs.delete(this.accountId);
+    return s.refs.size;
+  }
+
+  /** Capital CFD ids already claimed by sibling VS adapters on this login. */
+  private siblingPinnedCapitalIds(): Set<string> {
+    const out = new Set<string>();
+    for (const [vsId, pin] of this.sharedState().refs) {
+      if (vsId === this.accountId) continue;
+      const p = String(pin ?? "").trim();
+      if (p) out.add(p);
+    }
+    return out;
   }
 
   private pullSharedTokens() {
@@ -218,7 +250,11 @@ export class CapitalComAdapter implements BrokerAdapter {
       );
     }
 
+    // Join shared CST pool before session work — siblings must not DELETE us.
+    this.registerLoginRef();
+    // Reuse live sibling session when possible (second POST /session kills CST).
     await this.createSession();
+    this.registerLoginRef(); // refresh pin after target may be applied
     const session = await this.request<{
       accountId?: string;
       currentAccountId?: string;
@@ -240,27 +276,29 @@ export class CapitalComAdapter implements BrokerAdapter {
         "",
     );
 
-    // Pin stored CFD when set; otherwise highest available (NOT Capital "preferred" —
-    // preferred is often a leftover ~$20 account while the app trades another).
+    // Pin stored CFD when set; otherwise highest available that is NOT already
+    // claimed by a sibling VS adapter on this same Capital login.
+    const taken = this.siblingPinnedCapitalIds();
     const best = pickBestCapitalSubAccount(
-      accounts.accounts ?? [],
+      (accounts.accounts ?? []).filter((a) => !taken.has(String(a.accountId))),
       this.targetExternalAccountId || undefined,
     );
     const desired =
       this.targetExternalAccountId ||
       best?.accountId ||
-      currentAccountId ||
+      (taken.has(currentAccountId) ? "" : currentAccountId) ||
       "";
 
     if (desired) {
       this.targetExternalAccountId = desired;
       await this.switchSessionAccount(desired);
       this.externalAccountId = desired;
-    } else if (currentAccountId) {
+    } else if (currentAccountId && !taken.has(currentAccountId)) {
       this.externalAccountId = currentAccountId;
       this.targetExternalAccountId = currentAccountId;
     }
 
+    this.registerLoginRef();
     this.connected = true;
     this.lastHeartbeatAt = toUtcIso();
     return {
@@ -275,8 +313,11 @@ export class CapitalComAdapter implements BrokerAdapter {
 
   async disconnect(): Promise<void> {
     this.stopMarketStream();
+    const remaining = this.unregisterLoginRef();
     try {
-      if (this.tokens) {
+      // Only DELETE Capital CST when this is the last VS adapter on the login.
+      // Otherwise sibling accounts lose auth mid-trade (different PnL / rejects).
+      if (remaining === 0 && this.tokens) {
         await this.withLoginLock(async () => {
           this.pullSharedTokens();
           if (this.tokens) {
@@ -285,12 +326,15 @@ export class CapitalComAdapter implements BrokerAdapter {
           this.tokens = null;
           this.clearSharedSession();
         });
-      } else {
+      } else if (remaining === 0) {
         this.clearSharedSession();
+      } else {
+        // Leave shared CST for siblings; drop only local handle.
+        this.tokens = null;
       }
     } catch {
       this.tokens = null;
-      this.clearSharedSession();
+      if (remaining === 0) this.clearSharedSession();
     }
     this.connected = false;
     this.lastActivityAt = 0;
@@ -1095,8 +1139,11 @@ export class CapitalComAdapter implements BrokerAdapter {
       try {
         const pinned = String(this.targetExternalAccountId ?? "").trim();
         if (!pinned) {
+          const taken = this.siblingPinnedCapitalIds();
           const subs = await this.listCapitalAccounts();
-          const richest = pickBestCapitalSubAccount(subs);
+          const richest = pickBestCapitalSubAccount(
+            subs.filter((a) => !taken.has(String(a.accountId))),
+          );
           const richestAvail = Number(
             richest?.available ?? richest?.balance ?? 0,
           );
@@ -1106,6 +1153,7 @@ export class CapitalComAdapter implements BrokerAdapter {
             await this.switchSessionAccount(richest.accountId);
             this.externalAccountId = richest.accountId;
             this.sharedState().activeExternalId = richest.accountId;
+            this.registerLoginRef();
             this.invalidatePositionsCache();
             await new Promise((r) => setTimeout(r, 400));
             const attempt = await postMarket(usedSize);
@@ -1772,6 +1820,30 @@ export class CapitalComAdapter implements BrokerAdapter {
   }
 
   private async createSessionUnlocked(): Promise<void> {
+    // Prefer an already-live sibling CST — a fresh POST /session invalidates it.
+    this.pullSharedTokens();
+    if (this.tokens) {
+      try {
+        await this.request("GET", "/api/v1/session");
+        this.lastHeartbeatAt = toUtcIso();
+        this.touchActivity();
+        if (this.targetExternalAccountId) {
+          try {
+            await this.switchSessionAccount(this.targetExternalAccountId);
+            this.externalAccountId = this.targetExternalAccountId;
+          } catch {
+            // ensureActiveAccount will retry
+          }
+        }
+        this.registerLoginRef();
+        return;
+      } catch {
+        // fall through — shared tokens are dead
+        this.tokens = null;
+        this.clearSharedSession();
+      }
+    }
+
     const res = await fetch(`${this.baseUrl}/api/v1/session`, {
       method: "POST",
       headers: {
@@ -1818,6 +1890,7 @@ export class CapitalComAdapter implements BrokerAdapter {
         // will retry on ensureActiveAccount
       }
     }
+    this.registerLoginRef();
   }
 
   /** Accept boolean or string demo flags from encrypted credential payloads. */
