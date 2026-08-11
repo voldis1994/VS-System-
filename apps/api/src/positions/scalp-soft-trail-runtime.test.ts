@@ -112,4 +112,23 @@ describe("PositionsService 10s SCALPING 15% from-entry SL lock", () => {
       isTenSecondScalpingMode(StrategyMode.SCALPING, { timeframe: "20s" }),
     ).toBe(false);
   });
+
+  it("naked Capital (no current SL) always allows send", () => {
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "BUY",
+        candidate: 2400,
+        current: null,
+        mode: "be_sync",
+      }),
+    ).toBe(true);
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "SELL",
+        candidate: 2408.15,
+        current: "",
+        mode: "be_sync",
+      }),
+    ).toBe(true);
+  });
 });

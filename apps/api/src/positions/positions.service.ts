@@ -887,11 +887,17 @@ export class PositionsService {
     const mark = input.mark;
     const entry = Number(input.entry);
 
+    // Prefer Capital chart SL. Empty string in the map = broker confirmed naked.
+    // Only fall back to DB when this position was not in the broker snapshot.
+    const mappedSl = brokerStopLoss.get(position.id);
     const liveSl =
-      brokerStopLoss.get(position.id) ??
-      (position.stopLoss != null && String(position.stopLoss).length > 0
-        ? String(position.stopLoss)
-        : null);
+      mappedSl !== undefined
+        ? mappedSl.trim().length > 0
+          ? mappedSl
+          : null
+        : position.stopLoss != null && String(position.stopLoss).length > 0
+          ? String(position.stopLoss)
+          : null;
 
     if (
       !Number.isFinite(mark) ||
@@ -1208,6 +1214,9 @@ export class PositionsService {
             }
             if (match.stopLoss != null && String(match.stopLoss).length > 0) {
               brokerStopLoss.set(p.id, String(match.stopLoss));
+            } else {
+              // Explicit naked — do NOT let chase fall back to stale DB SL
+              brokerStopLoss.set(p.id, "");
             }
           }
         }
