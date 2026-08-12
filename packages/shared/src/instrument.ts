@@ -394,8 +394,11 @@ export function scalpStopValidVsMark(input: {
  */
 export const SCALP_LOCK_PCT = 0.12;
 
-/** Min interval between Capital SL modify attempts for 10s SCALPING. */
+/** Min interval between Capital SL modify attempts for 10s SCALPING (same level). */
 export const SCALP_SL_MODIFY_INTERVAL_MS = 10_000;
+
+/** Min interval between chase modifies when SL level actually improves (Capital API load). */
+export const SCALP_SL_CHASE_MIN_INTERVAL_MS = 3_000;
 
 /**
  * Candidate broker SL from entry (always defined when entry/mark valid).
@@ -566,6 +569,13 @@ export function scalpBrokerStopShouldMove(input: {
     return input.mode === "be_sync" ? cand >= curRaw : cand > curRaw;
   }
   return input.mode === "be_sync" ? cand <= curRaw : cand < curRaw;
+}
+
+/** Minimum SL improvement (price units) before sending another Capital modify. */
+export function scalpMinStopImprovement(symbol: string): number {
+  const pip = instrumentPipSize(symbol);
+  const minD = capitalMinStopDistance(symbol);
+  return Math.max(pip * 3, minD * 0.15);
 }
 
 /** Absolute peak price for soft trail (BUY=high watermark, SELL=low). */

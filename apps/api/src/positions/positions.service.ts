@@ -32,11 +32,14 @@ import {
   formatInstrumentPrice,
   SCALP_LOCK_PCT,
   SCALP_SL_MODIFY_INTERVAL_MS,
+  SCALP_SL_CHASE_MIN_INTERVAL_MS,
   scalpPctLockBrokerStop,
   scalpBrokerStopShouldMove,
   scalpStopValidVsMark,
+  scalpMinStopImprovement,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
+import { capitalModifyRejectBackoffMs } from "@nexus/broker-adapters";
 import { PrismaService } from "../prisma/prisma.service";
 import { BrokerRuntimeService } from "../broker-runtime/broker-runtime.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -65,6 +68,10 @@ export class PositionsService {
   private static readonly CHASE_FAIL_NOTIFY_MS = 30_000;
   /** Last Capital SL modify attempt (ms) per position — 10s SCALPING throttle. */
   private scalpSlModifyAt = new Map<string, number>();
+  /** After Capital REJECTED modify — pause chase (Capital.com API load warning). */
+  private scalpModifyBackoffUntil = new Map<string, number>();
+  /** Last rejected SL level — do not resend the same doomed modify. */
+  private scalpModifyRejectedLevel = new Map<string, string>();
   /** Per-account BE/trail lock — one slow Capital confirm must not skip all accounts. */
   private protectionsRunningByAccount = new Set<string>();
   private protectionsRunning = false;
@@ -1052,6 +1059,42 @@ export class PositionsService {
 
     const hasSl =
       liveSl != null && String(liveSl).trim().length > 0 && Number(liveSl) !== 0;
+
+    const backoffUntil = this.scalpModifyBackoffUntil.get(position.id) ?? 0;
+    if (Date.now() < backoffUntil) {
+      console.log(
+        `[SCALP PCT SL CHASE] skip=capital_backoff symbol=${position.symbol} until=${backoffUntil}`,
+      );
+      return;
+    }
+
+    const rejectedLevel = this.scalpModifyRejectedLevel.get(position.id);
+    if (
+      rejectedLevel != null &&
+      Number.isFinite(Number(rejectedLevel)) &&
+      Number.isFinite(Number(candidateSL)) &&
+      Number(candidateSL) === Number(rejectedLevel)
+    ) {
+      console.log(
+        `[SCALP PCT SL CHASE] skip=rejected_level symbol=${position.symbol} candidateSL=${candidateSL}`,
+      );
+      return;
+    }
+
+    if (hasSl && Number.isFinite(Number(liveSl)) && Number.isFinite(Number(candidateSL))) {
+      const cur = Number(liveSl);
+      const cand = Number(candidateSL);
+      const minBump = scalpMinStopImprovement(position.symbol);
+      const improved =
+        dir === "BUY" ? cand - cur >= minBump : cur - cand >= minBump;
+      if (!improved) {
+        console.log(
+          `[SCALP PCT SL CHASE] skip=improvement_too_small symbol=${position.symbol} delta=${dir === "BUY" ? cand - cur : cur - cand} need=${minBump}`,
+        );
+        return;
+      }
+    }
+
     // Naked → always send. In profit chase → every better lock immediately.
     const shouldSend =
       !hasSl ||
@@ -1068,21 +1111,25 @@ export class PositionsService {
       return;
     }
 
-    // Throttle ONLY identical re-sends (already at this SL).
-    // Better 12% lock always goes to Capital on this trail tick — no 10s block.
+    // Throttle identical level; min gap between chase improves (Capital API load).
     const sameLevel =
       hasSl &&
       Number.isFinite(Number(liveSl)) &&
       Number(candidateSL) === Number(liveSl);
+    const now = Date.now();
+    const lastAt = this.scalpSlModifyAt.get(position.id) ?? 0;
     if (sameLevel) {
-      const now = Date.now();
-      const lastAt = this.scalpSlModifyAt.get(position.id) ?? 0;
       if (now - lastAt < SCALP_SL_MODIFY_INTERVAL_MS) {
         console.log(
           `[SCALP PCT SL CHASE] skip=already_at_level symbol=${position.symbol} sl=${candidateSL}`,
         );
         return;
       }
+    } else if (hasSl && now - lastAt < SCALP_SL_CHASE_MIN_INTERVAL_MS) {
+      console.log(
+        `[SCALP PCT SL CHASE] skip=chase_interval symbol=${position.symbol} waitMs=${SCALP_SL_CHASE_MIN_INTERVAL_MS - (now - lastAt)}`,
+      );
+      return;
     }
 
     await this.pushScalpFixedBrokerStop({
@@ -1161,17 +1208,24 @@ export class PositionsService {
           trailingActivatedAt: new Date(),
         },
       });
-      // Full 10s cadence only after Capital accepted
+      // Full cadence only after Capital accepted
       this.scalpSlModifyAt.set(position.id, Date.now());
+      this.scalpModifyBackoffUntil.delete(position.id);
+      this.scalpModifyRejectedLevel.delete(position.id);
       console.log(
         `[SCALP PCT SL RESPONSE] accepted=true brokerReturnedSL=${returned} errorReason=none`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Allow retry in ~2s — do not block full 10s after Capital reject
-      this.scalpSlModifyAt.set(position.id, Date.now() - (SCALP_SL_MODIFY_INTERVAL_MS - 2000));
+      const backoffMs = capitalModifyRejectBackoffMs(msg);
+      this.scalpModifyBackoffUntil.set(
+        position.id,
+        Date.now() + backoffMs,
+      );
+      this.scalpModifyRejectedLevel.set(position.id, requestedSl);
+      this.scalpSlModifyAt.set(position.id, Date.now());
       console.warn(
-        `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=${msg}`,
+        `[SCALP PCT SL RESPONSE] accepted=false brokerReturnedSL=none errorReason=${msg} backoffMs=${backoffMs}`,
       );
     }
   }

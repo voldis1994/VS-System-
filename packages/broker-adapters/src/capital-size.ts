@@ -151,6 +151,30 @@ export function isCapitalRiskCheckError(message: string): boolean {
   );
 }
 
+/** Stop / min-distance / attached-order reject — do not hammer identical modifies. */
+export function isCapitalStopLevelReject(message: string): boolean {
+  const r = String(message ?? "").toUpperCase();
+  return (
+    r.includes("STOP") ||
+    r.includes("ATTACHED") ||
+    r.includes("MINIMUM") ||
+    r.includes("MIN_DISTANCE") ||
+    r.includes("LEVEL") ||
+    r.includes("DISTANCE") ||
+    r.includes("GUARANTEED") ||
+    r.includes("SL NOT MOVED") ||
+    r.includes("STOPLEVEL") ||
+    r.includes("DID NOT ACCEPT")
+  );
+}
+
+/** Backoff after Capital modify reject — avoids API rejection spam (Capital.com warning). */
+export function capitalModifyRejectBackoffMs(message: string): number {
+  if (isCapitalRiskCheckError(message)) return 300_000;
+  if (isCapitalStopLevelReject(message)) return 120_000;
+  return 90_000;
+}
+
 /**
  * Step sizes down toward instrument min after RISK_CHECK.
  * First entry is the (normalized) start size; callers usually skip it.

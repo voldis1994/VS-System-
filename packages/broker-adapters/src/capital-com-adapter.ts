@@ -1322,7 +1322,7 @@ export class CapitalComAdapter implements BrokerAdapter {
             : undefined;
         let attached = false;
         let lastAttachErr: unknown;
-        for (let attempt = 0; attempt < 6 && !attached; attempt++) {
+        for (let attempt = 0; attempt < 4 && !attached; attempt++) {
           try {
             const dist =
               baseDist != null && Number.isFinite(baseDist)
@@ -1367,7 +1367,12 @@ export class CapitalComAdapter implements BrokerAdapter {
             );
           } catch (err) {
             lastAttachErr = err;
-            await new Promise((r) => setTimeout(r, 150 + attempt * 120));
+            const errMsg = err instanceof Error ? err.message : String(err);
+            // Non-stop rejects won't fix with widen — stop hammering Capital API
+            if (!isStopReject(errMsg)) {
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 200 + attempt * 150));
           }
         }
 
@@ -1621,7 +1626,7 @@ export class CapitalComAdapter implements BrokerAdapter {
     let confirmedSl: string | undefined;
     let confirmedTp: string | undefined;
     // Capital often ACK's PUT before stopLevel is visible / updated.
-    for (let attempt = 0; attempt < 8; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       if (attempt > 0) {
         await new Promise((r) => setTimeout(r, 120 + 80 * attempt));
         this.invalidatePositionsCache();
