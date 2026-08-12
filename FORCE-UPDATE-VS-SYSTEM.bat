@@ -74,7 +74,7 @@ for /f "delims=" %%d in ('git log -1 --format^=%%ci 2^>nul') do set "VS_DATE=%%d
 
 echo.
 echo   TAGAD IR: %VS_AFTER%
-echo   Gaiditais jaunakais: b8ad46a  ^(vai jaunaks^)
+echo   Gaiditais jaunakais: d5e2acf  ^(vai jaunaks^)
 echo   VERSION.txt uzrakstits.
 echo.
 

@@ -101,7 +101,7 @@ if /I "%VS_BEFORE%"=="%VS_AFTER%" (
 )
 echo   VERSION.txt = %VS_AFTER%
 echo.
-echo   Ja nav b8ad46a ^(vai jaunaks^) — nepareiza mape / nav git clone.
+echo   Ja nav d5e2acf ^(vai jaunaks^) — nepareiza mape / nav git clone.
 echo.
 echo   Tagad: START-VS-SYSTEM.bat
 echo   Apturet: STOP-VS-SYSTEM.bat
