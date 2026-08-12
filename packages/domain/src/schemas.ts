@@ -135,6 +135,8 @@ export const PlaceOrderSchema = z.object({
   strategyId: z.string().uuid().optional(),
   executionPolicy: z.nativeEnum(ExecutionPolicy).default(ExecutionPolicy.BEST_EFFORT),
   confirmSoftWarnings: z.boolean().default(false),
+  /** Strategy runtime: skip per-batch toast (still logs REJECTED in DB). */
+  silentBatchNotification: z.boolean().optional(),
 });
 
 export const ModifySlTpSchema = z.object({

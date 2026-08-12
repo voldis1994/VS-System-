@@ -118,22 +118,24 @@ export class OrdersService implements OnModuleInit {
 
     const okCount = results.filter((r) => r.ok).length;
     const fail = results.filter((r) => !r.ok);
-    await this.notifications.create({
-      organizationId,
-      userId: actorId,
-      title:
-        fail.length === 0
-          ? "Order batch completed"
-          : "Order batch — daļēji / failed",
-      body:
-        fail.length === 0
-          ? `${okCount}/${results.length} accounts succeeded`
-          : `${okCount}/${results.length} ok · failed: ${fail
-              .map((f) => String(f.message ?? f.code ?? "?").slice(0, 120))
-              .join(" | ")}`,
-      severity: fail.length === 0 ? "SUCCESS" : "WARNING",
-      meta: { batchId, results },
-    });
+    if (!input.silentBatchNotification) {
+      await this.notifications.create({
+        organizationId,
+        userId: actorId,
+        title:
+          fail.length === 0
+            ? "Order batch completed"
+            : "Order batch — daļēji / failed",
+        body:
+          fail.length === 0
+            ? `${okCount}/${results.length} accounts succeeded`
+            : `${okCount}/${results.length} ok · failed: ${fail
+                .map((f) => String(f.message ?? f.code ?? "?").slice(0, 120))
+                .join(" | ")}`,
+        severity: fail.length === 0 ? "SUCCESS" : "WARNING",
+        meta: { batchId, results },
+      });
+    }
 
     return { batchId, results };
   }
@@ -227,6 +229,24 @@ export class OrdersService implements OnModuleInit {
         throw new AppError(
           ErrorCodes.ORDER_REJECTED,
           `One trade only — order still in-flight or pending position sync`,
+          HttpStatus.CONFLICT,
+        );
+      }
+      const rejectBackoffSince = new Date(Date.now() - 120_000);
+      const recentRejected = await this.prisma.order.count({
+        where: {
+          organizationId,
+          accountId,
+          strategyId: input.strategyId,
+          type: OrderType.MARKET,
+          status: OrderStatus.REJECTED,
+          createdAt: { gte: rejectBackoffSince },
+        },
+      });
+      if (recentRejected > 0) {
+        throw new AppError(
+          ErrorCodes.ORDER_REJECTED,
+          `One entry attempt — recent broker reject (wait before retry)`,
           HttpStatus.CONFLICT,
         );
       }

@@ -58,6 +58,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
   private readonly emaSideByKey = new Map<string, "above" | "below">();
   /** EMA_TICK_SCALP: which cross generation already taken (anti-chop on same window) */
   private readonly emaCrossConsumed = new Map<string, string>();
+  /** After failed entry (margin/reject) — no Capital spam every 3s tick */
+  private readonly entryBackoffUntil = new Map<string, number>();
   private ticking = false;
   private trailing = false;
 
@@ -85,6 +87,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
     for (const key of [...this.emaCrossConsumed.keys()]) {
       if (key.startsWith(`${strategyId}:`)) this.emaCrossConsumed.delete(key);
+    }
+    for (const key of [...this.entryBackoffUntil.keys()]) {
+      if (key.startsWith(`${strategyId}:`)) this.entryBackoffUntil.delete(key);
     }
   }
 
@@ -1010,6 +1015,28 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             };
             continue;
           }
+          const rejectSince = new Date(Date.now() - 120_000);
+          const recentReject = await this.prisma.order.count({
+            where: {
+              organizationId: strategy.organizationId,
+              accountId,
+              strategyId: strategy.id,
+              type: OrderType.MARKET,
+              status: OrderStatus.REJECTED,
+              createdAt: { gte: rejectSince },
+            },
+          });
+          if (recentReject > 0 && openOnAccount.length === 0) {
+            lastStatus = {
+              ...lastStatus,
+              skip: "entry_backoff",
+              reason: "recent_broker_reject",
+              accountId,
+              signal,
+              symbol: brokerSymbol,
+            };
+            continue;
+          }
         }
 
         // SCALPING: while any trade is open on this symbol — do nothing.
@@ -1372,6 +1399,26 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           await this.brokers.connectAccount(account);
         }
 
+        // Always FIXED lot — operator owns LOT; never Risk % / never lecture about size.
+        if (config.useRiskPercent) {
+          config.useRiskPercent = false;
+        }
+        const orderVolume = String(config.volume ?? "0.01");
+        const backoffKey = `${strategy.id}:${accountId}`;
+        const backoffUntil = this.entryBackoffUntil.get(backoffKey) ?? 0;
+        if (Date.now() < backoffUntil) {
+          lastStatus = {
+            ...lastStatus,
+            skip: "entry_backoff",
+            reason: "recent_reject_or_margin",
+            waitSec: Math.ceil((backoffUntil - Date.now()) / 1000),
+            accountId,
+            signal,
+            symbol: brokerSymbol,
+          };
+          continue;
+        }
+
         await this.events.publish({
           eventType: DomainEventType.StrategyOrderRequested,
           aggregateId: strategy.id,
@@ -1381,11 +1428,6 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           payload: { accountId, symbol: brokerSymbol, direction: signal },
         });
 
-        // Always FIXED lot — operator owns LOT; never Risk % / never lecture about size.
-        if (config.useRiskPercent) {
-          config.useRiskPercent = false;
-        }
-        const orderVolume = String(config.volume ?? "0.01");
         try {
           const result = await this.orders.place(
             strategy.organizationId,
@@ -1415,6 +1457,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               comment: `vs-strategy:${strategy.name}`,
               confirmSoftWarnings: true,
               executionPolicy: "BEST_EFFORT",
+              silentBatchNotification: true,
             },
             correlationId,
           );
@@ -1650,6 +1693,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             const msg = child?.message ?? "order not accepted";
             this.log.warn(`Strategy order failed: ${msg}`);
             const marginFail = isMarginOrFundsError(msg);
+            const backoffMs = marginFail ? 120_000 : 45_000;
+            this.entryBackoffUntil.set(backoffKey, Date.now() + backoffMs);
+            this.lastSignalAt.set(key, Date.now());
             await this.notifications.create({
               organizationId: strategy.organizationId,
               userId: actorId === "system" ? null : actorId,
@@ -1677,6 +1723,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           const msg = err instanceof Error ? err.message : "order error";
           this.log.error(`Strategy place threw: ${msg}`);
           const marginFail = isMarginOrFundsError(msg);
+          const backoffMs = marginFail ? 120_000 : 45_000;
+          this.entryBackoffUntil.set(backoffKey, Date.now() + backoffMs);
+          this.lastSignalAt.set(key, Date.now());
           await this.notifications.create({
             organizationId: strategy.organizationId,
             userId: actorId === "system" ? null : actorId,
