@@ -14,7 +14,7 @@ import {
   isTenSecondScalpingMode,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, resolveScalpDistance, capitalSafeInitialStop, SCALP_LOCK_PCT, scalpInitialStopDistance, scalpInitialBrokerStop } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, resolveScalpDistance, capitalSafeInitialStop, SCALP_LOCK_PCT, scalpInitialBrokerStop } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { OrderStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
