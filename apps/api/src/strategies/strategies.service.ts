@@ -134,6 +134,37 @@ export class StrategiesService {
     return false;
   }
 
+  /** Desk/API update must merge same auto-exit defaults as client START. */
+  private mergeModeAutoExitConfiguration(
+    mode: string,
+    config: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const auto = modeAutoExit(mode as StrategyMode);
+    if (!auto) return config;
+    return {
+      ...config,
+      takeProfitEnabled: auto.takeProfitEnabled,
+      breakEvenEnabled: auto.breakEvenEnabled,
+      breakEvenActivationPips: auto.breakEvenActivationPips,
+      breakEvenOffsetPips: auto.breakEvenOffsetPips,
+      breakEvenActivationMoney: auto.breakEvenActivationMoney,
+      breakEvenMoneyMode:
+        auto.breakEvenActivationMoney != null &&
+        auto.breakEvenActivationMoney > 0,
+      trailingEnabled: auto.trailingEnabled,
+      trailingDistancePips: auto.trailingDistancePips,
+      trailingActivationPips: auto.trailingActivationPips,
+      trailArmImmediate: auto.trailArmImmediate,
+      priceOffsetMode: auto.priceOffsetMode === true,
+      atrStopMult: auto.atrStopMult,
+      atrTpMult: auto.atrTpMult,
+      stopDistancePips: auto.stopDistancePips,
+      cooldownSeconds: 0,
+      exitVersion: auto.exitVersion,
+      timeframe: modePreferredTimeframe(mode as StrategyMode),
+    };
+  }
+
   list(organizationId: string) {
     return this.prisma.strategy.findMany({
       where: { organizationId, status: { not: "ARCHIVED" } },
@@ -869,11 +900,13 @@ export class StrategiesService {
       before.configurationJson && typeof before.configurationJson === "object"
         ? (before.configurationJson as Record<string, unknown>)
         : {};
-    const merged = normalizeFixedLotStrategyConfig(
+    const mode = String(body.mode ?? before.mode);
+    const mergedBase = normalizeFixedLotStrategyConfig(
       body.configuration
         ? { ...prevConfig, ...body.configuration }
         : prevConfig,
     );
+    const merged = this.mergeModeAutoExitConfiguration(mode, mergedBase);
     const updated = await this.prisma.strategy.update({
       where: { id },
       data: {

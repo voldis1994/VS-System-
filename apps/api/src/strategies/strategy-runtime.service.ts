@@ -966,12 +966,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         // must not freeze 10s SCALPING forever.
         if (oneTradeOnly) {
           const inflightSince = new Date(Date.now() - 90_000);
-          const inflightOnSymbol = await this.prisma.order.count({
+          const inflightOnAccount = await this.prisma.order.count({
             where: {
               organizationId: strategy.organizationId,
               accountId,
               strategyId: strategy.id,
-              symbol: brokerSymbol,
               createdAt: { gte: inflightSince },
               OR: [
                 {
@@ -992,12 +991,12 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               ],
             },
           });
-          if (inflightOnSymbol > 0 && openOnSymbol.length === 0) {
+          if (inflightOnAccount > 0 && openOnAccount.length === 0) {
             lastStatus = {
               ...lastStatus,
               skip: "waiting_open_close",
               reason: "account_has_inflight_order",
-              openTrades: inflightOnSymbol,
+              openTrades: inflightOnAccount,
               accountId,
               signal,
               symbol: brokerSymbol,
@@ -1487,105 +1486,108 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                 trailingActivatedAt: null,
               },
             });
-            // Static SL on fill — MUST be visible on Capital before fill is done.
-            // Adapter prefers stopLevel on placeOrder; this is defense-in-depth.
-            // Sync widen retries only — never background "recovery later" as primary.
-            try {
-              const fillRow = await this.prisma.position.findFirst({
-                where: { id: positionId },
-                select: {
-                  currentPrice: true,
-                  averageEntry: true,
-                  brokerPositionId: true,
-                  stopLoss: true,
-                },
-              });
-              const fillEntry =
-                Number(fillRow?.averageEntry ?? entry) || entry;
-              const fillMark =
-                Number(fillRow?.currentPrice ?? fillEntry) || fillEntry;
-              const baseDist = Math.max(
-                stopDist,
-                capitalMinStopDistance(brokerSymbol),
-              );
-              // orders.service only stamps Capital-confirmed stopLoss (adapter
-              // verified chart visibility). Non-empty ⇒ placeOrder already done.
-              let liveSl =
-                fillRow?.stopLoss != null &&
-                String(fillRow.stopLoss).trim().length > 0
-                  ? String(fillRow.stopLoss)
-                  : "";
-              let lastErr: unknown;
-              for (let attempt = 0; attempt < 6 && !liveSl; attempt++) {
-                const dist = baseDist * (1 + attempt * 0.5);
-                const safeSl = capitalSafeInitialStop({
-                  symbol: brokerSymbol,
-                  direction: signal,
-                  entry: fillEntry,
-                  distance: dist,
-                  mark: fillMark,
-                });
-                try {
-                  const after = await this.positions.modifySlTp(
-                    strategy.organizationId,
-                    actorId,
-                    positionId,
-                    {
-                      stopLoss: safeSl,
-                      ...(takeProfit ? { takeProfit } : {}),
-                    },
-                    correlationId,
-                    { silent: true },
-                  );
-                  liveSl =
-                    after &&
-                    typeof after === "object" &&
-                    "stopLoss" in after &&
-                    (after as { stopLoss?: string | null }).stopLoss
-                      ? String(
-                          (after as { stopLoss?: string | null }).stopLoss,
-                        )
-                      : "";
-                  if (liveSl) break;
-                  lastErr = new Error(
-                    `Capital chart still has no stopLevel after attach (${safeSl})`,
-                  );
-                } catch (err) {
-                  lastErr = err;
-                  await new Promise((r) =>
-                    setTimeout(r, 200 + attempt * 150),
-                  );
+            // Adapter owns attach-or-close on placeOrder. Runtime only if DB
+            // still shows naked after fill (defense-in-depth, no triple spam).
+            let slConfirmed = false;
+            const fillRow = await this.prisma.position.findFirst({
+              where: { id: positionId },
+              select: {
+                currentPrice: true,
+                averageEntry: true,
+                brokerPositionId: true,
+                stopLoss: true,
+              },
+            });
+            if (
+              fillRow?.stopLoss != null &&
+              String(fillRow.stopLoss).trim().length > 0
+            ) {
+              slConfirmed = true;
+            }
+            if (!slConfirmed) {
+              try {
+                const fillEntry =
+                  Number(fillRow?.averageEntry ?? entry) || entry;
+                const fillMark =
+                  Number(fillRow?.currentPrice ?? fillEntry) || fillEntry;
+                const baseDist = Math.max(
+                  stopDist,
+                  capitalMinStopDistance(brokerSymbol),
+                );
+                let liveSl = "";
+                let lastErr: unknown;
+                for (let attempt = 0; attempt < 4 && !liveSl; attempt++) {
+                  const dist = baseDist * (1 + attempt * 0.5);
+                  const safeSl = capitalSafeInitialStop({
+                    symbol: brokerSymbol,
+                    direction: signal,
+                    entry: fillEntry,
+                    distance: dist,
+                    mark: fillMark,
+                  });
+                  try {
+                    const after = await this.positions.modifySlTp(
+                      strategy.organizationId,
+                      actorId,
+                      positionId,
+                      {
+                        stopLoss: safeSl,
+                        ...(takeProfit ? { takeProfit } : {}),
+                      },
+                      correlationId,
+                      { silent: true },
+                    );
+                    liveSl =
+                      after &&
+                      typeof after === "object" &&
+                      "stopLoss" in after &&
+                      (after as { stopLoss?: string | null }).stopLoss
+                        ? String(
+                            (after as { stopLoss?: string | null }).stopLoss,
+                          )
+                        : "";
+                    if (liveSl) break;
+                    lastErr = new Error(
+                      `Capital chart still has no stopLevel after attach (${safeSl})`,
+                    );
+                  } catch (err) {
+                    lastErr = err;
+                    await new Promise((r) =>
+                      setTimeout(r, 200 + attempt * 150),
+                    );
+                  }
                 }
+                if (!liveSl) {
+                  throw lastErr instanceof Error
+                    ? lastErr
+                    : new Error("Capital SL attach failed after sync retries");
+                }
+                slConfirmed = true;
+                await this.notifications.create({
+                  organizationId: strategy.organizationId,
+                  userId: actorId === "system" ? null : actorId,
+                  title: "SL ON Capital",
+                  body: `${brokerSymbol} stopLevel ${liveSl} — trail will chase`,
+                  severity: "SUCCESS",
+                });
+              } catch (attachErr) {
+                this.log.warn(
+                  `Post-fill SL FAILED (deal may be unprotected): ${
+                    attachErr instanceof Error ? attachErr.message : attachErr
+                  }`,
+                );
+                await this.notifications.create({
+                  organizationId: strategy.organizationId,
+                  userId: actorId === "system" ? null : actorId,
+                  title: "SL attach FAILED",
+                  body: `${brokerSymbol}: ${
+                    attachErr instanceof Error
+                      ? attachErr.message
+                      : "modify failed"
+                  } — naked recovery will retry`,
+                  severity: "CRITICAL",
+                });
               }
-              if (!liveSl) {
-                throw lastErr instanceof Error
-                  ? lastErr
-                  : new Error("Capital SL attach failed after sync retries");
-              }
-              await this.notifications.create({
-                organizationId: strategy.organizationId,
-                userId: actorId === "system" ? null : actorId,
-                title: "SL ON Capital",
-                body: `${brokerSymbol} stopLevel ${liveSl} — trail will chase`,
-                severity: "SUCCESS",
-              });
-            } catch (attachErr) {
-              this.log.warn(
-                `Post-fill SL FAILED (deal may be unprotected): ${
-                  attachErr instanceof Error ? attachErr.message : attachErr
-                }`,
-              );
-              await this.notifications.create({
-                organizationId: strategy.organizationId,
-                userId: actorId === "system" ? null : actorId,
-                title: "SL attach FAILED",
-                body: `${brokerSymbol}: ${
-                  attachErr instanceof Error
-                    ? attachErr.message
-                    : "modify failed"
-                } — naked recovery will retry`,
-                severity: "CRITICAL",
-              });
             }
             await this.notifications.create({
               organizationId: strategy.organizationId,
@@ -1598,7 +1600,9 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             });
             _acted = true;
             this.lastSignalAt.set(key, Date.now());
-            this.lastFingerprint.set(key, fingerprint);
+            if (slConfirmed) {
+              this.lastFingerprint.set(key, fingerprint);
+            }
             lastStatus = {
               ...lastStatus,
               placed: true,
@@ -1606,8 +1610,11 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
               entry,
               stopLoss,
               takeProfit: takeProfit ?? null,
-              skip: undefined,
-              reason: undefined,
+              slOnCapital: slConfirmed,
+              skip: slConfirmed ? undefined : "sl_attach_pending",
+              reason: slConfirmed
+                ? undefined
+                : "naked_recovery_and_chase_will_attach",
               error: undefined,
             };
           } else if (child?.ok) {

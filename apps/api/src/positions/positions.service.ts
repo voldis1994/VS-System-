@@ -920,6 +920,87 @@ export class PositionsService {
   }
 
   /**
+   * 10s SCALPING naked recovery — one widen attach per throttle window.
+   * Chase path skips non-10s naked recovery; this runs when broker map is empty.
+   */
+  private async recoverScalpNakedStop(input: {
+    position: {
+      id: string;
+      organizationId: string;
+      symbol: string;
+      direction: string;
+      stopLoss: unknown;
+    };
+    mark: number;
+    entry: number;
+    dir: "BUY" | "SELL";
+    correlationId: string;
+    brokerStopLoss: Map<string, string>;
+  }): Promise<void> {
+    const { position, mark, entry, dir, correlationId, brokerStopLoss } = input;
+    const now = Date.now();
+    const lastAt = this.nakedRecoveryAt.get(position.id) ?? 0;
+    if (now - lastAt < PositionsService.NAKED_RECOVERY_MS) {
+      console.log(
+        `[SCALP NAKED RECOVER] skip=throttle positionId=${position.id} symbol=${position.symbol}`,
+      );
+      return;
+    }
+    this.nakedRecoveryAt.set(position.id, now);
+    const minD = capitalMinStopDistance(position.symbol);
+    const preferredDist =
+      position.stopLoss != null
+        ? Math.abs(entry - Number(position.stopLoss))
+        : NaN;
+    const level = this.nakedRecoveryLevel.get(position.id) ?? 0;
+    const multipliers = [1, 2, 3, 5];
+    const mult = multipliers[Math.min(level, multipliers.length - 1)]!;
+    const dist = Math.max(
+      Number.isFinite(preferredDist) ? preferredDist : 0,
+      minD * mult,
+    );
+    const recoverySl = capitalSafeInitialStop({
+      symbol: position.symbol,
+      direction: dir,
+      entry,
+      distance: dist,
+      mark,
+    });
+    try {
+      const after = await this.modifySlTp(
+        position.organizationId,
+        "system",
+        position.id,
+        { stopLoss: recoverySl },
+        correlationId,
+        { silent: true },
+      );
+      const liveSl =
+        after && typeof after === "object" && "stopLoss" in after
+          ? String((after as { stopLoss?: string | null }).stopLoss ?? "")
+          : "";
+      if (liveSl.trim().length > 0) {
+        brokerStopLoss.set(position.id, liveSl);
+        this.nakedRecoveryLevel.delete(position.id);
+        this.scalpModifyBackoffUntil.delete(position.id);
+        this.scalpModifyRejectedLevel.delete(position.id);
+        console.log(
+          `[SCALP NAKED RECOVER] ok positionId=${position.id} sl=${liveSl}`,
+        );
+      } else {
+        this.nakedRecoveryLevel.set(position.id, level + 1);
+      }
+    } catch (err) {
+      this.nakedRecoveryLevel.set(position.id, level + 1);
+      console.warn(
+        `[SCALP NAKED RECOVER] fail positionId=${position.id}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+  }
+
+  /**
    * 10s SCALPING — Capital SL must exist from the first tick.
    * In profit: trail mark with 12% cushion (~88% locked), improve-only.
    * Flat/loss: Capital-safe protective stop (never naked).
@@ -949,17 +1030,10 @@ export class PositionsService {
     const mark = input.mark;
     const entry = Number(input.entry);
 
-    // Prefer Capital chart SL. Empty string in the map = broker confirmed naked.
-    // Only fall back to DB when this position was not in the broker snapshot.
+    // Broker chart only — NEVER trust DB stopLoss (stale SL hid naked chart).
     const mappedSl = brokerStopLoss.get(position.id);
     const liveSl =
-      mappedSl !== undefined
-        ? mappedSl.trim().length > 0
-          ? mappedSl
-          : null
-        : position.stopLoss != null && String(position.stopLoss).length > 0
-          ? String(position.stopLoss)
-          : null;
+      mappedSl !== undefined && mappedSl.trim().length > 0 ? mappedSl : null;
 
     if (
       !Number.isFinite(mark) ||
@@ -1321,12 +1395,20 @@ export class PositionsService {
     if (adapter) {
       try {
         const live = await adapter.getOpenPositions({ force: true });
-        if (!(live.length === 0 && accountPositions.length > 0)) {
+        if (live.length === 0 && accountPositions.length > 0) {
+          // Ghost grace — still mark broker SL unknown/naked per row (not skip map).
+          for (const p of accountPositions) {
+            if (p.brokerPositionId) brokerStopLoss.set(p.id, "");
+          }
+        } else {
           for (const p of accountPositions) {
             const match = live.find(
               (x) => x.brokerPositionId === p.brokerPositionId,
             );
-            if (!match) continue;
+            if (!match) {
+              if (p.brokerPositionId) brokerStopLoss.set(p.id, "");
+              continue;
+            }
             const mark = Number(match.currentPrice);
             if (Number.isFinite(mark) && mark > 0) {
               brokerMarks.set(p.id, mark);
@@ -1500,6 +1582,19 @@ export class PositionsService {
               correlationId,
               brokerStopLoss,
             });
+            const chartSl = brokerStopLoss.get(position.id);
+            const chartNaked =
+              chartSl === undefined || chartSl.trim().length === 0;
+            if (chartNaked) {
+              await this.recoverScalpNakedStop({
+                position,
+                mark,
+                entry,
+                dir,
+                correlationId,
+                brokerStopLoss,
+              });
+            }
             continue;
           }
         }
