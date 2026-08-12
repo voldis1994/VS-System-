@@ -25,6 +25,8 @@ import {
   capitalSafeInitialStop,
   capitalMinStopDistance,
   isMarginOrFundsError,
+  scalpInitialStopDistance,
+  scalpInitialBrokerStop,
 } from "@nexus/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventBusService } from "../events/event-bus.service";
@@ -1186,7 +1188,16 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
         // Pip path: exact pip×size or direct price offset when user supplied <1.0. ATR path: atr×mult.
         let stopDist: number;
         let stopLoss: string;
-        if (isEmaTickScalp) {
+        if (isClassicScalping) {
+          // 10s SCALPING: start SL = 10% of entry price (simple). Profit → 20% chase.
+          stopDist = scalpInitialStopDistance(entry);
+          stopLoss = scalpInitialBrokerStop({
+            symbol: brokerSymbol,
+            direction: signal,
+            entry,
+            mark: entry,
+          });
+        } else if (isEmaTickScalp) {
           // Absolute SL at EMA3 or prev swing — not a recycled SCALPING pip offset
           const rawStop =
             signal === "BUY"
@@ -1200,9 +1211,7 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
           stopLoss = formatInstrumentPrice(brokerSymbol, clamped);
         } else if (config.stopDistancePips != null) {
           const v = Number(config.stopDistancePips);
-          if (isClassicScalping) {
-            stopDist = resolveScalpDistance(brokerSymbol, entry, v);
-          } else if (timeframe === "10s" && scalpAuto?.priceOffsetMode) {
+          if (timeframe === "10s" && scalpAuto?.priceOffsetMode) {
             stopDist = Math.max(v, minDist);
           } else {
             stopDist = v > 0 && v < 1 ? v : pip * v;
@@ -1560,21 +1569,30 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
                   Number(fillRow?.averageEntry ?? entry) || entry;
                 const fillMark =
                   Number(fillRow?.currentPrice ?? fillEntry) || fillEntry;
-                const baseDist = Math.max(
-                  stopDist,
-                  capitalMinStopDistance(brokerSymbol),
-                );
+                const baseDist = isClassicScalping
+                  ? scalpInitialStopDistance(fillEntry)
+                  : Math.max(
+                      stopDist,
+                      capitalMinStopDistance(brokerSymbol),
+                    );
                 let liveSl = "";
                 let lastErr: unknown;
                 for (let attempt = 0; attempt < 4 && !liveSl; attempt++) {
                   const dist = baseDist * (1 + attempt * 0.5);
-                  const safeSl = capitalSafeInitialStop({
-                    symbol: brokerSymbol,
-                    direction: signal,
-                    entry: fillEntry,
-                    distance: dist,
-                    mark: fillMark,
-                  });
+                  const safeSl = isClassicScalping && attempt === 0
+                    ? scalpInitialBrokerStop({
+                        symbol: brokerSymbol,
+                        direction: signal,
+                        entry: fillEntry,
+                        mark: fillMark,
+                      })
+                    : capitalSafeInitialStop({
+                        symbol: brokerSymbol,
+                        direction: signal,
+                        entry: fillEntry,
+                        distance: dist,
+                        mark: fillMark,
+                      });
                   try {
                     const after = await this.positions.modifySlTp(
                       strategy.organizationId,

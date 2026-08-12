@@ -14,7 +14,7 @@ import {
   isTenSecondScalpingMode,
   type StrategyTimeframe,
 } from "@nexus/domain";
-import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, resolveScalpDistance, capitalSafeInitialStop, SCALP_LOCK_PCT } from "@nexus/shared";
+import { instrumentPipSize, minProtectiveDistance, formatInstrumentPrice, d, normalizeFixedLotStrategyConfig, resolveScalpTrailDistance, resolveScalpActivationDistance, resolveScalpDistance, capitalSafeInitialStop, SCALP_LOCK_PCT, scalpInitialStopDistance, scalpInitialBrokerStop } from "@nexus/shared";
 import { resolveCapitalEpic } from "@nexus/broker-adapters";
 import { OrderStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -1354,19 +1354,27 @@ export class StrategiesService {
 
         let stopLoss = pos.stopLoss ? String(pos.stopLoss) : null;
         if (!brokerHasSl && Number.isFinite(entry) && entry > 0) {
-          const preferred =
-            Number.isFinite(stopDistancePips) && stopDistancePips > 0
-              ? resolveScalpDistance(pos.symbol, entry, stopDistancePips)
-              : Math.max(minDist, pip * 20 * Math.max(atrStopMult, 0.5));
           const mark = Number(pos.currentPrice) || entry;
-          stopLoss = capitalSafeInitialStop({
-            symbol: pos.symbol,
-            direction: dir,
-            entry,
-            distance: preferred,
-            mark,
-          });
-        }
+          if (is10sScalpFixed) {
+            stopLoss = scalpInitialBrokerStop({
+              symbol: pos.symbol,
+              direction: dir,
+              entry,
+              mark,
+            });
+          } else {
+            const preferred =
+              Number.isFinite(stopDistancePips) && stopDistancePips > 0
+                ? resolveScalpDistance(pos.symbol, entry, stopDistancePips)
+                : Math.max(minDist, pip * 20 * Math.max(atrStopMult, 0.5));
+            stopLoss = capitalSafeInitialStop({
+              symbol: pos.symbol,
+              direction: dir,
+              entry,
+              distance: preferred,
+              mark,
+            });
+          }
 
         let takeProfit: string | null = pos.takeProfit ? String(pos.takeProfit) : null;
         // Only set TP if missing and TP enabled — do not overwrite ATR TP from entry

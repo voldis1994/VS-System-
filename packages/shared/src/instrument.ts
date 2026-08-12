@@ -370,14 +370,45 @@ export function scalpStopValidVsMark(input: {
 }
 
 /**
- * 10s SCALPING trail cushion from entry.
- * SL follows live price, leaving this fraction of the favorable move as room:
+ * 10s SCALPING trail cushion from entry (in profit only).
  *   BUY:  SL = mark − 20% × (mark − entry)  [= entry + 80% × move]
  *   SELL: SL = mark + 20% × (entry − mark)  [= entry − 80% × move]
- * Flat/loss → entry (caller must Capital-safe clamp vs live mark).
+ * Flat/loss → initial 10%-of-price SL (see SCALP_INITIAL_SL_PCT).
  * Improve-only — never move SL backward on pullback.
  */
 export const SCALP_LOCK_PCT = 0.2;
+
+/**
+ * On fill / flat: protective SL distance = this × entry price.
+ * Example GOLD 4400 → 440 points. Simple — no pips, no fake Capital mins.
+ */
+export const SCALP_INITIAL_SL_PCT = 0.1;
+
+/** Absolute price distance for start SL (10% of entry). */
+export function scalpInitialStopDistance(entry: number): number {
+  const e = Number(entry);
+  if (!Number.isFinite(e) || e <= 0) return NaN;
+  return e * SCALP_INITIAL_SL_PCT;
+}
+
+/** Broker stopLevel string at open / flat: entry ± 10% of price. */
+export function scalpInitialBrokerStop(input: {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  entry: number;
+  mark?: number | null;
+}): string {
+  const entry = Number(input.entry);
+  const dist = scalpInitialStopDistance(entry);
+  if (!Number.isFinite(dist) || dist <= 0) return "none";
+  return capitalSafeInitialStop({
+    symbol: input.symbol,
+    direction: input.direction,
+    entry,
+    distance: dist,
+    mark: input.mark ?? entry,
+  });
+}
 
 /** Min interval between Capital SL modify attempts for 10s SCALPING (same level). */
 export const SCALP_SL_MODIFY_INTERVAL_MS = 10_000;
@@ -446,11 +477,10 @@ export function scalpPctLockBrokerStop(input: {
   const inProfit = favorable > 0;
 
   if (!inProfit) {
-    return capitalSafeInitialStop({
+    return scalpInitialBrokerStop({
       symbol: input.symbol,
       direction: input.direction,
       entry,
-      distance: minD,
       mark,
     });
   }
@@ -462,11 +492,10 @@ export function scalpPctLockBrokerStop(input: {
     lockPct: input.lockPct,
   });
   if (!Number.isFinite(raw)) {
-    return capitalSafeInitialStop({
+    return scalpInitialBrokerStop({
       symbol: input.symbol,
       direction: input.direction,
       entry,
-      distance: minD,
       mark,
     });
   }

@@ -37,6 +37,8 @@ import {
   scalpBrokerStopShouldMove,
   scalpStopValidVsMark,
   scalpMinStopImprovement,
+  scalpInitialStopDistance,
+  scalpInitialBrokerStop,
   type MultiTpLevelPlan,
 } from "@nexus/shared";
 import { capitalModifyRejectBackoffMs } from "@nexus/broker-adapters";
@@ -1047,7 +1049,7 @@ export class PositionsService {
       return;
     }
     this.nakedRecoveryAt.set(position.id, now);
-    const minD = capitalMinStopDistance(position.symbol);
+    const initialDist = scalpInitialStopDistance(entry);
     const preferredDist =
       position.stopLoss != null
         ? Math.abs(entry - Number(position.stopLoss))
@@ -1057,15 +1059,23 @@ export class PositionsService {
     const mult = multipliers[Math.min(level, multipliers.length - 1)]!;
     const dist = Math.max(
       Number.isFinite(preferredDist) ? preferredDist : 0,
-      minD * mult,
-    );
-    const recoverySl = capitalSafeInitialStop({
-      symbol: position.symbol,
-      direction: dir,
-      entry,
-      distance: dist,
-      mark,
-    });
+      Number.isFinite(initialDist) ? initialDist : 0,
+    ) * (level === 0 ? 1 : mult);
+    const recoverySl =
+      level === 0
+        ? scalpInitialBrokerStop({
+            symbol: position.symbol,
+            direction: dir,
+            entry,
+            mark,
+          })
+        : capitalSafeInitialStop({
+            symbol: position.symbol,
+            direction: dir,
+            entry,
+            distance: dist,
+            mark,
+          });
     try {
       const after = await this.modifySlTp(
         position.organizationId,
