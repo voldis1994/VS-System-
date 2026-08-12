@@ -228,7 +228,7 @@ const shell =
 const MODE_META: Record<string, { label: string; tip: string }> = {
   [StrategyMode.SCALPING]: {
     label: "SCALPING FAST",
-    tip: "10s SCALP: tikai ar bull/bear struktūru · nav knife · 12% SL chase · 1 trade.",
+    tip: "10s SCALP: tikai ar bull/bear struktūru · nav knife · 20% SL chase · 1 trade.",
   },
   [StrategyMode.EMA_TICK_SCALP]: {
     label: "EMA 1/3 TICK",
@@ -844,7 +844,7 @@ export default function ClientPortalPage() {
                   <p className="text-[#7af6ff]">AUTO · 10s SCALP</p>
                   <p>
                     Entry tikai ar skaidru bull/bear struktūru (nav knife).
-                    SL uzreiz · 12% chase. Lot = nākamajam treidam; OPEN = 1.
+                    SL uzreiz · 20% chase · 10 pip start. Lot = nākamajam; OPEN = 1.
                   </p>
                 </>
               ) : (

@@ -13,12 +13,12 @@ import {
 } from "@nexus/shared";
 
 /**
- * 10s SCALPING: SL trails live price with 12% cushion of the move from entry
- * (locks ~88%). Flat/loss → protective. Never move SL backward on pullback.
+ * 10s SCALPING: SL trails live price with 20% cushion of the move from entry
+ * (locks ~80%). Flat/loss → protective. Never move SL backward on pullback.
  */
-describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
+describe("PositionsService 10s SCALPING 20% price-chase SL", () => {
   it("constants", () => {
-    expect(SCALP_LOCK_PCT).toBe(0.12);
+    expect(SCALP_LOCK_PCT).toBe(0.2);
     expect(SCALP_SL_MODIFY_INTERVAL_MS).toBe(10_000);
   });
 
@@ -39,7 +39,7 @@ describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
     ).toBe(2400);
   });
 
-  it("SELL trails mark + 12% × favorable (not stuck near BE)", () => {
+  it("SELL trails mark + 20% × favorable (not stuck near BE)", () => {
     const entry = 2408.15;
     const mark = 2405.92;
     const cand = scalpPctLockCandidateSl({
@@ -47,14 +47,14 @@ describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
       entry,
       livePrice: mark,
     });
-    // mark + 0.12*(entry-mark) = 2405.92 + 0.2676 = 2406.1876
-    expect(cand).toBeCloseTo(2406.1876, 4);
-    expect(formatScalpBrokerStopLevel("GOLD", cand)).toBe("2406.19");
+    // mark + 0.20*(entry-mark) = 2405.92 + 0.446 = 2406.366
+    expect(cand).toBeCloseTo(2406.366, 4);
+    expect(formatScalpBrokerStopLevel("GOLD", cand)).toBe("2406.37");
     // Must be clearly past BE toward price — not ~entry+tiny
     expect(cand).toBeLessThan(entry - 1);
   });
 
-  it("BUY trails mark − 12% × favorable (locks ~88% of move)", () => {
+  it("BUY trails mark − 20% × favorable (locks ~80% of move)", () => {
     const entry = 2400;
     const mark = 2410;
     const cand = scalpPctLockCandidateSl({
@@ -62,8 +62,8 @@ describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
       entry,
       livePrice: mark,
     });
-    // 2410 - 0.12*10 = 2408.8
-    expect(cand).toBeCloseTo(2408.8, 8);
+    // 2410 - 0.20*10 = 2408
+    expect(cand).toBeCloseTo(2408, 8);
     expect(cand).toBeGreaterThan(entry + 5);
   });
 
@@ -79,8 +79,8 @@ describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
       entry,
       livePrice: 2420,
     });
-    expect(near).toBeCloseTo(2401.76, 8); // 2402 - 0.12*2
-    expect(far).toBeCloseTo(2417.6, 8); // 2420 - 0.12*20
+    expect(near).toBeCloseTo(2401.6, 8); // 2402 - 0.20*2
+    expect(far).toBeCloseTo(2416, 8); // 2420 - 0.20*20
     expect(far).toBeGreaterThan(near);
     expect(
       scalpBrokerStopShouldMove({
@@ -215,7 +215,7 @@ describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
     ).toBe(true);
   });
 
-  it("broker stop 12% cushion after larger move (Capital-legal after 2dp)", () => {
+  it("broker stop 20% cushion after larger move (Capital-legal after 2dp)", () => {
     const entry = 2400;
     const mark = 2410;
     const sl = scalpPctLockBrokerStop({
@@ -224,8 +224,8 @@ describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
       entry,
       livePrice: mark,
     });
-    // 2410 - 0.12*10 = 2408.8 → "2408.80"
-    expect(Number(sl)).toBeCloseTo(2408.8, 1);
+    // 2410 - 0.20*10 = 2408 → "2408.00"
+    expect(Number(sl)).toBeCloseTo(2408, 1);
     expect(2410 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
     expect(
       scalpStopValidVsMark({

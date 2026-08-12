@@ -59,7 +59,7 @@ export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   atrStopMult: 0.45,
   atrTpMult: 1.0,
   /** Initial Capital failsafe SL until soft trail / exit */
-  stopDistancePips: 18,
+  stopDistancePips: 10,
   cooldownSeconds: 0,
   exitVersion: "SCALP",
   priceOffsetMode: false,

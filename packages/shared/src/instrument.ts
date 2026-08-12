@@ -387,12 +387,12 @@ export function scalpStopValidVsMark(input: {
 /**
  * 10s SCALPING trail cushion from entry.
  * SL follows live price, leaving this fraction of the favorable move as room:
- *   BUY:  SL = mark − 12% × (mark − entry)  [= entry + 88% × move]
- *   SELL: SL = mark + 12% × (entry − mark)  [= entry − 88% × move]
+ *   BUY:  SL = mark − 20% × (mark − entry)  [= entry + 80% × move]
+ *   SELL: SL = mark + 20% × (entry − mark)  [= entry − 80% × move]
  * Flat/loss → entry (caller must Capital-safe clamp vs live mark).
  * Improve-only — never move SL backward on pullback.
  */
-export const SCALP_LOCK_PCT = 0.12;
+export const SCALP_LOCK_PCT = 0.2;
 
 /** Min interval between Capital SL modify attempts for 10s SCALPING (same level). */
 export const SCALP_SL_MODIFY_INTERVAL_MS = 10_000;
@@ -432,7 +432,7 @@ export function scalpPctLockCandidateSl(input: {
 }
 
 /**
- * Capital-chart stopLevel for 10s SCALPING 12% chase — legal AFTER formatting.
+ * Capital-chart stopLevel for 10s SCALPING 20% chase — legal AFTER formatting.
  *
  * In profit: trail mark with lockPct cushion, floored to Capital min-stop vs mark.
  * Does NOT snap back to capitalSafeInitialStop (that froze SL at entry±minProtective
