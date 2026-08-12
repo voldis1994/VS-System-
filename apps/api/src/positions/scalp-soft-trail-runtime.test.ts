@@ -3,15 +3,18 @@ import { StrategyMode, isTenSecondScalpingMode } from "@nexus/domain";
 import {
   SCALP_LOCK_PCT,
   SCALP_SL_MODIFY_INTERVAL_MS,
+  capitalMinStopDistance,
+  capitalSafeInitialStop,
   formatScalpBrokerStopLevel,
   scalpBrokerStopShouldMove,
+  scalpPctLockBrokerStop,
   scalpPctLockCandidateSl,
   scalpStopValidVsMark,
 } from "@nexus/shared";
 
 /**
  * 10s SCALPING: SL trails live price with 12% cushion of the move from entry
- * (locks ~88%). Flat/loss → entry. Never move SL backward on pullback.
+ * (locks ~88%). Flat/loss → protective. Never move SL backward on pullback.
  */
 describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
   it("constants", () => {
@@ -172,6 +175,92 @@ describe("PositionsService 10s SCALPING 12% price-chase SL", () => {
         candidate: 2400,
         current: null,
         mode: "be_sync",
+      }),
+    ).toBe(true);
+  });
+
+  it("broker stop chases from wide never-naked SL on small profit (no BE-floor freeze)", () => {
+    // never-naked places GOLD SL at entry±minProtective (~3.5). Small profit
+    // used to snap candidate back to that same initial → skip=not_better forever.
+    const entry = 4400;
+    const mark = 4400.3; // favorable 0.3 < Capital min 0.5
+    const initialSl = Number(
+      capitalSafeInitialStop({
+        symbol: "GOLD",
+        direction: "BUY",
+        entry,
+        mark: entry,
+      }),
+    );
+    expect(initialSl).toBeLessThan(entry - 1);
+
+    const chased = scalpPctLockBrokerStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      entry,
+      livePrice: mark,
+    });
+    const chasedN = Number(chased);
+    expect(chasedN).toBeGreaterThan(initialSl);
+    expect(mark - chasedN).toBeGreaterThanOrEqual(
+      capitalMinStopDistance("GOLD") - 1e-9,
+    );
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "BUY",
+        candidate: chased,
+        current: String(initialSl),
+        mode: "improve_only",
+      }),
+    ).toBe(true);
+  });
+
+  it("broker stop 12% cushion after larger move (Capital-legal after 2dp)", () => {
+    const entry = 2400;
+    const mark = 2410;
+    const sl = scalpPctLockBrokerStop({
+      symbol: "GOLD",
+      direction: "BUY",
+      entry,
+      livePrice: mark,
+    });
+    // 2410 - 0.12*10 = 2408.8 → "2408.80"
+    expect(Number(sl)).toBeCloseTo(2408.8, 1);
+    expect(2410 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    expect(
+      scalpStopValidVsMark({
+        direction: "BUY",
+        stop: sl,
+        mark,
+        symbol: "GOLD",
+      }),
+    ).toBe(true);
+  });
+
+  it("SELL broker stop tightens from wide initial when price drops", () => {
+    const entry = 4387.47;
+    const mark = 4386.5;
+    const initialSl = Number(
+      capitalSafeInitialStop({
+        symbol: "GOLD",
+        direction: "SELL",
+        entry,
+        mark: entry,
+      }),
+    );
+    const chased = scalpPctLockBrokerStop({
+      symbol: "GOLD",
+      direction: "SELL",
+      entry,
+      livePrice: mark,
+    });
+    expect(Number(chased)).toBeLessThan(initialSl);
+    expect(
+      scalpBrokerStopShouldMove({
+        direction: "SELL",
+        candidate: chased,
+        current: String(initialSl),
+        mode: "improve_only",
       }),
     ).toBe(true);
   });

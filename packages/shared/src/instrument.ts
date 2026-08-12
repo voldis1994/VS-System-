@@ -428,6 +428,89 @@ export function scalpPctLockCandidateSl(input: {
   return mark + pct * favorable;
 }
 
+/**
+ * Capital-chart stopLevel for 10s SCALPING 12% chase — legal AFTER formatting.
+ *
+ * In profit: trail mark with lockPct cushion, floored to Capital min-stop vs mark.
+ * Does NOT snap back to capitalSafeInitialStop (that froze SL at entry±minProtective
+ * whenever favorable < min-stop and the BE floor made entry illegal vs mark).
+ * Flat/loss / naked recovery: Capital-safe protective stop from entry.
+ *
+ * GOLD 2dp rounding is nudged *away* from mark so PUT is not rejected as
+ * MINIMUM_STOP_DISTANCE after toFixed (same bug capitalSafeTrailingStop fixed).
+ */
+export function scalpPctLockBrokerStop(input: {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  entry: number;
+  livePrice: number;
+  lockPct?: number;
+}): string {
+  const entry = Number(input.entry);
+  const mark = Number(input.livePrice);
+  if (![entry, mark].every((n) => Number.isFinite(n) && n > 0)) {
+    return "none";
+  }
+
+  const minD = capitalMinStopDistance(input.symbol);
+  const favorable =
+    input.direction === "BUY" ? mark - entry : entry - mark;
+  const inProfit = favorable > 0;
+
+  if (!inProfit) {
+    return capitalSafeInitialStop({
+      symbol: input.symbol,
+      direction: input.direction,
+      entry,
+      distance: minD,
+      mark,
+    });
+  }
+
+  let raw = scalpPctLockCandidateSl({
+    direction: input.direction,
+    entry,
+    livePrice: mark,
+    lockPct: input.lockPct,
+  });
+  if (!Number.isFinite(raw)) {
+    return capitalSafeInitialStop({
+      symbol: input.symbol,
+      direction: input.direction,
+      entry,
+      distance: minD,
+      mark,
+    });
+  }
+
+  // Clamp to Capital min vs live mark. Allow SL still on the "wrong" side of
+  // entry while favorable < minD — that still *chases* from the wide never-naked
+  // protective stop toward price. Only apply BE floor once mark±minD has cleared entry.
+  if (input.direction === "BUY") {
+    raw = Math.min(raw, mark - minD);
+    if (mark - minD >= entry - 1e-12) {
+      raw = Math.max(raw, entry);
+    }
+  } else {
+    raw = Math.max(raw, mark + minD);
+    if (mark + minD <= entry + 1e-12) {
+      raw = Math.min(raw, entry);
+    }
+  }
+
+  // Distance from mark for capitalSafeTrailingStop (handles 2dp away-rounding)
+  const distFromMark =
+    input.direction === "BUY" ? mark - raw : raw - mark;
+  const safeDist = Math.max(distFromMark, minD);
+  return capitalSafeTrailingStop({
+    symbol: input.symbol,
+    direction: input.direction,
+    mark,
+    distance: safeDist,
+    existingSl: null,
+  });
+}
+
 /** @deprecated Prefer SCALP_LOCK_PCT / scalpPctLockCandidateSl for 10s SCALPING. */
 export const SCALP_FIXED_SL_DISTANCE = 0.001;
 

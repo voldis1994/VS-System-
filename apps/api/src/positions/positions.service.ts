@@ -29,10 +29,10 @@ import {
   capitalMinStopDistance,
   closeAllowedByStopLoss,
   instrumentPipSize,
+  formatInstrumentPrice,
   SCALP_LOCK_PCT,
   SCALP_SL_MODIFY_INTERVAL_MS,
-  scalpPctLockCandidateSl,
-  formatScalpBrokerStopLevel,
+  scalpPctLockBrokerStop,
   scalpBrokerStopShouldMove,
   scalpStopValidVsMark,
   type MultiTpLevelPlan,
@@ -915,7 +915,11 @@ export class PositionsService {
   /**
    * 10s SCALPING — Capital SL must exist from the first tick.
    * In profit: trail mark with 12% cushion (~88% locked), improve-only.
-   * Flat/loss or invalid vs mark: Capital-safe protective stop (never naked).
+   * Flat/loss: Capital-safe protective stop (never naked).
+   *
+   * IMPORTANT: never snap a profitable chase back to capitalSafeInitialStop —
+   * that froze chart SL at the wide never-naked entry±minProtective level
+   * whenever favorable < Capital min-stop (BE floor made entry illegal vs mark).
    */
   private async chaseScalpFixedPriceStop(input: {
     position: {
@@ -965,29 +969,28 @@ export class PositionsService {
     const lockPct = SCALP_LOCK_PCT;
     const favorable = dir === "BUY" ? mark - entry : entry - mark;
     const inProfit = favorable > 0;
-    let candN = scalpPctLockCandidateSl({
+    let candidateSL = scalpPctLockBrokerStop({
+      symbol: position.symbol,
       direction: dir,
       entry,
       livePrice: mark,
       lockPct,
     });
+    let candN = Number(candidateSL);
 
-    // Clamp profitable chase so Capital min-stop vs live mark is satisfied.
-    // Flat/loss / invalid → hard protective stop (entry±min) — NEVER leave naked.
-    const minD = capitalMinStopDistance(position.symbol);
-    if (inProfit && Number.isFinite(candN)) {
-      if (dir === "BUY") {
-        candN = Math.min(candN, mark - minD);
-        // Never trail below entry once in profit (BE floor)
-        candN = Math.max(candN, entry);
-      } else {
-        candN = Math.max(candN, mark + minD);
-        candN = Math.min(candN, entry);
-      }
+    console.log(
+      `[SCALP PCT SL CHASE] symbol=${position.symbol} side=${dir} entry=${entry} currentPrice=${mark} favorable=${favorable.toFixed(4)} lockPct=${lockPct} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL} naked=${liveSl == null} inProfit=${inProfit}`,
+    );
+
+    if (!Number.isFinite(candN) || candidateSL === "none") {
+      console.warn(
+        `[SCALP PCT SL CHASE] skip=candidate_invalid positionId=${position.id} symbol=${position.symbol}`,
+      );
+      return;
     }
+
+    // Defense: if formatting somehow left SL too close to mark, widen one pip.
     if (
-      !inProfit ||
-      !Number.isFinite(candN) ||
       !scalpStopValidVsMark({
         direction: dir,
         stop: candN,
@@ -995,35 +998,61 @@ export class PositionsService {
         symbol: position.symbol,
       })
     ) {
-      candN = Number(
-        capitalSafeInitialStop({
-          symbol: position.symbol,
+      const minD = capitalMinStopDistance(position.symbol);
+      const pip = instrumentPipSize(position.symbol);
+      candidateSL =
+        dir === "BUY"
+          ? formatInstrumentPrice(position.symbol, mark - minD - pip)
+          : formatInstrumentPrice(position.symbol, mark + minD + pip);
+      candN = Number(candidateSL);
+      if (
+        !scalpStopValidVsMark({
           direction: dir,
-          entry,
-          distance: minD,
+          stop: candN,
           mark,
-        }),
-      );
+          symbol: position.symbol,
+        })
+      ) {
+        console.warn(
+          `[SCALP PCT SL CHASE] skip=invalid_vs_mark symbol=${position.symbol} candidateSL=${candidateSL} mark=${mark}`,
+        );
+        return;
+      }
     }
 
-    const candidateSL = Number.isFinite(candN)
-      ? formatScalpBrokerStopLevel(position.symbol, candN)
-      : "none";
+    await this.pushIfBetterScalpStop({
+      position,
+      dir,
+      mark,
+      liveSl,
+      candidateSL,
+      correlationId,
+      brokerStopLoss,
+    });
+  }
 
-    console.log(
-      `[SCALP PCT SL CHASE] symbol=${position.symbol} side=${dir} entry=${entry} currentPrice=${mark} favorable=${favorable.toFixed(4)} lockPct=${lockPct} currentSL=${liveSl ?? "none"} candidateSL=${candidateSL} naked=${liveSl == null}`,
-    );
-
-    if (!Number.isFinite(candN)) {
-      console.warn(
-        `[SCALP PCT SL CHASE] skip=candidate_invalid positionId=${position.id} symbol=${position.symbol}`,
-      );
-      return;
-    }
+  /** Improve-only (or naked) Capital stopLevel push for 10s SCALPING chase. */
+  private async pushIfBetterScalpStop(input: {
+    position: {
+      id: string;
+      organizationId: string;
+      accountId: string;
+      symbol: string;
+      brokerPositionId: string | null;
+    };
+    dir: "BUY" | "SELL";
+    mark: number;
+    liveSl: string | null;
+    candidateSL: string;
+    correlationId: string;
+    brokerStopLoss: Map<string, string>;
+  }): Promise<void> {
+    const { position, dir, mark, liveSl, candidateSL, correlationId, brokerStopLoss } =
+      input;
 
     const hasSl =
       liveSl != null && String(liveSl).trim().length > 0 && Number(liveSl) !== 0;
-    // Naked → always send. Otherwise only when candidate strictly improves.
+    // Naked → always send. In profit chase → every better lock immediately.
     const shouldSend =
       !hasSl ||
       scalpBrokerStopShouldMove({
@@ -1040,7 +1069,7 @@ export class PositionsService {
     }
 
     // Throttle ONLY identical re-sends (already at this SL).
-    // Naked / better lock always goes to Capital immediately.
+    // Better 12% lock always goes to Capital on this trail tick — no 10s block.
     const sameLevel =
       hasSl &&
       Number.isFinite(Number(liveSl)) &&
@@ -1228,6 +1257,44 @@ export class PositionsService {
     priceBySymbol: Map<string, number>,
     correlationId: string,
   ) {
+    // Snapshot FIRST without account_busy. never-naked placeOrder can hold the
+    // Capital login lock for many seconds; if we set busy before getOpenPositions
+    // every 1s trail tick logs skip=account_busy and the 12% chase never fires.
+    const brokerMarks = new Map<string, number>();
+    const brokerStopLoss = new Map<string, string>();
+    const brokerUpl = new Map<string, number>();
+    const adapter = this.brokers.get(accountId);
+    if (adapter) {
+      try {
+        const live = await adapter.getOpenPositions({ force: true });
+        if (!(live.length === 0 && accountPositions.length > 0)) {
+          for (const p of accountPositions) {
+            const match = live.find(
+              (x) => x.brokerPositionId === p.brokerPositionId,
+            );
+            if (!match) continue;
+            const mark = Number(match.currentPrice);
+            if (Number.isFinite(mark) && mark > 0) {
+              brokerMarks.set(p.id, mark);
+              brokerMarks.set(p.symbol, mark);
+            }
+            const uplRaw = match.unrealizedPnl;
+            if (uplRaw != null && String(uplRaw).length > 0) {
+              const upl = Number(uplRaw);
+              if (Number.isFinite(upl)) brokerUpl.set(p.id, upl);
+            }
+            if (match.stopLoss != null && String(match.stopLoss).length > 0) {
+              brokerStopLoss.set(p.id, String(match.stopLoss));
+            } else {
+              brokerStopLoss.set(p.id, "");
+            }
+          }
+        }
+      } catch {
+        // fall back to provided ticks
+      }
+    }
+
     if (this.protectionsRunningByAccount.has(accountId)) {
       console.warn(
         `[PROTECTIONS] skip=account_busy accountId=${accountId} positions=${accountPositions.length} — Capital modify still in flight`,
@@ -1241,6 +1308,7 @@ export class PositionsService {
         accountPositions,
         priceBySymbol,
         correlationId,
+        { brokerMarks, brokerStopLoss, brokerUpl },
       );
     } finally {
       this.protectionsRunningByAccount.delete(accountId);
@@ -1275,40 +1343,49 @@ export class PositionsService {
     }>,
     priceBySymbol: Map<string, number>,
     correlationId: string,
+    prefetched?: {
+      brokerMarks: Map<string, number>;
+      brokerStopLoss: Map<string, string>;
+      brokerUpl: Map<string, number>;
+    },
   ) {
-    const brokerMarks = new Map<string, number>();
-    const brokerStopLoss = new Map<string, string>();
-    const brokerUpl = new Map<string, number>();
-    const adapter = this.brokers.get(accountId);
-    if (adapter) {
-      try {
-        const live = await adapter.getOpenPositions({ force: true });
-        if (!(live.length === 0 && open.length > 0)) {
-          for (const p of open) {
-            const match = live.find(
-              (x) => x.brokerPositionId === p.brokerPositionId,
-            );
-            if (!match) continue;
-            const mark = Number(match.currentPrice);
-            if (Number.isFinite(mark) && mark > 0) {
-              brokerMarks.set(p.id, mark);
-              brokerMarks.set(p.symbol, mark);
-            }
-            const uplRaw = match.unrealizedPnl;
-            if (uplRaw != null && String(uplRaw).length > 0) {
-              const upl = Number(uplRaw);
-              if (Number.isFinite(upl)) brokerUpl.set(p.id, upl);
-            }
-            if (match.stopLoss != null && String(match.stopLoss).length > 0) {
-              brokerStopLoss.set(p.id, String(match.stopLoss));
-            } else {
-              // Explicit naked — do NOT let chase fall back to stale DB SL
-              brokerStopLoss.set(p.id, "");
+    const brokerMarks = prefetched?.brokerMarks ?? new Map<string, number>();
+    const brokerStopLoss =
+      prefetched?.brokerStopLoss ?? new Map<string, string>();
+    const brokerUpl = prefetched?.brokerUpl ?? new Map<string, number>();
+    // Prefetch path already filled maps; only refresh when called without snapshot.
+    if (!prefetched) {
+      const adapter = this.brokers.get(accountId);
+      if (adapter) {
+        try {
+          const live = await adapter.getOpenPositions({ force: true });
+          if (!(live.length === 0 && open.length > 0)) {
+            for (const p of open) {
+              const match = live.find(
+                (x) => x.brokerPositionId === p.brokerPositionId,
+              );
+              if (!match) continue;
+              const mark = Number(match.currentPrice);
+              if (Number.isFinite(mark) && mark > 0) {
+                brokerMarks.set(p.id, mark);
+                brokerMarks.set(p.symbol, mark);
+              }
+              const uplRaw = match.unrealizedPnl;
+              if (uplRaw != null && String(uplRaw).length > 0) {
+                const upl = Number(uplRaw);
+                if (Number.isFinite(upl)) brokerUpl.set(p.id, upl);
+              }
+              if (match.stopLoss != null && String(match.stopLoss).length > 0) {
+                brokerStopLoss.set(p.id, String(match.stopLoss));
+              } else {
+                // Explicit naked — do NOT let chase fall back to stale DB SL
+                brokerStopLoss.set(p.id, "");
+              }
             }
           }
+        } catch {
+          // fall back to provided ticks
         }
-      } catch {
-        // fall back to provided ticks
       }
     }
 
