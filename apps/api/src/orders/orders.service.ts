@@ -5,6 +5,7 @@ import {
   ExecutionPolicy,
   OrderSource,
   OrderStatus,
+  OrderType,
   PlaceOrderSchema,
   VolumeMode,
 } from "@nexus/domain";
@@ -175,6 +176,53 @@ export class OrdersService implements OnModuleInit {
         "Live trading not enabled",
         HttpStatus.FORBIDDEN,
       );
+    }
+
+    // Hard belt for strategy bots: oneTradeOnly = never stack MARKET while anything
+    // is open on this account (DB + Capital). Runtime should block first; this
+    // stops duplicate deals when DB ghost-flat or fingerprint drift.
+    if (input.type === OrderType.MARKET && input.strategyId) {
+      const dbOpen = await this.prisma.position.count({
+        where: {
+          organizationId,
+          accountId,
+          status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+        },
+      });
+      if (dbOpen > 0) {
+        throw new AppError(
+          ErrorCodes.ORDER_REJECTED,
+          `One trade only — account already has ${dbOpen} open position(s)`,
+          HttpStatus.CONFLICT,
+        );
+      }
+      let adapterEarly = this.brokers.get(accountId);
+      if (!adapterEarly) {
+        try {
+          adapterEarly = await this.brokers.connectAccount(account);
+        } catch {
+          adapterEarly = undefined;
+        }
+      }
+      if (adapterEarly) {
+        try {
+          const live = await adapterEarly.getOpenPositions({ force: true });
+          if (live.length > 0) {
+            throw new AppError(
+              ErrorCodes.ORDER_REJECTED,
+              `One trade only — Capital still shows ${live.length} open position(s)`,
+              HttpStatus.CONFLICT,
+            );
+          }
+        } catch (err) {
+          if (err instanceof AppError) throw err;
+          throw new AppError(
+            ErrorCodes.BROKER_UNHEALTHY,
+            "Cannot verify Capital positions before entry",
+            HttpStatus.SERVICE_UNAVAILABLE,
+          );
+        }
+      }
     }
 
     let symbol = await this.prisma.symbol.findFirst({

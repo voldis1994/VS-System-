@@ -943,9 +943,10 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             };
             continue;
           }
-          // Flat but fingerprint stuck (orphan fill / prior pending) — clear and
-          // allow entry. Inflight gate below still blocks true in-flight races.
-          this.lastFingerprint.delete(key);
+          // Flat on this symbol only — clear stuck fingerprint (inflight gate below).
+          if (openCount === 0) {
+            this.lastFingerprint.delete(key);
+          }
         }
 
         // Account-wide open positions — oneTradeOnly = max 1 open on this account
