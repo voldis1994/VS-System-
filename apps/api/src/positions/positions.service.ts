@@ -252,6 +252,246 @@ export class PositionsService {
     return closed;
   }
 
+  /**
+   * Pull Capital open book into DB (adopt orphans, refresh SL/mark).
+   * Must run on trail ticks — not only when UI opens Positions list.
+   */
+  async syncAccountOpenPositionsFromBroker(
+    accountId: string,
+    organizationId: string,
+  ): Promise<void> {
+    const accountPositions = await this.prisma.position.findMany({
+      where: {
+        organizationId,
+        accountId,
+        status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+      },
+    });
+
+    let adapter = this.brokers.get(accountId);
+    if (!adapter) {
+      const acc = await this.prisma.tradingAccount.findFirst({
+        where: { id: accountId, organizationId, archivedAt: null },
+      });
+      if (!acc) return;
+      try {
+        adapter = await this.brokers.connectAccount(acc);
+      } catch {
+        return;
+      }
+    }
+
+    let live: Awaited<ReturnType<typeof adapter.getOpenPositions>>;
+    try {
+      live = await adapter.getOpenPositions({ force: true });
+    } catch {
+      return;
+    }
+
+    if (live.length > 1) {
+      console.warn(
+        `[ONE TRADE VIOLATION] account=${accountId} Capital shows ${live.length} open — chase all; close extras on chart`,
+      );
+    }
+
+    if (live.length === 0 && accountPositions.length > 0) {
+      const n = (this.emptyBrokerSnapshots.get(accountId) ?? 0) + 1;
+      this.emptyBrokerSnapshots.set(accountId, n);
+      if (n < 5) {
+        console.warn(
+          `syncAccountOpenPositions ${accountId}: empty broker list (${n}/5) — skip ghost close`,
+        );
+        return;
+      }
+    } else if (live.length > 0) {
+      this.emptyBrokerSnapshots.set(accountId, 0);
+    }
+
+    const liveById = new Map(
+      live
+        .filter((x) => x.brokerPositionId)
+        .map((x) => [x.brokerPositionId!, x]),
+    );
+    const seenLocal = new Set<string>();
+
+    for (const p of accountPositions) {
+      if (!p.brokerPositionId) {
+        const ageMs = Date.now() - new Date(p.openedAt).getTime();
+        if (ageMs > 90_000) {
+          await this.prisma.position.update({
+            where: { id: p.id },
+            data: {
+              status: "CLOSED",
+              closedAt: p.closedAt ?? new Date(),
+              unrealizedPnl: "0",
+              volume: "0",
+            },
+          });
+        }
+        continue;
+      }
+      seenLocal.add(p.brokerPositionId);
+      const match = liveById.get(p.brokerPositionId);
+      if (match) {
+        await this.prisma.position.update({
+          where: { id: p.id },
+          data: {
+            currentPrice: match.currentPrice,
+            unrealizedPnl: match.unrealizedPnl,
+            volume: match.volume,
+            stopLoss:
+              match.stopLoss != null && String(match.stopLoss).length > 0
+                ? match.stopLoss
+                : null,
+            takeProfit:
+              match.takeProfit != null && String(match.takeProfit).length > 0
+                ? match.takeProfit
+                : null,
+            status: match.status as never,
+          },
+        });
+      } else if (
+        live.length > 0 ||
+        (this.emptyBrokerSnapshots.get(accountId) ?? 0) >= 5
+      ) {
+        await this.prisma.position.update({
+          where: { id: p.id },
+          data: {
+            status: "CLOSED",
+            closedAt: p.closedAt ?? new Date(),
+            unrealizedPnl: "0",
+            volume: "0",
+          },
+        });
+      }
+    }
+
+    const runningScalp = await this.prisma.strategy.findMany({
+      where: {
+        organizationId,
+        status: "RUNNING",
+        mode: StrategyMode.SCALPING,
+      },
+      select: { id: true, assignedAccountIds: true },
+    });
+    const scalpForAccount = runningScalp.find((s) =>
+      ((s.assignedAccountIds as string[]) ?? []).includes(accountId),
+    );
+
+    for (const bp of live) {
+      if (!bp.brokerPositionId || seenLocal.has(bp.brokerPositionId)) continue;
+      const symbol = String(bp.symbol ?? "").trim();
+      if (!symbol) continue;
+      const existing = await this.prisma.position.findFirst({
+        where: {
+          accountId,
+          brokerPositionId: bp.brokerPositionId,
+          status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
+        },
+      });
+      if (existing) {
+        seenLocal.add(bp.brokerPositionId);
+        continue;
+      }
+      const recentStrategy = await this.prisma.order.findFirst({
+        where: {
+          accountId,
+          symbol,
+          strategyId: { not: null },
+          status: { in: ["FILLED", "PARTIALLY_FILLED", "ACCEPTED"] },
+          createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { strategyId: true, id: true },
+      });
+      const linkedStrategyId =
+        recentStrategy?.strategyId ?? scalpForAccount?.id ?? null;
+      await this.prisma.position.create({
+        data: {
+          organizationId,
+          accountId,
+          brokerPositionId: bp.brokerPositionId,
+          orderId: recentStrategy?.id ?? undefined,
+          symbol,
+          direction: bp.direction as never,
+          volume: bp.volume,
+          initialVolume: bp.volume,
+          averageEntry: bp.averageEntry,
+          currentPrice: bp.currentPrice,
+          stopLoss: bp.stopLoss ?? null,
+          takeProfit: bp.takeProfit ?? null,
+          unrealizedPnl: bp.unrealizedPnl,
+          realizedPnl: bp.realizedPnl ?? "0",
+          status: "OPEN",
+          source: linkedStrategyId ? "STRATEGY" : "SYSTEM",
+          strategyId: linkedStrategyId,
+          trailingEnabled: linkedStrategyId != null,
+          trailingDistance: linkedStrategyId
+            ? SCALP_LOCK_PCT.toFixed(8)
+            : null,
+        },
+      });
+      seenLocal.add(bp.brokerPositionId);
+      console.warn(
+        `[SYNC ADOPT] account=${accountId} adopted Capital open ${symbol} brokerId=${bp.brokerPositionId}`,
+      );
+    }
+  }
+
+  /** RUNNING 10s SCALPING on this account — even if position.strategyId missing/stale. */
+  private async resolveTenSecondScalpingForPosition(position: {
+    organizationId: string;
+    accountId: string;
+    strategyId: string | null;
+  }): Promise<{
+    strategyId: string;
+    mode: string;
+    timeframe?: string;
+  } | null> {
+    if (position.strategyId) {
+      const st = await this.prisma.strategy.findFirst({
+        where: { id: position.strategyId },
+        select: { id: true, mode: true, configurationJson: true },
+      });
+      if (st) {
+        const cfg = (st.configurationJson as { timeframe?: string }) ?? {};
+        if (isTenSecondScalpingMode(st.mode, cfg)) {
+          return {
+            strategyId: st.id,
+            mode: st.mode,
+            timeframe: cfg.timeframe,
+          };
+        }
+      }
+    }
+    const running = await this.prisma.strategy.findMany({
+      where: {
+        organizationId: position.organizationId,
+        status: "RUNNING",
+        mode: StrategyMode.SCALPING,
+      },
+      select: {
+        id: true,
+        mode: true,
+        configurationJson: true,
+        assignedAccountIds: true,
+      },
+    });
+    for (const s of running) {
+      const ids = (s.assignedAccountIds as string[]) ?? [];
+      if (!ids.includes(position.accountId)) continue;
+      const cfg = (s.configurationJson as { timeframe?: string }) ?? {};
+      if (isTenSecondScalpingMode(s.mode, cfg)) {
+        return {
+          strategyId: s.id,
+          mode: s.mode,
+          timeframe: cfg.timeframe,
+        };
+      }
+    }
+    return null;
+  }
+
   async list(organizationId: string) {
     const positions = await this.prisma.position.findMany({
       where: {
@@ -283,148 +523,8 @@ export class PositionsService {
       if (!byAccount.has(a.id)) byAccount.set(a.id, []);
     }
 
-    for (const [accountId, accountPositions] of byAccount) {
-      let adapter = this.brokers.get(accountId);
-      if (!adapter) {
-        const acc = await this.prisma.tradingAccount.findFirst({
-          where: { id: accountId, organizationId, archivedAt: null },
-        });
-        if (!acc) continue;
-        try {
-          adapter = await this.brokers.connectAccount(acc);
-        } catch {
-          continue;
-        }
-      }
-      let live: Awaited<ReturnType<typeof adapter.getOpenPositions>>;
-      try {
-        live = await adapter.getOpenPositions({ force: true });
-      } catch {
-        continue;
-      }
-      // Same empty-snapshot guard as reconcile (5× confirmed flat)
-      if (live.length === 0 && accountPositions.length > 0) {
-        const n = (this.emptyBrokerSnapshots.get(accountId) ?? 0) + 1;
-        this.emptyBrokerSnapshots.set(accountId, n);
-        if (n < 5) {
-          console.warn(
-            `positions.list ${accountId}: empty broker list (${n}/5) — skip ghost close`,
-          );
-          continue;
-        }
-      } else if (live.length > 0) {
-        this.emptyBrokerSnapshots.set(accountId, 0);
-      }
-      const liveById = new Map(
-        live
-          .filter((x) => x.brokerPositionId)
-          .map((x) => [x.brokerPositionId!, x]),
-      );
-      const seenLocal = new Set<string>();
-      for (const p of accountPositions) {
-        if (!p.brokerPositionId) {
-          const ageMs = Date.now() - new Date(p.openedAt).getTime();
-          if (ageMs > 90_000) {
-            await this.prisma.position.update({
-              where: { id: p.id },
-              data: {
-                status: "CLOSED",
-                closedAt: p.closedAt ?? new Date(),
-                unrealizedPnl: "0",
-                volume: "0",
-              },
-            });
-          }
-          continue;
-        }
-        seenLocal.add(p.brokerPositionId);
-        const match = liveById.get(p.brokerPositionId);
-        if (match) {
-          await this.prisma.position.update({
-            where: { id: p.id },
-            data: {
-              currentPrice: match.currentPrice,
-              unrealizedPnl: match.unrealizedPnl,
-              volume: match.volume,
-              // Clear stale DB SL when Capital chart is naked (audit H6)
-              stopLoss:
-                match.stopLoss != null && String(match.stopLoss).length > 0
-                  ? match.stopLoss
-                  : null,
-              takeProfit:
-                match.takeProfit != null && String(match.takeProfit).length > 0
-                  ? match.takeProfit
-                  : null,
-              status: match.status as never,
-            },
-          });
-        } else if (
-          live.length > 0 ||
-          (this.emptyBrokerSnapshots.get(accountId) ?? 0) >= 5
-        ) {
-          await this.prisma.position.update({
-            where: { id: p.id },
-            data: {
-              status: "CLOSED",
-              closedAt: p.closedAt ?? new Date(),
-              unrealizedPnl: "0",
-              volume: "0",
-            },
-          });
-        }
-      }
-      // Import broker-only opens (opened on Capital outside VS / wrong-session before)
-      for (const bp of live) {
-        if (!bp.brokerPositionId || seenLocal.has(bp.brokerPositionId)) continue;
-        const symbol = String(bp.symbol ?? "").trim();
-        if (!symbol) continue;
-        // Deduplicate — no unique constraint on brokerPositionId (audit C6)
-        const existing = await this.prisma.position.findFirst({
-          where: {
-            accountId,
-            brokerPositionId: bp.brokerPositionId,
-            status: { in: ["OPEN", "PARTIALLY_CLOSED", "CLOSING"] },
-          },
-        });
-        if (existing) {
-          seenLocal.add(bp.brokerPositionId);
-          continue;
-        }
-        // Attach recent STRATEGY order on this account/symbol if any (audit H5)
-        const recentStrategy = await this.prisma.order.findFirst({
-          where: {
-            accountId,
-            symbol,
-            strategyId: { not: null },
-            status: { in: ["FILLED", "PARTIALLY_FILLED", "ACCEPTED"] },
-            createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
-          },
-          orderBy: { createdAt: "desc" },
-          select: { strategyId: true, id: true },
-        });
-        await this.prisma.position.create({
-          data: {
-            organizationId,
-            accountId,
-            brokerPositionId: bp.brokerPositionId,
-            orderId: recentStrategy?.id ?? undefined,
-            symbol,
-            direction: bp.direction as never,
-            volume: bp.volume,
-            initialVolume: bp.volume,
-            averageEntry: bp.averageEntry,
-            currentPrice: bp.currentPrice,
-            stopLoss: bp.stopLoss ?? null,
-            takeProfit: bp.takeProfit ?? null,
-            unrealizedPnl: bp.unrealizedPnl,
-            realizedPnl: bp.realizedPnl ?? "0",
-            status: "OPEN",
-            source: recentStrategy?.strategyId ? "STRATEGY" : "SYSTEM",
-            strategyId: recentStrategy?.strategyId ?? null,
-          },
-        });
-        seenLocal.add(bp.brokerPositionId);
-      }
+    for (const [accountId] of byAccount) {
+      await this.syncAccountOpenPositionsFromBroker(accountId, organizationId);
     }
 
     return this.prisma.position.findMany({
@@ -1321,7 +1421,7 @@ export class PositionsService {
     priceBySymbol: Map<string, number>,
     correlationId: string,
   ) {
-    const open = await this.prisma.position.findMany({
+    let open = await this.prisma.position.findMany({
       where: {
         status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
         OR: [
@@ -1331,6 +1431,27 @@ export class PositionsService {
           // Naked Capital positions (no SL) — always try recovery
           { stopLoss: null },
           // Strategy fills may have trailingEnabled=false until healed
+          { source: "STRATEGY" },
+        ],
+      },
+    });
+
+    const syncOrgByAccount = new Map<string, string>();
+    for (const p of open) {
+      syncOrgByAccount.set(p.accountId, p.organizationId);
+    }
+    for (const [accountId, orgId] of syncOrgByAccount) {
+      await this.syncAccountOpenPositionsFromBroker(accountId, orgId);
+    }
+
+    open = await this.prisma.position.findMany({
+      where: {
+        status: { in: ["OPEN", "PARTIALLY_CLOSED"] },
+        OR: [
+          { breakEvenEnabled: true },
+          { trailingEnabled: true },
+          { takeProfitsJson: { not: Prisma.DbNull } },
+          { stopLoss: null },
           { source: "STRATEGY" },
         ],
       },
@@ -1546,19 +1667,17 @@ export class PositionsService {
         // paths cannot hold the Capital login lock or continue-skip ahead
         // of the physical stopLevel modify.
         {
-          let mode: string | null = null;
-          let timeframe: string | undefined;
-          if (position.strategyId) {
-            const stEarly = await this.prisma.strategy.findFirst({
-              where: { id: position.strategyId },
-              select: { mode: true, configurationJson: true },
-            });
-            mode = stEarly?.mode ?? null;
-            timeframe = (
-              stEarly?.configurationJson as { timeframe?: string } | null
-            )?.timeframe;
-          }
-          if (isTenSecondScalpingMode(mode, { timeframe })) {
+          const scalpCtx = await this.resolveTenSecondScalpingForPosition(
+            position,
+          );
+          if (scalpCtx) {
+            if (!position.strategyId) {
+              await this.prisma.position.update({
+                where: { id: position.id },
+                data: { strategyId: scalpCtx.strategyId },
+              });
+              position.strategyId = scalpCtx.strategyId;
+            }
             // Do NOT seed brokerStopLoss from stale DB SL — that made chase
             // think Capital already had the stop when the chart was naked (H6).
             if (

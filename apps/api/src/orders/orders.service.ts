@@ -196,6 +196,40 @@ export class OrdersService implements OnModuleInit {
           HttpStatus.CONFLICT,
         );
       }
+      const inflightSince = new Date(Date.now() - 90_000);
+      const inflightOrders = await this.prisma.order.count({
+        where: {
+          organizationId,
+          accountId,
+          createdAt: { gte: inflightSince },
+          status: {
+            in: [
+              OrderStatus.VALIDATING,
+              OrderStatus.QUEUED,
+              OrderStatus.SENT,
+              OrderStatus.ACCEPTED,
+              OrderStatus.PARTIALLY_FILLED,
+              OrderStatus.MODIFY_REQUESTED,
+            ],
+          },
+        },
+      });
+      const filledOrphan = await this.prisma.order.count({
+        where: {
+          organizationId,
+          accountId,
+          createdAt: { gte: inflightSince },
+          status: OrderStatus.FILLED,
+          positions: { none: {} },
+        },
+      });
+      if (inflightOrders > 0 || filledOrphan > 0) {
+        throw new AppError(
+          ErrorCodes.ORDER_REJECTED,
+          `One trade only — order still in-flight or pending position sync`,
+          HttpStatus.CONFLICT,
+        );
+      }
       let adapterEarly = this.brokers.get(accountId);
       if (!adapterEarly) {
         try {

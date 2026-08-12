@@ -161,7 +161,11 @@ export class StrategiesService {
       stopDistancePips: auto.stopDistancePips,
       cooldownSeconds: 0,
       exitVersion: auto.exitVersion,
-      timeframe: modePreferredTimeframe(mode as StrategyMode),
+      // Never wipe operator/client TF on desk update — wrong TF kills 12% chase path
+      timeframe:
+        (typeof config.timeframe === "string" && config.timeframe.trim()
+          ? config.timeframe
+          : null) ?? modePreferredTimeframe(mode as StrategyMode),
     };
   }
 
@@ -1033,7 +1037,10 @@ export class StrategiesService {
             stopDistancePips: auto.stopDistancePips,
             cooldownSeconds: 0,
             exitVersion: auto.exitVersion,
-            timeframe: modePreferredTimeframe(input.mode),
+            timeframe:
+              (typeof prevCfg.timeframe === "string" && prevCfg.timeframe.trim()
+                ? String(prevCfg.timeframe)
+                : null) ?? modePreferredTimeframe(input.mode),
           }
         : {}),
       autoAggressive: false,

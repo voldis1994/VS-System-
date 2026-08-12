@@ -220,12 +220,18 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
       for (const row of openAcc) accountIds.add(row.accountId);
       for (const accountId of accountIds) {
         try {
+          const account = await this.prisma.tradingAccount.findFirst({
+            where: { id: accountId, connectionStatus: "CONNECTED" },
+          });
+          if (!account) continue;
           if (!this.brokers.get(accountId)) {
-            const account = await this.prisma.tradingAccount.findFirst({
-              where: { id: accountId, connectionStatus: "CONNECTED" },
-            });
-            if (account) await this.brokers.connectAccount(account);
+            await this.brokers.connectAccount(account);
           }
+          // Import Capital-only opens + refresh SL before chase (not only on UI list)
+          await this.positions.syncAccountOpenPositionsFromBroker(
+            accountId,
+            account.organizationId,
+          );
           await this.positions.reconcileClosedAgainstBroker(accountId);
         } catch (err) {
           this.log.warn(
@@ -1622,7 +1628,8 @@ export class StrategyRuntimeService implements OnModuleInit, OnModuleDestroy {
             // Broker accepted but DB position lag — still count as fired (like desk toast)
             _acted = true;
             this.lastSignalAt.set(key, Date.now());
-            this.lastFingerprint.set(key, fingerprint);
+            // Do NOT fingerprint until SL confirmed — lot-SAVE + pending sync
+            // re-armed a 2nd MARKET while Capital already had an open deal.
             lastStatus = {
               ...lastStatus,
               placed: true,
