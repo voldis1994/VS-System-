@@ -18,7 +18,6 @@ import {
   minProtectiveDistance,
   formatInstrumentPrice,
   buildEqualMultiTpPlan,
-  resolveScalpDistance,
   resolveScalpTrailDistance,
   resolveScalpActivationDistance,
   SCALP_LOCK_PCT,
