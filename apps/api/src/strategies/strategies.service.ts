@@ -141,7 +141,7 @@ export class StrategiesService {
   ): Record<string, unknown> {
     const auto = modeAutoExit(mode as StrategyMode);
     if (!auto) return config;
-    return {
+    const out: Record<string, unknown> = {
       ...config,
       takeProfitEnabled: auto.takeProfitEnabled,
       breakEvenEnabled: auto.breakEvenEnabled,
@@ -158,15 +158,21 @@ export class StrategiesService {
       priceOffsetMode: auto.priceOffsetMode === true,
       atrStopMult: auto.atrStopMult,
       atrTpMult: auto.atrTpMult,
-      stopDistancePips: auto.stopDistancePips,
       cooldownSeconds: 0,
       exitVersion: auto.exitVersion,
-      // Never wipe operator/client TF on desk update — wrong TF kills 12% chase path
+      // Never wipe operator/client TF on desk update — wrong TF kills % chase path
       timeframe:
         (typeof config.timeframe === "string" && config.timeframe.trim()
           ? config.timeframe
           : null) ?? modePreferredTimeframe(mode as StrategyMode),
     };
+    if (mode === StrategyMode.SCALPING) {
+      // Broker SL is %-only (10% start / 20% chase) — strip pip start SL
+      delete out.stopDistancePips;
+    } else if (auto.stopDistancePips != null) {
+      out.stopDistancePips = auto.stopDistancePips;
+    }
+    return out;
   }
 
   list(organizationId: string) {
@@ -1034,7 +1040,6 @@ export class StrategiesService {
             priceOffsetMode: auto.priceOffsetMode === true,
             atrStopMult: auto.atrStopMult,
             atrTpMult: auto.atrTpMult,
-            stopDistancePips: auto.stopDistancePips,
             cooldownSeconds: 0,
             exitVersion: auto.exitVersion,
             timeframe:
@@ -1045,6 +1050,13 @@ export class StrategiesService {
         : {}),
       autoAggressive: false,
     };
+    // Classic SCALPING: broker SL is %-only — strip any pip start SL from config
+    if (input.mode === StrategyMode.SCALPING) {
+      delete (configuration as Record<string, unknown>).stopDistancePips;
+    } else if (auto?.stopDistancePips != null) {
+      (configuration as Record<string, unknown>).stopDistancePips =
+        auto.stopDistancePips;
+    }
     delete (configuration as Record<string, unknown>).riskPercent;
 
     if (!strategy) {
@@ -1272,7 +1284,8 @@ export class StrategiesService {
       auto?.trailingDistancePips ?? config.trailingDistancePips ?? 15,
     );
     const atrTpMult = Number(config.atrTpMult ?? 2.2);
-    // NEVER treat timeframe "10s" as price-offset — SCALPING uses pip counts
+    // NEVER treat timeframe "10s" as price-offset.
+    // 10s SCALPING broker SL = % of price (10% start / 20% chase) — not pips.
     const priceOffset = config.priceOffsetMode === true;
     // Arm at entry only when explicitly requested — 10s SCALPING uses
     // 12% cushion of move from entry (SL chases live price, ~88% locked).

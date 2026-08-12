@@ -184,7 +184,7 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
     cooldownSeconds: 0,
   };
   if (auto) {
-    return {
+    const cfg: Record<string, unknown> = {
       ...base,
       timeframe: modePreferredTimeframe(input.mode),
       atrStopMult: auto.atrStopMult,
@@ -200,9 +200,13 @@ function buildConfig(input: { lotSize: string; exit: ExitVersion; mode: string }
       trailingActivationPips: auto.trailingActivationPips,
       trailArmImmediate: auto.trailArmImmediate,
       priceOffsetMode: auto.priceOffsetMode,
-      stopDistancePips: auto.stopDistancePips,
       exitVersion: auto.exitVersion,
     };
+    // 10s SCALPING: no pip start SL — code uses 10% / 20% only
+    if (input.mode !== StrategyMode.SCALPING && auto.stopDistancePips != null) {
+      cfg.stopDistancePips = auto.stopDistancePips;
+    }
+    return cfg;
   }
   return {
     ...base,

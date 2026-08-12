@@ -4,8 +4,9 @@ import { modePreferredTimeframe } from "./mode-profile";
 /**
  * Auto exit defaults for modes that hide manual TP/BE/Trail pickers.
  *
- * SCALPING distances are **pip counts** (converted per-instrument at runtime).
- * Never treat them as raw FX price offsets (0.35 on EURUSD ≈ thousands of pips).
+ * 10s SCALPING broker SL is **percent of price** (not pips):
+ *   start = 10% of entry, chase = 20% of favorable move.
+ * stopDistancePips is unused for classic SCALPING — omit it.
  */
 export type ModeAutoExitConfig = {
   takeProfitEnabled: boolean;
@@ -27,39 +28,28 @@ export type ModeAutoExitConfig = {
   trailArmImmediate: boolean;
   atrStopMult: number;
   atrTpMult: number;
+  /** Non-SCALPING only. Classic 10s uses % start SL — leave undefined. */
   stopDistancePips?: number;
   cooldownSeconds: number;
   exitVersion: "SCALP" | "AUTO";
-  /**
-   * Legacy: raw price offsets on 10s. Prefer false — use pip conversion via
-   * resolveScalpDistance so FX/indices/GOLD stay Capital-safe.
-   */
+  /** Legacy raw price offsets — keep false for SCALPING. */
   priceOffsetMode: boolean;
 };
 
-/** 10s SCALPING — £0.05 floating PnL arms software soft trail (0.3 pip).
- * Soft exit is app-side (peak ± pip×0.3). Capital broker SL stays failsafe only.
- * trailArmImmediate is false so fill/config cannot bypass the £0.05 trigger. */
+/** 10s SCALPING — broker SL = 10% start + 20% chase (shared constants). */
 export const SCALPING_AUTO_EXIT: ModeAutoExitConfig = {
   takeProfitEnabled: false,
   breakEvenEnabled: true,
-  /** Unused when breakEvenActivationMoney is set (kept for non-money fallbacks) */
   breakEvenActivationPips: 5,
-  /** Lock SL at entry + 1 pip */
   breakEvenOffsetPips: 1,
-  /** BE when floating profit ≥ £0.05 (account currency) */
   breakEvenActivationMoney: 0.05,
   trailingEnabled: true,
-  /** Software soft-trail distance in pips (NOT Capital min-stop) */
   trailingDistancePips: 0.3,
-  /** Runtime arms soft trail at £0.05 money; threshold unused */
   trailingActivationPips: 0,
-  /** NEVER arm soft trail on fill — only floatingPnL ≥ £0.05 */
   trailArmImmediate: false,
   atrStopMult: 0.45,
   atrTpMult: 1.0,
-  /** Initial Capital failsafe SL until soft trail / exit */
-  stopDistancePips: 10,
+  // no stopDistancePips — % start SL only
   cooldownSeconds: 0,
   exitVersion: "SCALP",
   priceOffsetMode: false,

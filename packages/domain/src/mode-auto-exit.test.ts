@@ -18,7 +18,7 @@ describe("mode-auto-exit", () => {
     expect(e.breakEvenActivationMoney).toBe(0.05);
     expect(e.trailingDistancePips).toBe(0.3);
     expect(e.priceOffsetMode).toBe(false);
-    expect(e.stopDistancePips).toBe(10);
+    expect(e.stopDistancePips).toBeUndefined();
     expect(modeHidesExitPickers(StrategyMode.SCALPING)).toBe(true);
   });
 

@@ -36,16 +36,15 @@ describe('scalp 10s smoke', () => {
       config: {
         timeframe: '10s',
         volume: '0.01',
-        takeProfitEnabled: true,
-        takeProfitMode: 'SINGLE',
-        atrTpMult: 1.8,
+        takeProfitEnabled: false,
+        // broker SL % handled in live runtime; harness uses ATR stop fallback
         atrStopMult: 1.0,
+        atrTpMult: 1.8,
         breakEvenEnabled: true,
         breakEvenActivationPips: 5,
         trailingEnabled: true,
-        trailingDistancePips: 10, // corresponds to 0.10 price for GOLD (pip=0.01)
-        trailingActivationPips: 1, // corresponds to 0.01 price
-        stopDistancePips: 10, // corresponds to 0.10 price
+        trailingDistancePips: 10,
+        trailingActivationPips: 1,
         sessionFilter: false,
         minScore: 45,
       },
