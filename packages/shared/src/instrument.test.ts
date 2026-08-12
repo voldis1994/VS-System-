@@ -43,19 +43,18 @@ describe("resolveScalpDistance", () => {
   it("does not treat 0.35 as raw EURUSD price (would be thousands of pips)", () => {
     const d = resolveScalpDistance("EURUSD", 1.1, 10);
     expect(d).toBeLessThan(0.01);
-    expect(d).toBeGreaterThanOrEqual(minProtectiveDistance("EURUSD", 1.1));
+    expect(d).toBeCloseTo(0.001, 8); // 10 × pip 0.0001
     expect(isFxLikeSymbol("EURUSD")).toBe(true);
   });
 
-  it("floors GOLD initial SL to Capital min protective distance", () => {
+  it("GOLD 10 pip = 0.10 — no fake 0.50 Capital floor", () => {
     const d = resolveScalpDistance("GOLD", 4200, 10);
-    expect(d).toBeGreaterThanOrEqual(minProtectiveDistance("GOLD", 4200));
+    expect(d).toBeCloseTo(0.1, 8);
   });
 });
 
 describe("capitalSafeBreakEvenStop", () => {
-  it("defers GOLD BE when mark is only pennies above entry (min-stop ~0.50)", () => {
-    // £0.11 on 0.12 lot ≈ +0.009 price — entry+0.01 would be rejected
+  it("defers GOLD BE when mark has not cleared soft min vs entry", () => {
     expect(
       capitalSafeBreakEvenStop({
         symbol: "GOLD",
@@ -67,7 +66,7 @@ describe("capitalSafeBreakEvenStop", () => {
     ).toBeNull();
   });
 
-  it("places GOLD BE at entry+offset once mark clears min-stop", () => {
+  it("places GOLD BE at entry+offset once mark clears soft min", () => {
     const sl = capitalSafeBreakEvenStop({
       symbol: "GOLD",
       direction: "BUY",
@@ -79,7 +78,6 @@ describe("capitalSafeBreakEvenStop", () => {
   });
 
   it("locks at entry when ideal offset is too close but entry is legal", () => {
-    // mark-minDist = 2650.05, ideal = 2650.40 → use 2650.05 (tightest legal ≥ entry)
     const sl = capitalSafeBreakEvenStop({
       symbol: "GOLD",
       direction: "BUY",
@@ -88,17 +86,17 @@ describe("capitalSafeBreakEvenStop", () => {
       mark: 2650.55,
     });
     expect(Number(sl)).toBeGreaterThanOrEqual(2650);
-    expect(Number(sl)).toBeLessThanOrEqual(2650.05 + 1e-9);
+    expect(Number(sl)).toBeLessThanOrEqual(2650.55);
   });
 
-  it("SELL defers until mark is minDist below entry", () => {
+  it("SELL defers until mark is soft-min below entry", () => {
     expect(
       capitalSafeBreakEvenStop({
         symbol: "GOLD",
         direction: "SELL",
         entry: 2650,
         offset: 0.01,
-        mark: 2649.9,
+        mark: 2649.995,
       }),
     ).toBeNull();
     expect(
@@ -114,32 +112,28 @@ describe("capitalSafeBreakEvenStop", () => {
 });
 
 describe("capitalSafeTrailDistance", () => {
-  it("floors GOLD 3-pip trail (0.03) to Capital min-stop (~0.50)", () => {
+  it("GOLD 3-pip trail (0.03) is not inflated to 0.50", () => {
     const d = capitalSafeTrailDistance("GOLD", 2650, 0.03);
-    expect(d).toBeGreaterThanOrEqual(capitalMinStopDistance("GOLD"));
-    expect(d).toBeCloseTo(0.5, 8);
+    expect(d).toBeCloseTo(0.03, 8);
   });
 });
 
 describe("capitalMinStopDistance", () => {
-  it("GOLD is 0.50 not %−of−price inflated", () => {
-    expect(capitalMinStopDistance("GOLD")).toBeCloseTo(0.5, 8);
-    // minProtectiveDistance at 2650 is ~2.12 — must not use that for BE
-    expect(minProtectiveDistance("GOLD", 2650)).toBeGreaterThan(1);
+  it("GOLD soft floor is 2 pips (0.02) — no invented 0.50", () => {
+    expect(capitalMinStopDistance("GOLD")).toBeCloseTo(0.02, 8);
+    expect(minProtectiveDistance("GOLD", 2650)).toBeCloseTo(0.02, 8);
   });
 });
 
 describe("capitalSafeInitialStop", () => {
-  it("places GOLD BUY SL at least Capital min-stop below entry", () => {
+  it("places GOLD BUY SL at configured 10-pip distance (0.10)", () => {
     const sl = capitalSafeInitialStop({
       symbol: "GOLD",
       direction: "BUY",
       entry: 2650,
-      distance: 0.18,
+      distance: 0.1,
     });
-    expect(2650 - Number(sl)).toBeGreaterThanOrEqual(
-      capitalMinStopDistance("GOLD"),
-    );
+    expect(2650 - Number(sl)).toBeCloseTo(0.1, 2);
   });
 });
 
@@ -169,18 +163,17 @@ describe("resolveScalpTrailDistance", () => {
 });
 
 describe("minProtectiveDistance", () => {
-  it("floors GOLD distances for Capital min-stop", () => {
-    // 50 points × 0.01 = 0.50, or 0.08% of price
-    expect(minProtectiveDistance("GOLD", 2300)).toBeGreaterThanOrEqual(0.5);
+  it("GOLD soft floor is 2 pips — no 0.50 invent", () => {
+    expect(minProtectiveDistance("GOLD", 2300)).toBeCloseTo(0.02, 8);
   });
 });
 
 describe("trailingArmThreshold", () => {
   it("arms at user activation pips, not floored trail distance", () => {
-    const flooredTrail = minProtectiveDistance("EURUSD", 1.1); // ~8+ pips
+    const softFloor = minProtectiveDistance("EURUSD", 1.1);
     expect(
       trailingArmThreshold("EURUSD", {
-        trailingDistance: flooredTrail,
+        trailingDistance: softFloor,
         trailingActivationPips: 1,
         trailingDistancePips: 1,
       }),
@@ -188,11 +181,9 @@ describe("trailingArmThreshold", () => {
   });
 
   it("does not inflate when start pips > trail pips", () => {
-    const floored = minProtectiveDistance("GOLD", 2300);
-    // 15 GOLD pips × 0.01 = 0.15
     expect(
       trailingArmThreshold("GOLD", {
-        trailingDistance: floored,
+        trailingDistance: 0.02,
         trailingActivationPips: 15,
         trailingDistancePips: 1,
       }),
@@ -285,20 +276,19 @@ describe("resolveFloatingMoneyPnl", () => {
 });
 
 describe("capitalSafeTrailingStop", () => {
-  it("keeps GOLD trail ≥0.50 from mark after 2dp rounding", () => {
+  it("GOLD trail uses soft 2-pip floor — 3-pip (0.03) not inflated to 0.50", () => {
     const sl = capitalSafeTrailingStop({
       symbol: "GOLD",
       direction: "BUY",
       mark: 2650.11,
-      distance: 0.03, // soft 3-pip — must floor to 0.50
+      distance: 0.03,
       existingSl: 2649.5,
     });
-    expect(2650.11 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    expect(2650.11 - Number(sl)).toBeGreaterThanOrEqual(0.03 - 1e-9);
     expect(Number(sl)).toBeGreaterThanOrEqual(2649.5);
   });
 
-  it("rounds BUY SL away from mark when 2dp would violate min-stop", () => {
-    // mark−0.50 = 2649.619 → toFixed(2)=2649.62 → dist 0.499 < 0.50 (old bug: forever skip)
+  it("rounds BUY SL away from mark when 2dp would land slightly inside requested distance", () => {
     const sl = capitalSafeTrailingStop({
       symbol: "GOLD",
       direction: "BUY",
@@ -306,24 +296,29 @@ describe("capitalSafeTrailingStop", () => {
       distance: 0.5,
       existingSl: null,
     });
-    expect(2650.119 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    // Soft min is 0.02 — requested 0.5 may land ~0.499 after 2dp; still valid
+    expect(2650.119 - Number(sl)).toBeGreaterThanOrEqual(
+      capitalMinStopDistance("GOLD") - 1e-9,
+    );
+    expect(2650.119 - Number(sl)).toBeGreaterThanOrEqual(0.49);
   });
 
   it("follows BUY price into profit (tightens above initial protective SL)", () => {
-    // Initial Capital-safe SL at entry−0.50; mark runs +0.58 → trail SL must rise
     const entry = 2650;
-    const initialSl = "2649.50";
+    const initialSl = "2649.90"; // 10 pip start
     const mark = 2650.58;
     const sl = capitalSafeTrailingStop({
       symbol: "GOLD",
       direction: "BUY",
       mark,
-      distance: 0.03, // soft 3-pip floored inside helper
+      distance: 0.03,
       existingSl: initialSl,
     });
     expect(Number(sl)).toBeGreaterThan(Number(initialSl));
-    expect(Number(sl)).toBeGreaterThanOrEqual(entry - 1e-9); // at/above break-even zone
-    expect(mark - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    expect(Number(sl)).toBeGreaterThanOrEqual(entry - 1e-9);
+    expect(mark - Number(sl)).toBeGreaterThanOrEqual(
+      capitalMinStopDistance("GOLD") - 1e-9,
+    );
   });
 
   it("only tightens SELL trail", () => {
@@ -338,7 +333,7 @@ describe("capitalSafeTrailingStop", () => {
     expect(Number(sl) - 2650).toBeGreaterThanOrEqual(0.5 - 1e-9);
   });
 
-  it("rounds SELL SL away from mark when 2dp would violate min-stop", () => {
+  it("rounds SELL SL away from mark when 2dp would violate soft min", () => {
     const sl = capitalSafeTrailingStop({
       symbol: "GOLD",
       direction: "SELL",
@@ -349,20 +344,21 @@ describe("capitalSafeTrailingStop", () => {
     expect(Number(sl) - 2650.119).toBeGreaterThanOrEqual(0.5 - 1e-9);
   });
 
-  it("SELL chase pulls stuck SL from 4394 down to mark+0.50", () => {
-    // Production screenshot: SELL SL frozen at 4394 while mark ran to 4388
+  it("SELL chase pulls stuck SL from 4394 toward mark+soft distance", () => {
     const mark = 4388;
     const stuckSl = "4394";
     const sl = capitalSafeTrailingStop({
       symbol: "GOLD",
       direction: "SELL",
       mark,
-      distance: 0.03, // soft 3-pip floored to Capital min
+      distance: 0.03,
       existingSl: stuckSl,
     });
     expect(Number(sl)).toBeLessThan(Number(stuckSl));
-    expect(Number(sl)).toBeCloseTo(mark + 0.5, 1);
-    expect(Number(sl) - mark).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    expect(Number(sl)).toBeCloseTo(mark + 0.03, 1);
+    expect(Number(sl) - mark).toBeGreaterThanOrEqual(
+      capitalMinStopDistance("GOLD") - 1e-9,
+    );
   });
 });
 

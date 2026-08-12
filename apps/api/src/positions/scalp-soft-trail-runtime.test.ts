@@ -180,19 +180,19 @@ describe("PositionsService 10s SCALPING 20% price-chase SL", () => {
   });
 
   it("broker stop chases from wide never-naked SL on small profit (no BE-floor freeze)", () => {
-    // never-naked places GOLD SL at entry±minProtective (~3.5). Small profit
-    // used to snap candidate back to that same initial → skip=not_better forever.
+    // never-naked places GOLD SL at entry−10pip (0.10). Small profit must still improve.
     const entry = 4400;
-    const mark = 4400.3; // favorable 0.3 < Capital min 0.5
+    const mark = 4400.3;
     const initialSl = Number(
       capitalSafeInitialStop({
         symbol: "GOLD",
         direction: "BUY",
         entry,
+        distance: 0.1,
         mark: entry,
       }),
     );
-    expect(initialSl).toBeLessThan(entry - 1);
+    expect(entry - initialSl).toBeCloseTo(0.1, 2);
 
     const chased = scalpPctLockBrokerStop({
       symbol: "GOLD",
@@ -226,7 +226,9 @@ describe("PositionsService 10s SCALPING 20% price-chase SL", () => {
     });
     // 2410 - 0.20*10 = 2408 → "2408.00"
     expect(Number(sl)).toBeCloseTo(2408, 1);
-    expect(2410 - Number(sl)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    expect(2410 - Number(sl)).toBeGreaterThanOrEqual(
+      capitalMinStopDistance("GOLD") - 1e-9,
+    );
     expect(
       scalpStopValidVsMark({
         direction: "BUY",
@@ -245,6 +247,7 @@ describe("PositionsService 10s SCALPING 20% price-chase SL", () => {
         symbol: "GOLD",
         direction: "SELL",
         entry,
+        distance: 0.1,
         mark: entry,
       }),
     );

@@ -29,34 +29,21 @@ export function pipsToPriceDistance(symbol: string, pips: number): number {
   return instrumentPipSize(symbol) * n;
 }
 
-/** Floor protective distance so Capital min-stop rules don't reject BE/Trail/TP. */
+/** Soft protective floor — honor operator pip distance; no fake Capital 0.50 GOLD clamp. */
 export function minProtectiveDistance(symbol: string, entryPrice: number): number {
   const pip = instrumentPipSize(symbol);
-  const entry = Math.abs(Number(entryPrice)) || 0;
-  const s = String(symbol ?? "").toUpperCase();
-  const pct = entry > 0 ? entry * 0.0008 : 0;
-  // GOLD: Capital often needs ~30–50 points (0.30–0.50); keep ≥0.50 floor
-  const minPips = /XAU|GOLD/.test(s) ? 50 : /BTC|ETH|BITCOIN/.test(s) ? 8 : 8;
-  return Math.max(pip * minPips, pct, pip * 2);
+  void entryPrice;
+  // Tiny floor only (2 pips) so 10-pip SCALPING start SL is not inflated to ~0.50 / % of price.
+  return Math.max(pip * 2, pip);
 }
 
 /**
- * Broker min-stop distance (price units) — no %−of−price inflation.
- * Use for BE legality / trail modify floors. At GOLD≈2650, minProtectiveDistance
- * rises to ~2.12 via 0.08% — that would block BE until huge profit. Capital's
- * actual GOLD min-stop is typically ~0.50.
+ * Softest broker distance used for formatting / validity — NOT a hard Capital rule we invent.
+ * Historical 0.50 GOLD floor blocked 10-pip starts; chase already improve-only.
  */
 export function capitalMinStopDistance(symbol: string): number {
   const pip = instrumentPipSize(symbol);
-  const s = String(symbol ?? "").toUpperCase();
-  if (/XAU|GOLD/.test(s)) return Math.max(0.5, pip * 50);
-  if (/XAG|SILVER/.test(s)) return Math.max(0.05, pip * 5);
-  if (/BTC|ETH|BITCOIN/.test(s)) return Math.max(pip * 8, pip);
-  if (/US100|US500|US30|NASDAQ|NDX|SPX|GER40|DE40|UK100|DOW/.test(s)) {
-    return Math.max(1, pip * 8);
-  }
-  if (isFxLikeSymbol(symbol)) return Math.max(pip * 8, pip * 2);
-  return Math.max(pip * 8, pip * 2);
+  return Math.max(pip * 2, pip);
 }
 
 /**
@@ -133,7 +120,8 @@ export function minTrailDistance(symbol: string, entryPrice: number): number {
 
 /**
  * Resolve SCALPING protective distance for any CFD.
- * Configured values are **pip counts** (not raw price). Always floors to Capital min.
+ * Configured values are **pip counts** (not raw price). Honors operator size —
+ * only a 1-pip soft floor (no fake Capital 0.50 GOLD inflate).
  */
 export function resolveScalpDistance(
   symbol: string,
@@ -141,7 +129,7 @@ export function resolveScalpDistance(
   configuredPips: number,
 ): number {
   const pip = instrumentPipSize(symbol);
-  const minDist = minProtectiveDistance(symbol, entry);
+  void entry;
   const n = Number(configuredPips);
   const pips = Number.isFinite(n) && n > 0 ? n : 10;
   // Legacy configs may still store tiny price offsets (<1) meant for indices —
@@ -154,7 +142,7 @@ export function resolveScalpDistance(
   } else {
     raw = pip * pips;
   }
-  return Math.max(minDist, raw);
+  return Math.max(raw, pip);
 }
 
 /**
@@ -312,29 +300,26 @@ export function resolveFloatingMoneyPnl(input: {
 }
 
 /**
- * Initial / recovery protective SL floored to Capital min-stop from entry.
+ * Initial / recovery protective SL from entry.
+ * Uses configured distance when set — no invented Capital 0.50 GOLD floor.
  */
 export function capitalSafeInitialStop(input: {
   symbol: string;
   direction: "BUY" | "SELL";
   entry: number | string;
-  /** Preferred distance; floored to minProtectiveDistance */
+  /** Preferred distance; soft-floored to 2 pips only */
   distance?: number | string | null;
-  /** Optional live mark — widen if spread leaves entry-based SL too close */
+  /** Optional live mark — widen if SL would land on the wrong side of mark */
   mark?: number | string | null;
 }): string {
   const entry = Number(input.entry);
   const markRaw = input.mark != null ? Number(input.mark) : NaN;
   const mark = Number.isFinite(markRaw) && markRaw > 0 ? markRaw : entry;
-  const minDist = Math.max(
-    capitalMinStopDistance(input.symbol),
-    minProtectiveDistance(input.symbol, entry),
-  );
+  const minDist = capitalMinStopDistance(input.symbol);
   const pref = Number(input.distance);
   let dist = Number.isFinite(pref) && pref > 0 ? Math.max(pref, minDist) : minDist;
 
   if (input.direction === "BUY") {
-    // Ensure |mark − SL| ≥ capital min (Capital measures vs live bid)
     const brokerMin = capitalMinStopDistance(input.symbol);
     const sl = entry - dist;
     if (mark - sl < brokerMin) {
